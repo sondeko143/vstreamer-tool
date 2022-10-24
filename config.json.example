@@ -1,0 +1,6 @@
+{
+    "ami_appkey": "",
+    "ami_engine_name": "-a-general",
+    "ami_engine_uri": "https://acp-api.amivoice.com/v1/nolog/recognize",
+    "yukari_net_port": 49513
+}

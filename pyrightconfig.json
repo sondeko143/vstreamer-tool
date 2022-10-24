@@ -1,0 +1,5 @@
+{
+    "reportUnknownMemberType": "warning",
+    "reportMissingTypeStubs": "warning",
+    "reportUnknownVariableType": "warning"
+}
