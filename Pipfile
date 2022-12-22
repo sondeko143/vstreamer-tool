@@ -3,19 +3,32 @@ url = "https://pypi.org/simple"
 verify_ssl = true
 name = "pypi"
 
+[[source]]
+url = "https://download.pytorch.org/whl/cu116"
+verify_ssl = false
+name = "cu116"
+
 [packages]
 pyaudio = "*"
-pysoundfile = "*"
-scipy = "*"
 httpx = "*"
 pydantic = "*"
-click = "*"
-websocket-client = "*"
+numpy = "*"
+websockets = "*"
+pydantic-cli = "*"
+google-cloud-translate = "*"
+pyvcroid2 = {editable = true, git = "https://github.com/Nkyoku/pyvcroid2"}
+aiofiles = "*"
+pyhumps = "*"
+torch = { version="*", index="cu116"}
+google-cloud-speech = "*"
+whisper = {editable = true, git = "https://github.com/openai/whisper.git"}
+ttkbootstrap = "*"
 
 [dev-packages]
 docutils = "*"
 black = "*"
 isort = "*"
+bandit = "*"
 
 [requires]
 python_version = "3.10"

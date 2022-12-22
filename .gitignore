@@ -2,3 +2,10 @@
 config.json
 *.log
 __pycache__
+key.json
+*.wav
+build
+dist
+*.spec
+voicevox_core
+download.ps1
