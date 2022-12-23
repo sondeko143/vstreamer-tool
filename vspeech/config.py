@@ -1,6 +1,7 @@
 import logging
 from enum import Enum
 from pathlib import Path
+from typing import List
 from typing import Optional
 from typing import Union
 
@@ -105,5 +106,6 @@ class Config(BaseModel):
     openjtalk_dir: Path = Path("./voicevox_core/open_jtalk_dic_utf_8-1.11")
     enable_translation: bool = True
     port: int = 19827
+    template_texts: List[str] = Field(default_factory=lambda: [""])
     log_file: str = "./voice_%%Y_%%m_%%d.log"
     log_level: Union[int, str] = logging.INFO

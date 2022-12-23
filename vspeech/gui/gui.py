@@ -19,9 +19,11 @@ from tkinter import INSERT
 from tkinter import LEFT
 from tkinter import SEL
 from tkinter import BooleanVar
+from tkinter import Listbox
 from tkinter import Menu
 from tkinter import StringVar
 from tkinter import Tk
+from tkinter import Variable
 from tkinter import W
 from tkinter import X
 from tkinter import filedialog
@@ -29,6 +31,7 @@ from tkinter import font
 from tkinter import messagebox
 from typing import Any
 from typing import Dict
+from typing import Iterable
 from typing import List
 from typing import Optional
 from typing import TypeVar
@@ -160,6 +163,7 @@ class VspeechGUI(Frame):
     pr_toggle_bt: Button
     send_bt: Button
     reload_bt: Button
+    templates: Variable
 
     def save_config_as(self):
         file = filedialog.asksaveasfile("w", defaultextension="json")
@@ -228,6 +232,7 @@ class VspeechGUI(Frame):
         self.draw_voicevox_tab(notebook=notebook)
         self.draw_ami_tab(notebook=notebook)
         self.draw_google_tab(notebook=notebook)
+        self.draw_template_text_tab(notebook=notebook)
 
         run_bt = Button(bt_frame, text="run", command=self.run_vspeech)
         run_bt.pack(padx=5, pady=5, side=LEFT)
@@ -474,6 +479,62 @@ class VspeechGUI(Frame):
 
         notebook.add(tab_frame, text="vvox")
 
+    def draw_template_text_tab(self, notebook: Notebook):
+        tab_frame = Frame(self)
+        tab_frame.pack(fill=X)
+        text_candidate = Entry(tab_frame)
+        text_candidate.pack(padx=5, pady=5, fill=X)
+        button_frame = Frame(tab_frame)
+        button_frame.pack(fill=X)
+        add_bt = Button(
+            button_frame,
+            text="add",
+            command=partial(self.add_text_to_template, text_candidate),
+        )
+        add_bt.pack(padx=5, pady=5, side=LEFT)
+        texts = self.config.template_texts
+        self.templates = Variable(value=texts)
+        template_lb = Listbox(tab_frame, listvariable=self.templates, height=6)
+        template_lb.pack(padx=5, pady=5, fill=X)
+        send_bt = Button(
+            tab_frame,
+            text="send",
+            command=partial(self.send_selected_template_texts, template_lb),
+        )
+        send_bt.pack(padx=5, pady=5, side=LEFT)
+        del_bt = Button(
+            tab_frame,
+            text="del",
+            command=partial(self.del_text_to_template, template_lb),
+        )
+        del_bt.pack(padx=5, pady=5, side=LEFT)
+        notebook.add(tab_frame, text="templ")
+
+    def send_selected_template_texts(self, listbox: Listbox):
+        selected_indices: Iterable[int] = listbox.curselection()
+        for i in selected_indices:
+            text = listbox.get(i)
+            self.send_message(f"t{text.strip()}\n")
+
+    def add_text_to_template(self, text: Entry):
+        templates: List[str] = list(self.templates.get())  # type: ignore
+        templates.append(text.get())
+        self.templates.set(templates)
+        self.config.template_texts.clear()
+        for template in templates:
+            self.config.template_texts.append(template)
+
+    def del_text_to_template(self, listbox: Listbox):
+        selected_indices: Iterable[int] = listbox.curselection()
+        templates: List[str] = list(self.templates.get())  # type: ignore
+        for i in selected_indices:
+            text = listbox.get(i)
+            templates = [template for template in templates if template != text]
+        self.templates.set(templates)
+        self.config.template_texts.clear()
+        for template in templates:
+            self.config.template_texts.append(template)
+
     def draw_cb(
         self,
         frame: Frame,
@@ -544,6 +605,7 @@ class VspeechGUI(Frame):
             logger.info(f"{name}: {selected_item_value}")
             if selected_item_label:
                 entry.set(selected_item_label)
+        self.templates.set(self.config.template_texts)
 
     def set_config(self, widget: "Widgets", event: Any):
         value = widget.get_value()

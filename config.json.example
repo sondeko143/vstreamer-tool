@@ -42,6 +42,7 @@
     "voicevox_speaker_id": "1",
     "openjtalk_dir": "voicevox_core\\open_jtalk_dic_utf_8-1.11",
     "enable_translation": false,
+    "template_texts": [],
     "log_file": "./voice_%%Y_%%m_%%d.log",
     "log_level": "INFO"
 }
