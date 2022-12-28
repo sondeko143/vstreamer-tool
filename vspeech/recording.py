@@ -84,6 +84,7 @@ async def recording_task_loop(
     interval_frame_count = 0
     interval_frames: bytes = b""
     speaking_frames: bytes = b""
+    last_interval_frames: bytes = b""
     total_speaking_seconds = 0
     status = "waiting"
     while stream.is_active():
@@ -91,9 +92,11 @@ async def recording_task_loop(
         interval_frame_count += config.chunk
         interval_frames += in_data
         if interval_frame_count >= config.rate * config.record_interval_sec:
-            in_data = numpy.frombuffer(in_data, dtype=DTYPE_CONV[config.format])
-            in_data_min = in_data.min()
-            in_data_max = in_data.max()
+            framebuffer = numpy.frombuffer(
+                interval_frames, dtype=DTYPE_CONV[config.format]
+            )
+            in_data_min = framebuffer.min()
+            in_data_max = framebuffer.max()
             approx_max_amp = 100 * (
                 max(-in_data_min, in_data_max) / AMP_MAX[config.format]
             )
@@ -102,7 +105,7 @@ async def recording_task_loop(
             if status == "waiting":
                 if speaking:
                     logger.info("voice recording...")
-                    speaking_frames += interval_frames
+                    speaking_frames += interval_frames + last_interval_frames
                     status = "speaking"
             elif status == "speaking":
                 speaking_frames += interval_frames
@@ -115,6 +118,7 @@ async def recording_task_loop(
                     yield speaking_frames
                     status = "waiting"
                     speaking_frames = b""
+            last_interval_frames = interval_frames
             interval_frame_count = 0
             interval_frames = b""
 
