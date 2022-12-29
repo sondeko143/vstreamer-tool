@@ -105,7 +105,7 @@ async def recording_task_loop(
             if status == "waiting":
                 if speaking:
                     logger.info("voice recording...")
-                    speaking_frames += interval_frames + last_interval_frames
+                    speaking_frames += last_interval_frames + interval_frames
                     status = "speaking"
             elif status == "speaking":
                 speaking_frames += interval_frames
