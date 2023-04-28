@@ -1,0 +1,13 @@
+.venv
+config*.json
+config*.toml
+*.log
+__pycache__
+key.json
+*.wav
+build
+dist
+*.spec
+voicevox_core_python_api
+voicevox_core
+download.ps1
