@@ -1,0 +1,73 @@
+[tool.poetry]
+name = "voicerecog"
+version = "0.1.0"
+description = ""
+authors = ["sondeko <sondeko143@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+
+[[tool.poetry.source]]
+url = "https://download.pytorch.org/whl/cu117"
+name = "cu117"
+default = false
+secondary = true
+
+[tool.poetry.dependencies]
+python = "^3.10"
+PyAudio = "^0.2.13"
+httpx = "^0.23.3"
+pydantic = "^1.10.7"
+aiofiles = "^23.1.0"
+pyhumps = "^3.8.0"
+ttkbootstrap = "^1.10.1"
+google-cloud-translate = "^3.11.1"
+numpy = ">=1.18,<1.24"
+voicevox-core = [
+    { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cuda-cp38-abi3-win_amd64.whl", platform = "win32" },
+    { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cpu-cp38-abi3-macosx_11_0_arm64.whl", platform = "darwin", markers = "platform_machine == 'arm64'" },
+    { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cpu-cp38-abi3-macosx_10_7_x86_64.whl", platform = "darwin", markers = "platform_machine == 'x86_64'" },
+]
+google-cloud-speech = "^2.19.0"
+toml = "^0.10.2"
+vstreamer-protos = { url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-4b1e1071/vstreamer_protos-0.1.0-py3-none-any.whl" }
+
+
+[tool.poetry.group.dev.dependencies]
+docutils = "^0.19"
+black = "^23.3.0"
+isort = "^5.12.0"
+bandit = "^1.7.5"
+pytest = "^7.3.1"
+pytest-cov = "^4.0.0"
+pytest-grpc = "^0.8.0"
+
+[tool.poetry.group.whisper]
+optional = true
+
+[tool.poetry.group.whisper.dependencies]
+openai-whisper = { git = "https://github.com/openai/whisper" }
+torch = [
+    { version = "1.13.1+cu117", source = "cu117", platform = "win32" },
+    { version = "1.13.1", platform = "darwin" },
+]
+
+[tool.poetry.group.mozc]
+optional = true
+
+[tool.poetry.group.mozc.dependencies]
+mozcpy = "^0.1.1"
+
+[tool.poetry.group.vroid2]
+optional = true
+
+[tool.poetry.group.vroid2.dependencies]
+pyvcroid2 = { git = "https://github.com/Nkyoku/pyvcroid2", platform = "win32" }
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = "."

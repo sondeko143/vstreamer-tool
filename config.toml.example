@@ -1,0 +1,112 @@
+listen_address = "localhost:19827"
+template_texts = [ "こんにちは！",
+ "お疲れさまでした。失礼します。",
+]
+log_file = "./log/voice_%%Y_%%m_%%d.log"
+log_level = "INFO"
+[[filters]]
+pattern = "foo"
+replaced = "bar"
+
+[[filters]]
+pattern = "嫌い"
+replaced = "好き"
+
+[recording]
+enable = true
+destinations = [ "transcription" ]
+format = 8
+channels = 1
+rate = 16000
+chunk = 16000
+record_interval_sec = 1.0
+silence_threshold = -40
+max_recording_sec = 10.0
+input_host_api_name = ""
+input_device_name = ""
+input_device_index = 0
+
+[transcription]
+enable = true
+destinations = [
+    "subtitle",
+    "translation",
+    "speech",
+]
+transcription_worker_type = "WHISPER"
+transliterate_with_mozc = false
+
+[speech]
+enable = true
+destinations = [ "playback" ]
+speech_worker_type = "VOICEVOX"
+
+[playback]
+enable = true
+speech_volume = 45
+output_host_api_name = ""
+output_device_name = ""
+output_device_index = 1
+
+[subtitle]
+enable = true
+min_subtitle_display_sec = 4.5
+max_subtitle_text_len = 40
+max_subtitle_translated_len = 50
+subtitle_window_width = 1920
+subtitle_window_height = 120
+subtitle_font_size = 20
+subtitle_font_family = "Meiryo UI"
+subtitle_font_style = "bold"
+subtitle_font_color = "#80daeb"
+
+[translation]
+enable = true
+destinations = [ "subtitle_translated" ]
+source_language_code = "ja"
+target_language_code = "en"
+
+[ami]
+ami_appkey = ""
+ami_engine_name = "-a-general"
+ami_engine_uri = "https://acp-api.amivoice.com/v1/nolog/recognize"
+ami_service_id = ""
+ami_request_timeout = 30.0
+ami_extra_parameters = "keepFillerToken=0"
+
+[gcp]
+gcp_project_id = "dummy-11111"
+gcp_credentials_file_path = "/path/to/key.json"
+gcp_request_timeout = 3.0
+gcp_max_retry_count = 5
+gcp_retry_delay_sec = 0.1
+
+[vr2]
+vr2_voice_name = "akari_44"
+
+[whisper]
+whisper_model = "small"
+whisper_no_speech_prob_threshold = 0.6
+whisper_logprob_threshold = -1.0
+
+[voicevox]
+voicevox_speaker_id = 2
+openjtalk_dir = "open_jtalk_dic_utf_8-1.11"
+
+[vr2.vr2_params]
+volume = 1.0
+speed = 1.25
+pitch = 0.85
+emphasis = 0.72
+pause_middle = 150.0
+pause_long = 370.0
+pause_sentence = 800.0
+master_volume = 1.0
+
+[voicevox.voicevox_params]
+speed_scale = 1.0
+pitch_scale = 0.0
+intonation_scale = 1.0
+volume_scale = 1.0
+pre_phoneme_length = 0.1
+post_phoneme_length = 0.1

@@ -1,0 +1,27 @@
+{
+    "editor.formatOnSave": true,
+    "[python]": {
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": true,
+        },
+    },
+    "cSpell.words": [
+        "frombuffer",
+        "httpx",
+        "pyaudio",
+        "voicevox",
+        "vspeech",
+        "websockets",
+        "yukarinette"
+    ],
+    "python.analysis.stubPath": "typings",
+    "python.formatting.provider": "black",
+    "python.languageServer": "Pylance",
+    "python.linting.banditEnabled": true,
+    "isort.args": [
+        "--sl"
+    ],
+    "python.testing.pytestEnabled": true,
+    "python.testing.unittestEnabled": false
+}
