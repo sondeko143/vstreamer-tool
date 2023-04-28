@@ -577,8 +577,8 @@ class VspeechGUI(Frame):
             frame=tab_frame,
             config_name=f"{prefix}.text.display_sec_per_letter",
             from_=0,
-            to=100,
-            increment=1,
+            to=1,
+            increment=0.01,
         ).grid(column=2, row=current_row, sticky=EW)
         self.draw_sb(
             frame=tab_frame,
@@ -598,8 +598,8 @@ class VspeechGUI(Frame):
             frame=tab_frame,
             config_name=f"{prefix}.translated.display_sec_per_letter",
             from_=0,
-            to=100,
-            increment=1,
+            to=1,
+            increment=0.01,
         ).grid(column=5, row=current_row, sticky=EW)
         current_row += 1
         self.draw_sb(
