@@ -8,8 +8,10 @@ from pyaudio import PyAudio
 from pyaudio import Stream
 
 from vspeech.audio import get_device_name
+from vspeech.audio import get_pa_format
 from vspeech.audio import search_device
 from vspeech.config import PlaybackConfig
+from vspeech.config import SampleFormat
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
@@ -25,7 +27,11 @@ async def playback(volume: int, stream: Stream, data: bytes):
 
 
 def get_output_stream(
-    audio: PyAudio, config: PlaybackConfig, rate: int, format: int, channels: int
+    audio: PyAudio,
+    config: PlaybackConfig,
+    rate: int,
+    format: SampleFormat,
+    channels: int,
 ) -> Stream:
     output_device_index = config.output_device_index
     if output_device_index is None:
@@ -41,7 +47,7 @@ def get_output_stream(
     output_device_name = get_device_name(audio, output_device_index)
     logger.info("use output device %s: %s", output_device_index, output_device_name)
     output_stream = audio.open(
-        format=format,
+        format=get_pa_format(format),
         channels=channels,
         rate=rate,
         output=True,
@@ -54,12 +60,13 @@ async def playback_worker(
     context: SharedContext,
     in_queue: Queue[WorkerInput],
 ):
+    audio = PyAudio()
     try:
         while True:
             speech = await in_queue.get()
             try:
                 output_stream = get_output_stream(
-                    audio=context.audio,
+                    audio=audio,
                     config=context.config.playback,
                     rate=speech.sound.rate,
                     format=speech.sound.format,
@@ -77,6 +84,8 @@ async def playback_worker(
     except CancelledError:
         logger.info("playback worker cancelled")
         raise
+    finally:
+        audio.terminate()
 
 
 def create_playback_task(

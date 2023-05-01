@@ -13,8 +13,10 @@ from pyaudio import PyAudio
 from pyaudio import Stream
 
 from vspeech.audio import get_device_name
+from vspeech.audio import get_pa_format
 from vspeech.audio import search_device
 from vspeech.config import RecordingConfig
+from vspeech.config import get_sample_size
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
@@ -44,7 +46,7 @@ def open_input_stream(
     logger.info("use input device %s: %s", input_device_index, input_device_name)
     return audio.open(
         input_device_index=input_device_index,
-        format=config.format,
+        format=get_pa_format(config.format),
         channels=config.channels,
         rate=config.rate,
         input=True,
@@ -105,40 +107,39 @@ async def recording_task_loop(
 
 
 async def recording_worker(context: SharedContext, out_queue: Queue[WorkerOutput]):
-    while True:
-        stream = open_input_stream(context.audio, context.config.recording)
-        sample_width = context.audio.get_sample_size(context.config.recording.format)
-        try:
-            async for frames in recording_task_loop(
-                stream=stream,
-                config=context.config.recording,
-                sample_width=sample_width,
-            ):
-                if not context.resume.is_set():
-                    logger.info("recording have been paused")
-                    break
-                out_queue.put_nowait(
-                    WorkerOutput(
-                        source=EventType.recording,
-                        sound=SoundOutput(
-                            data=frames,
-                            rate=context.config.recording.rate,
-                            format=context.config.recording.format,
-                            channels=context.config.recording.channels,
-                        ),
-                        text=None,
+    try:
+        while True:
+            audio = PyAudio()
+            stream = open_input_stream(audio, context.config.recording)
+            sample_width = get_sample_size(context.config.recording.format)
+            try:
+                async for frames in recording_task_loop(
+                    stream=stream,
+                    config=context.config.recording,
+                    sample_width=sample_width,
+                ):
+                    if not context.resume.is_set():
+                        logger.info("recording have been paused")
+                        break
+                    out_queue.put_nowait(
+                        WorkerOutput(
+                            source=EventType.recording,
+                            sound=SoundOutput(
+                                data=frames,
+                                rate=context.config.recording.rate,
+                                format=context.config.recording.format,
+                                channels=context.config.recording.channels,
+                            ),
+                            text=None,
+                        )
                     )
-                )
-        except CancelledError:
-            logger.debug("recording worker cancelled")
-            stream.close()
-            raise
-        stream.close()
-        try:
+            finally:
+                stream.close()
+                audio.terminate()
             await context.resume.wait()
-        except CancelledError:
-            logger.debug("recording worker cancelled")
-            raise
+    except CancelledError:
+        logger.debug("recording worker cancelled")
+        raise
 
 
 def create_recording_task(loop: AbstractEventLoop, context: SharedContext):

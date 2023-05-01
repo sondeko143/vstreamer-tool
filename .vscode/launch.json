@@ -5,6 +5,142 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Cloud Run: Run/Debug Locally",
+            "type": "cloudcode.cloudrun",
+            "request": "launch",
+            "build": {
+                "docker": {
+                    "path": "Dockerfile"
+                }
+            },
+            "image": "voicerecog",
+            "service": {
+                "name": "voicerecog",
+                "containerPort": 8080,
+                "env": [
+                    {
+                        "name": "vspeech_listen_address",
+                        "value": "0.0.0.0"
+                    },
+                    {
+                        "name": "vspeech_log_level",
+                        "value": "DEBUG"
+                    },
+                    {
+                        "name": "vspeech_log_file",
+                        "value": ""
+                    },
+                    {
+                        "name": "vspeech_recording__enable",
+                        "value": "false"
+                    },
+                    {
+                        "name": "vspeech_transcription__enable",
+                        "value": "true"
+                    },
+                    {
+                        "name": "vspeech_transcription__transcription_worker_type",
+                        "value": "ACP"
+                    },
+                    {
+                        "name": "vspeech_speech__enable",
+                        "value": "true"
+                    },
+                    {
+                        "name": "vspeech_speech__speech_worker_type",
+                        "value": "VOICEVOX"
+                    },
+                    {
+                        "name": "vspeech_playback__enable",
+                        "value": "false"
+                    },
+                    {
+                        "name": "vspeech_translation__enable",
+                        "value": "true"
+                    },
+                    {
+                        "name": "vspeech_subtitle__enable",
+                        "value": "false"
+                    },
+                    {
+                        "name": "vspeech_gcp__gcp_project_id",
+                        "value": ""
+                    },
+                    {
+                        "name": "vspeech_gcp__service_account_info__type",
+                        "value": ""
+                    },
+                    {
+                        "name": "vspeech_gcp__service_account_info__project_id",
+                        "value": ""
+                    },
+                    {
+                        "name": "vspeech_gcp__service_account_info__private_key_id",
+                        "value": ""
+                    },
+                    {
+                        "name": "vspeech_gcp__service_account_info__private_key",
+                        "value": ""
+                    },
+                    {
+                        "name": "vspeech_gcp__service_account_info__client_email",
+                        "value": ""
+                    },
+                    {
+                        "name": "vspeech_gcp__service_account_info__client_id",
+                        "value": ""
+                    },
+                    {
+                        "name": "vspeech_gcp__service_account_info__auth_uri",
+                        "value": ""
+                    },
+                    {
+                        "name": "vspeech_gcp__service_account_info__token_uri",
+                        "value": ""
+                    },
+                    {
+                        "name": "vspeech_gcp__service_account_info__auth_provider_x509_cert_url",
+                        "value": ""
+                    },
+                    {
+                        "name": "vspeech_gcp__service_account_info__client_x509_cert_url",
+                        "value": ""
+                    },
+                    {
+                        "name": "vspeech_ami__ami_appkey",
+                        "value": ""
+                    },
+                    {
+                        "name": "vspeech_ami__ami_engine_name",
+                        "value": ""
+                    },
+                    {
+                        "name": "vspeech_ami__ami_engine_uri",
+                        "value": ""
+                    },
+                    {
+                        "name": "vspeech_ami__ami_service_id",
+                        "value": ""
+                    }
+                ],
+                "resources": {
+                    "limits": {
+                        "memory": "2Gi"
+                    }
+                }
+            },
+            "target": {
+                "minikube": {}
+            },
+            "watch": true,
+            "externalPortForward": 19827,
+            "debug": {
+                "sourceFileMap": {
+                    "${workspaceFolder}": "/app"
+                }
+            }
+        },
+        {
             "name": "test",
             "type": "python",
             "request": "test",

@@ -69,14 +69,11 @@ def put_queue(input_queues: InputQueues, dest_event: EventType, request: WorkerI
 def process_command(context: SharedContext, request: WorkerInput):
     transform_content(filters=context.config.filters, command=request)
     if TRANSCRIBE in request.operations:
-        if request.sound:
-            put_queue(
-                input_queues=context.input_queues,
-                dest_event=EventType.transcription,
-                request=request,
-            )
-        else:
-            logger.info("ignore invalid request for transcribe")
+        put_queue(
+            input_queues=context.input_queues,
+            dest_event=EventType.transcription,
+            request=request,
+        )
     if TRANSLATE in request.operations:
         put_queue(
             input_queues=context.input_queues,
@@ -102,14 +99,11 @@ def process_command(context: SharedContext, request: WorkerInput):
             request=request,
         )
     if PLAYBACK in request.operations:
-        if request.sound:
-            put_queue(
-                input_queues=context.input_queues,
-                dest_event=EventType.playback,
-                request=request,
-            )
-        else:
-            logger.info("ignore invalid request for playback")
+        put_queue(
+            input_queues=context.input_queues,
+            dest_event=EventType.playback,
+            request=request,
+        )
     if PAUSE in request.operations:
         logger.info("pause")
         context.resume.clear()
@@ -142,10 +136,12 @@ class Commander(CommanderServicer):
     def process_command(self, request: Command, context: grpc.ServicerContext):
         worker_input = WorkerInput.from_command(request)
         logger.info(
-            "receive: %s, %s, %s, %s, %s from %s",
+            "receive: o(%s), t(%s), sound(%s, %s, %s), %s, %s from %s",
             request.operations,
             request.text,
             request.sound.rate,
+            request.sound.format,
+            request.sound.channels,
             request.file_path,
             request.filters,
             cast(str, context.peer()),
@@ -157,8 +153,9 @@ class Commander(CommanderServicer):
 async def receiver_worker(context: SharedContext):
     server = grpc.aio.server()
     add_CommanderServicer_to_server(servicer=Commander(context=context), server=server)
-    server.add_insecure_port(context.config.listen_address)
-    logger.info("Starting server on %s", context.config.listen_address)
+    address = f"{context.config.listen_address}:{context.config.listen_port}"
+    server.add_insecure_port(address)
+    logger.info("Starting server on %s", address)
     try:
         await server.start()
         await server.wait_for_termination()

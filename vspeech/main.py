@@ -7,21 +7,30 @@ from asyncio import wait
 from typing import IO
 from typing import Any
 from typing import List
+from typing import Optional
 
 import click
 
 from vspeech.config import Config
 from vspeech.logger import configure_logger
 from vspeech.logger import logger
-from vspeech.playback import create_playback_task
 from vspeech.receiver import create_receiver_task
-from vspeech.recording import create_recording_task
 from vspeech.sender import create_sender_task
 from vspeech.shared_context import SharedContext
 from vspeech.speech import create_speech_task
-from vspeech.subtitle import create_subtitle_task
 from vspeech.transcription import create_transcription_task
 from vspeech.translation import create_translation_task
+
+try:
+    from vspeech.subtitle import create_subtitle_task
+except ImportError:
+    pass
+
+try:
+    from vspeech.playback import create_playback_task
+    from vspeech.recording import create_recording_task
+except ModuleNotFoundError:
+    pass
 
 
 async def cancel_tasks(tasks: List[Task[Any]]):
@@ -68,7 +77,6 @@ async def vspeech_coro(loop: AbstractEventLoop, config: Config):
     except Exception as e:
         logger.exception(e)
     finally:
-        context.audio.terminate()
         await cancel_tasks(tasks)
 
 
@@ -77,12 +85,15 @@ async def vspeech_coro(loop: AbstractEventLoop, config: Config):
     "--config",
     "--json-config",
     "config_file",
-    required=True,
     type=click.File("rb"),
 )
-def cmd(config_file: IO[bytes]) -> int:
-    config = Config.read_config_from_file(config_file)
-    config_file.close()
+def cmd(config_file: Optional[IO[bytes]]) -> int:
+    if config_file:
+        config = Config.read_config_from_file(config_file)
+        config_file.close()
+    else:
+        # from environment variables
+        config = Config()
     configure_logger(config)
     loop = get_event_loop()
     try:

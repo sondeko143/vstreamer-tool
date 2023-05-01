@@ -709,7 +709,7 @@ class VspeechGUI(Frame):
         self.draw_tb(tab_frame, config_name=f"{prefix}.gcp_project_id").grid(
             column=0, row=0, columnspan=max_columns, sticky=EW
         )
-        self.draw_tb(tab_frame, config_name=f"{prefix}.gcp_credentials_file_path").grid(
+        self.draw_tb(tab_frame, config_name=f"{prefix}.service_account_file_path").grid(
             column=0, row=1, columnspan=max_columns, sticky=EW
         )
         notebook.add(tab_frame, text="gcp")
@@ -813,12 +813,14 @@ class VspeechGUI(Frame):
     def draw_template_text_tab(self, notebook: Notebook):
         tab_frame = Frame(self)
         tab_frame.pack(fill=X)
-        max_columns = 1
+        max_columns = 2
         for i in range(max_columns):
             tab_frame.columnconfigure(i, weight=1)
         current_row = 0
         text_candidate = Entry(tab_frame)
-        text_candidate.grid(padx=5, pady=5, column=0, row=current_row, sticky=EW)
+        text_candidate.grid(
+            padx=5, pady=5, column=0, row=current_row, sticky=EW, columnspan=max_columns
+        )
         current_row += 1
         add_bt = Button(
             tab_frame,
@@ -830,10 +832,12 @@ class VspeechGUI(Frame):
         texts = self.config.template_texts
         self.templates = Variable(value=texts)
         template_lb = Listbox(tab_frame, listvariable=self.templates, height=6)
-        template_lb.grid(padx=5, pady=5, column=0, row=current_row, sticky=EW)
+        template_lb.grid(
+            padx=5, pady=5, column=0, row=current_row, sticky=EW, columnspan=max_columns
+        )
         current_row += 1
         button_frame = Frame(tab_frame)
-        button_frame.grid(column=0, row=current_row, sticky=EW)
+        button_frame.grid(column=0, row=current_row, sticky=EW, columnspan=max_columns)
         current_row += 1
         send_bt = Button(
             button_frame,
@@ -851,11 +855,14 @@ class VspeechGUI(Frame):
             frame=tab_frame,
             config_name=f"listen_address",
         ).grid(column=0, row=current_row, sticky=EW)
+        self.draw_sb(
+            frame=tab_frame, config_name=f"listen_port", from_=0, to=65535, increment=1
+        ).grid(column=1, row=current_row, sticky=EW)
         current_row += 1
         self.draw_cs_tb(
             frame=tab_frame,
             config_name=f"text_send_operations",
-        ).grid(column=0, row=current_row, sticky=EW)
+        ).grid(column=0, row=current_row, sticky=EW, columnspan=max_columns)
         notebook.add(tab_frame, text="templ")
 
     def draw_filter_tab(self, notebook: Notebook):
@@ -1133,7 +1140,8 @@ class VspeechGUI(Frame):
 
     def send_message(self, command: Command):
         if self.thread:
-            with grpc.insecure_channel(self.config.listen_address) as channel:
+            address = f"{self.config.listen_address}:{self.config.listen_port}"
+            with grpc.insecure_channel(address) as channel:
                 stub = CommanderStub(channel)
                 stub.process_command(command)
                 logger.info("send: %s", command)

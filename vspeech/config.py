@@ -1,18 +1,44 @@
 import json
 import logging
 from enum import Enum
+from enum import IntEnum
 from pathlib import Path
 from typing import IO
+from typing import Dict
 from typing import List
 from typing import Optional
 from typing import Union
 
-import pyaudio
 import toml
 from pydantic import BaseModel
+from pydantic import BaseSettings
 from pydantic import Field
 
 from vspeech.exceptions import ReplaceFilterParseError
+
+
+class SampleFormat(IntEnum):
+    UINT8 = 1
+    INT8 = 2
+    INT16 = 4
+    INT24 = 8
+    FLOAT32 = 16
+    INVALID = 0
+
+
+def get_sample_size(format: SampleFormat) -> int:
+    if format == SampleFormat.UINT8:
+        return 1
+    if format == SampleFormat.INT8:
+        return 1
+    if format == SampleFormat.INT16:
+        return 2
+    if format == SampleFormat.INT24:
+        return 3
+    if format == SampleFormat.FLOAT32:
+        return 4
+
+    raise ValueError(f"Invalid format: {format}")
 
 
 class EventType(Enum):
@@ -78,7 +104,7 @@ class ReplaceFilter(BaseModel):
 class RecordingConfig(BaseModel):
     enable: bool = True
     destinations: List[str] = Field(default_factory=lambda: ["transcription"])
-    format: int = pyaudio.paInt16  # data type formate
+    format: SampleFormat = SampleFormat.INT16
     channels: int = Field(
         default=1, cli=("-c", "--channels"), description="recording channels"
     )
@@ -110,7 +136,9 @@ class RecordingConfig(BaseModel):
 
 class TranscriptionConfig(BaseModel):
     enable: bool = True
-    destinations: List[str] = Field(default_factory=lambda: ["speech", "subtitle"])
+    destinations: List[str] = Field(
+        default_factory=lambda: ["speech", "subtitle", "translation"]
+    )
     transcription_worker_type: TranscriptionWorkerType = TranscriptionWorkerType.ACP
     transliterate_with_mozc: bool = False
 
@@ -187,12 +215,17 @@ class GcpConfig(BaseModel):
     gcp_project_id: str = Field(
         default="", description="Google cloud platform project ID"
     )
-    gcp_credentials_file_path: str = Field(
+    service_account_file_path: str = Field(
         default="", description="Google Cloud Platform API credentials file (key.json)"
+    )
+    service_account_info: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Google Cloud Platform API service account info",
     )
     gcp_request_timeout: float = 3.0
     gcp_max_retry_count: int = 5
-    gcp_retry_delay_sec: float = 0.1
+    gcp_retry_delay_sec: float = 0.5
+    location: str = Field(default="asia-northeast1")
 
 
 class Vr2Config(BaseModel):
@@ -212,7 +245,7 @@ class VoicevoxConfig(BaseModel):
     openjtalk_dir: Path = Path("./voicevox_core/open_jtalk_dic_utf_8-1.11")
 
 
-class Config(BaseModel):
+class Config(BaseSettings):
     recording: RecordingConfig = Field(default_factory=RecordingConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
     speech: SpeechConfig = Field(default_factory=SpeechConfig)
@@ -225,7 +258,8 @@ class Config(BaseModel):
     whisper: WhisperConfig = Field(default_factory=WhisperConfig)
     voicevox: VoicevoxConfig = Field(default_factory=VoicevoxConfig)
 
-    listen_address: str = "[::]:19827"
+    listen_address: str = "[::]"
+    listen_port: int = Field(default=8080, env="PORT")
     template_texts: List[str] = Field(default_factory=lambda: [""])
     text_send_operations: List[str] = Field(
         default_factory=lambda: ["translate", "subtitle", "speech"]
@@ -235,6 +269,10 @@ class Config(BaseModel):
     log_level: Union[int, str] = logging.INFO
     recording_log: bool = False
     recording_log_dir: Path = Path("./rec")
+
+    class Config(BaseSettings.Config):
+        env_prefix = "vspeech_"
+        env_nested_delimiter = "__"
 
     @staticmethod
     def is_file_json(file_path: Union[str, Path]):

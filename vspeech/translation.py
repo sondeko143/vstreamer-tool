@@ -8,8 +8,8 @@ from typing import AsyncGenerator
 from google.cloud.exceptions import GoogleCloudError
 from google.cloud.translate_v3 import TranslateTextRequest
 from google.cloud.translate_v3 import TranslationServiceAsyncClient
-from google.oauth2.service_account import Credentials
 
+from vspeech.gcp import get_credentials
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
@@ -39,11 +39,9 @@ async def translate_request(
 async def translation_worker_google(
     context: SharedContext, in_queue: Queue[WorkerInput]
 ) -> AsyncGenerator[str, None]:
-    credentials = Credentials.from_service_account_file(
-        context.config.gcp.gcp_credentials_file_path
-    )
+    credentials = get_credentials(context.config.gcp)
     client = TranslationServiceAsyncClient(credentials=credentials)
-    logger.info("translation worker started")
+    logger.info("translation worker [google] started")
     while True:
         config = context.config.translation
         gcp = context.config.gcp

@@ -14,8 +14,8 @@ from aiofiles import open as aio_open
 from google.api_core.exceptions import GoogleAPICallError
 from google.cloud.speech import RecognitionAudio
 from google.cloud.speech import RecognitionConfig
+from google.cloud.speech import RecognizeRequest
 from google.cloud.speech import SpeechAsyncClient
-from google.oauth2.service_account import Credentials
 from grpc.aio import AioRpcError
 from httpx import AsyncClient
 from httpx import HTTPError
@@ -24,6 +24,8 @@ from pydantic import ValidationError
 from vspeech.ami import AmiResponse
 from vspeech.ami import text_removed_filler_symbol
 from vspeech.config import TranscriptionWorkerType
+from vspeech.config import get_sample_size
+from vspeech.gcp import get_credentials
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
@@ -73,8 +75,7 @@ def wav(sound: SoundInput, sample_size: int):
 
 async def transcribe_request_google(
     client: SpeechAsyncClient,
-    rec_config: RecognitionConfig,
-    rec_audio: RecognitionAudio,
+    request: RecognizeRequest,
     timeout: float,
     max_retry_count: int,
     retry_delay_sec: float,
@@ -82,9 +83,7 @@ async def transcribe_request_google(
     num_retries = 0
     while True:
         try:
-            return await client.recognize(
-                config=rec_config, audio=rec_audio, timeout=timeout
-            )
+            return await client.recognize(request=request, timeout=timeout)
         except (AioRpcError, GoogleAPICallError) as e:
             logger.exception(e)
             if max_retry_count <= num_retries:
@@ -102,7 +101,7 @@ async def transcript_worker_whisper(
         config = context.config.whisper
         recorded = await in_queue.get()
         try:
-            sample_size = context.audio.get_sample_size(recorded.sound.format)
+            sample_size = get_sample_size(recorded.sound.format)
             with wav(recorded.sound, sample_size=sample_size) as wav_file:
                 async with aio_open("./recorded.wav", mode="wb") as out:
                     await out.write(wav_file.read())
@@ -144,16 +143,14 @@ async def transcript_worker_google(
     context: SharedContext,
     in_queue: Queue[WorkerInput],
 ) -> AsyncGenerator[str, None]:
-    credentials = Credentials.from_service_account_file(
-        context.config.gcp.gcp_credentials_file_path
-    )
+    credentials = get_credentials(context.config.gcp)
     client = SpeechAsyncClient(credentials=credentials)
     logger.info("transcript worker [google] started")
     while True:
         gcp = context.config.gcp
         recorded = await in_queue.get()
         try:
-            sample_size = context.audio.get_sample_size(recorded.sound.format)
+            sample_size = get_sample_size(recorded.sound.format)
             with wav(recorded.sound, sample_size=sample_size) as wav_file:
                 rec_audio = RecognitionAudio(content=wav_file.read())
                 rec_config = RecognitionConfig(
@@ -162,10 +159,10 @@ async def transcript_worker_google(
                     language_code="ja-JP",
                 )
                 logger.info("transcribing...")
+                request = RecognizeRequest(config=rec_config, audio=rec_audio)
                 r = await transcribe_request_google(
                     client=client,
-                    rec_config=rec_config,
-                    rec_audio=rec_audio,
+                    request=request,
                     timeout=gcp.gcp_request_timeout,
                     max_retry_count=gcp.gcp_max_retry_count,
                     retry_delay_sec=gcp.gcp_retry_delay_sec,
@@ -196,7 +193,7 @@ async def transcript_worker_ami(
         async with AsyncClient(timeout=ami_config.ami_request_timeout) as client:
             recorded = await in_queue.get()
             try:
-                sample_size = context.audio.get_sample_size(recorded.sound.format)
+                sample_size = get_sample_size(recorded.sound.format)
                 with wav(recorded.sound, sample_size=sample_size) as wav_file:
                     data = {
                         "d": f"grammarFileNames={ami_config.ami_engine_name} profileId={ami_config.ami_service_id} {ami_config.ami_extra_parameters}",

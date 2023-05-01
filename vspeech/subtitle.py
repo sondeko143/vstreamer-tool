@@ -216,7 +216,8 @@ def create_subtitle_task(
     context: SharedContext,
 ):
     tk_root = Tk()
-    tk_root.title(f"vspeech:subtitle {context.config.listen_address}")
+    address = f"{context.config.listen_address}:{context.config.listen_port}"
+    tk_root.title(f"vspeech:subtitle {address}")
     in_queue = Queue[WorkerInput]()
     event = EventType.subtitle
     context.input_queues[event] = in_queue

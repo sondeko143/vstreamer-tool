@@ -3,7 +3,14 @@ from typing import Optional
 
 from humps import camelize
 from pyaudio import PyAudio
+from pyaudio import paFloat32
+from pyaudio import paInt8
+from pyaudio import paInt16
+from pyaudio import paInt24
+from pyaudio import paUInt8
 from pydantic import BaseModel
+
+from vspeech.config import SampleFormat
 
 
 class HostAPIInfo(BaseModel):
@@ -89,3 +96,18 @@ def search_device(
         if info:
             host_api_index = info.index
     return search_device_by_name(p, name, host_api_index, input=input, output=output)
+
+
+def get_pa_format(format: SampleFormat) -> int:
+    if format == SampleFormat.UINT8:
+        return paUInt8
+    if format == SampleFormat.INT8:
+        return paInt8
+    if format == SampleFormat.INT16:
+        return paInt16
+    if format == SampleFormat.INT24:
+        return paInt24
+    if format == SampleFormat.FLOAT32:
+        return paFloat32
+
+    raise ValueError(f"Invalid format: {format}")

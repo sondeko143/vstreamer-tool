@@ -5,8 +5,7 @@ from asyncio import current_task
 from asyncio import to_thread
 from typing import List
 
-from pyaudio import paInt16
-
+from vspeech.config import SampleFormat
 from vspeech.config import SpeechWorkerType
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
@@ -75,6 +74,7 @@ async def vroid2_worker(context: SharedContext, in_queue: Queue[WorkerInput]):
             else:
                 raise Exception("No voice library")
         logger.info("vr2 voice: %s", voice_name)
+        logger.info("speech worker [vr2] started")
         vr2.load_voice(voice_name, context.config.vr2.vr2_params)
         while True:
             transcribed = await in_queue.get()
@@ -88,7 +88,7 @@ async def vroid2_worker(context: SharedContext, in_queue: Queue[WorkerInput]):
                 yield WorkerOutput(
                     source=EventType.speech,
                     sound=SoundOutput(
-                        data=speech, rate=44110, format=paInt16, channels=1
+                        data=speech, rate=44110, format=SampleFormat.INT16, channels=1
                     ),
                     text=None,
                 )
@@ -99,6 +99,7 @@ async def vroid2_worker(context: SharedContext, in_queue: Queue[WorkerInput]):
 async def voicevox_worker(context: SharedContext, in_queue: Queue[WorkerInput]):
     vvox = Voicevox(context.config.voicevox.openjtalk_dir)
     vvox.load_model(context.config.voicevox.voicevox_speaker_id)
+    logger.info("speech worker [voicevox] started")
     while True:
         transcribed = await in_queue.get()
         voicevox_reload(context=context, vvox=vvox)
@@ -114,7 +115,7 @@ async def voicevox_worker(context: SharedContext, in_queue: Queue[WorkerInput]):
             yield WorkerOutput(
                 source=EventType.speech,
                 sound=SoundOutput(
-                    data=speech[44:], rate=24000, format=paInt16, channels=1
+                    data=speech[44:], rate=24000, format=SampleFormat.INT16, channels=1
                 ),
                 text=None,
             )

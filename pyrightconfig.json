@@ -1,7 +1,0 @@
-{
-    "venvPath": "./.venv/",
-    "venv": "../",
-    "reportUnknownMemberType": "warning",
-    "reportMissingTypeStubs": "warning",
-    "reportUnknownVariableType": "warning"
-}

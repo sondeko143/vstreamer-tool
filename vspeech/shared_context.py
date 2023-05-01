@@ -7,7 +7,6 @@ from typing import Iterable
 from typing import TypeVar
 from typing import Union
 
-from pyaudio import PyAudio
 from vstreamer_protos.commander.commander_pb2 import PLAYBACK
 from vstreamer_protos.commander.commander_pb2 import RELOAD
 from vstreamer_protos.commander.commander_pb2 import SPEECH
@@ -20,6 +19,7 @@ from vstreamer_protos.commander.commander_pb2 import Operation
 
 from vspeech.config import Config
 from vspeech.config import EventType
+from vspeech.config import SampleFormat
 
 T = TypeVar("T")
 
@@ -28,7 +28,7 @@ T = TypeVar("T")
 class SoundOutput:
     data: bytes
     rate: int
-    format: int
+    format: SampleFormat
     channels: int
 
 
@@ -43,7 +43,7 @@ class WorkerOutput:
 class SoundInput:
     data: bytes
     rate: int
-    format: int
+    format: SampleFormat
     channels: int
 
 
@@ -59,7 +59,9 @@ class WorkerInput:
     def validate(
         cls, operand: Union[WorkerOutput, Command], operations: Iterable["Operation"]
     ):
-        sound = operand.sound or SoundInput(data=b"", rate=0, channels=0, format=0)
+        sound = operand.sound or SoundInput(
+            data=b"", rate=0, channels=0, format=SampleFormat.INVALID
+        )
         if any(o in [TRANSCRIBE, PLAYBACK] for o in operations):
             if (
                 not operand.sound
@@ -82,7 +84,7 @@ class WorkerInput:
                     data=sound.data,
                     rate=sound.rate,
                     channels=sound.channels,
-                    format=sound.format,
+                    format=SampleFormat(sound.format),
                 ),
                 text=text,
                 file_path="",
@@ -97,7 +99,7 @@ class WorkerInput:
                 data=sound.data,
                 rate=sound.rate,
                 channels=sound.channels,
-                format=sound.format,
+                format=SampleFormat(sound.format),
             ),
             text=text,
             file_path=operand.file_path,
@@ -121,7 +123,6 @@ class SharedContext:
     config: Config
     input_queues: InputQueues = field(default_factory=dict)
     resume: Event = field(default_factory=Event)
-    audio: PyAudio = field(default_factory=PyAudio)
     sender_queue: Queue[WorkerOutput] = field(default_factory=Queue)
     reload: Dict[str, bool] = field(
         default_factory=lambda: {worker_name.name: False for worker_name in EventType}

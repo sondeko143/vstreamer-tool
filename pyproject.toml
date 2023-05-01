@@ -14,23 +14,22 @@ secondary = true
 
 [tool.poetry.dependencies]
 python = "^3.10"
-PyAudio = "^0.2.13"
 httpx = "^0.23.3"
 pydantic = "^1.10.7"
 aiofiles = "^23.1.0"
 pyhumps = "^3.8.0"
-ttkbootstrap = "^1.10.1"
 google-cloud-translate = "^3.11.1"
-numpy = ">=1.18,<1.24"
 voicevox-core = [
     { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cuda-cp38-abi3-win_amd64.whl", platform = "win32" },
     { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cpu-cp38-abi3-macosx_11_0_arm64.whl", platform = "darwin", markers = "platform_machine == 'arm64'" },
     { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cpu-cp38-abi3-macosx_10_7_x86_64.whl", platform = "darwin", markers = "platform_machine == 'x86_64'" },
+    { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cpu-cp38-abi3-linux_x86_64.whl", platform = "linux", markers = "platform_machine == 'x86_64'" },
+    { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cpu-cp38-abi3-linux_aarch64.whl", platform = "linux", markers = "platform_machine == 'aarch64'" },
 ]
 google-cloud-speech = "^2.19.0"
 toml = "^0.10.2"
 vstreamer-protos = { url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-4b1e1071/vstreamer_protos-0.1.0-py3-none-any.whl" }
-
+click = "^8.1.3"
 
 [tool.poetry.group.dev.dependencies]
 docutils = "^0.19"
@@ -49,7 +48,9 @@ openai-whisper = { git = "https://github.com/openai/whisper" }
 torch = [
     { version = "1.13.1+cu117", source = "cu117", platform = "win32" },
     { version = "1.13.1", platform = "darwin" },
+    { version = "1.13.1", platform = "linux" },
 ]
+numpy = ">=1.18,<1.24"
 
 [tool.poetry.group.mozc]
 optional = true
@@ -63,6 +64,20 @@ optional = true
 [tool.poetry.group.vroid2.dependencies]
 pyvcroid2 = { git = "https://github.com/Nkyoku/pyvcroid2", platform = "win32" }
 
+[tool.poetry.group.audio]
+optional = true
+
+[tool.poetry.group.audio.dependencies]
+PyAudio = "^0.2.13"
+
+[tool.poetry.group.gui]
+optional = true
+
+[tool.poetry.group.gui.dependencies]
+ttkbootstrap = "^1.10.1"
+
+[tool.poetry.scripts]
+vspeech = "vspeech.main:cmd"
 
 [build-system]
 requires = ["poetry-core"]
@@ -71,3 +86,8 @@ build-backend = "poetry.core.masonry.api"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = "."
+
+[tool.pyright]
+reportUnknownMemberType = "warning"
+reportMissingTypeStubs = "warning"
+reportUnknownVariableType = "warning"
