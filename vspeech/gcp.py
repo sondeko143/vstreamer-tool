@@ -15,7 +15,8 @@ def unescape_private_key(service_account_info: dict[str, str]):
 
 def get_credentials(config: GcpConfig) -> Credentials:
     if config.service_account_file_path:
-        return Credentials.from_service_account_file(config.service_account_file_path)
+        file_path = config.service_account_file_path.expanduser()
+        return Credentials.from_service_account_file(file_path)
     else:
         config.service_account_info = unescape_private_key(config.service_account_info)
         return Credentials.from_service_account_info(config.service_account_info)
@@ -23,11 +24,12 @@ def get_credentials(config: GcpConfig) -> Credentials:
 
 def get_id_token_credentials(config: GcpConfig) -> IDTokenCredentials:
     if config.service_account_file_path:
+        file_path = config.service_account_file_path.expanduser()
         return IDTokenCredentials.from_service_account_file(
-            config.service_account_file_path, target_audience=""
+            filename=file_path, target_audience=""
         )
     else:
         config.service_account_info = unescape_private_key(config.service_account_info)
         return IDTokenCredentials.from_service_account_info(
-            config.service_account_info, target_audience=""
+            info=config.service_account_info, target_audience=""
         )

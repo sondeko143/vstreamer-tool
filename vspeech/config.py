@@ -215,7 +215,7 @@ class GcpConfig(BaseModel):
     gcp_project_id: str = Field(
         default="", description="Google cloud platform project ID"
     )
-    service_account_file_path: str = Field(
+    service_account_file_path: Path = Field(
         default="", description="Google Cloud Platform API credentials file (key.json)"
     )
     service_account_info: Dict[str, str] = Field(

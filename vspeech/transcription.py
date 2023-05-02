@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 
 async def log_transcribed(log_dir_parent: Path, wav_file: BytesIO, text: str):
     now = datetime.now()
-    log_dir = Path(log_dir_parent / now.strftime("%Y%m%d"))
+    log_dir = Path(log_dir_parent.expanduser() / now.strftime("%Y%m%d"))
     log_dir.mkdir(exist_ok=True, parents=True)
     log_wav_name = now.strftime("%Y%m%d%H%M%S.wav")
     log_txt_name = now.strftime("%Y%m%d%H%M%S.txt")

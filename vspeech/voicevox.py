@@ -11,7 +11,7 @@ class Voicevox:
     def __init__(self, open_jtalk_dict_dir: Path) -> None:
         self.core = VoicevoxCore(
             acceleration_mode=AccelerationMode.AUTO,
-            open_jtalk_dict_dir=str(open_jtalk_dict_dir),
+            open_jtalk_dict_dir=open_jtalk_dict_dir.expanduser(),
         )
 
     # ラッパー関数
