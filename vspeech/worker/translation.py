@@ -9,7 +9,7 @@ from google.cloud.exceptions import GoogleCloudError
 from google.cloud.translate_v3 import TranslateTextRequest
 from google.cloud.translate_v3 import TranslationServiceAsyncClient
 
-from vspeech.gcp import get_credentials
+from vspeech.lib.gcp import get_credentials
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
@@ -38,7 +38,7 @@ async def translate_request(
 
 async def translation_worker_google(
     context: SharedContext, in_queue: Queue[WorkerInput]
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[WorkerOutput, None]:
     credentials = get_credentials(context.config.gcp)
     client = TranslationServiceAsyncClient(credentials=credentials)
     logger.info("translation worker [google] started")
@@ -50,16 +50,16 @@ async def translation_worker_google(
             contents=[transcribed.text],
             source_language_code=config.source_language_code,
             target_language_code=config.target_language_code,
-            parent=f"projects/{gcp.gcp_project_id}",
+            parent=f"projects/{gcp.project_id}",
         )
         try:
             logger.info("translating... %s", transcribed.text)
             response = await translate_request(
                 client=client,
                 request=request,
-                timeout=gcp.gcp_request_timeout,
-                max_retry_count=gcp.gcp_max_retry_count,
-                retry_delay_sec=gcp.gcp_retry_delay_sec,
+                timeout=gcp.request_timeout,
+                max_retry_count=gcp.max_retry_count,
+                retry_delay_sec=gcp.retry_delay_sec,
             )
             translated = unescape(
                 "".join(
@@ -70,7 +70,7 @@ async def translation_worker_google(
                 )
             )
             logger.info("translatedOutput: %s -> %s", transcribed.text, translated)
-            yield translated
+            yield WorkerOutput(followings=transcribed.following_events, text=translated)
         except GoogleCloudError as e:
             logger.exception(e)
 
@@ -83,9 +83,7 @@ async def translation_worker(
     try:
         generator = translation_worker_google
         async for translated in generator(context=context, in_queue=in_queue):
-            out_queue.put_nowait(
-                WorkerOutput(source=EventType.translation, text=translated, sound=None)
-            )
+            out_queue.put_nowait(translated)
     except CancelledError:
         logger.debug("transcription worker cancelled")
         raise

@@ -102,8 +102,8 @@ async def subtitle_worker(
     translation_in_queue: Queue[WorkerInput],
 ):
     try:
-        initial_width = context.config.subtitle.subtitle_window_width
-        initial_height = context.config.subtitle.subtitle_window_height
+        initial_width = context.config.subtitle.window_width
+        initial_height = context.config.subtitle.window_height
         tk_root.geometry(f"{initial_width}x{initial_height}")
         tk_root.configure(borderwidth=0, highlightthickness=0)
         canvas = Canvas(
@@ -113,14 +113,14 @@ async def subtitle_worker(
             highlightthickness=0,
         )
         if (
-            context.config.subtitle.subtitle_bg_color == TRANSPARENT_BG_COLOR
+            context.config.subtitle.bg_color == TRANSPARENT_BG_COLOR
             and platform == "win32"
         ):
             tk_root.wm_attributes("-transparentcolor", WIN32_TRANSPARENT_COLOR)
             tk_root.configure(bg=WIN32_TRANSPARENT_COLOR)
         else:
-            tk_root.configure(bg=context.config.subtitle.subtitle_bg_color)
-        set_bg_color(canvas, bg_color=context.config.subtitle.subtitle_bg_color)
+            tk_root.configure(bg=context.config.subtitle.bg_color)
+        set_bg_color(canvas, bg_color=context.config.subtitle.bg_color)
         texts = ""
         translations = ""
         text_display_remain_sec = 0
@@ -130,7 +130,7 @@ async def subtitle_worker(
         interval_sec = 1.0 / 30.0
         while True:
             config = context.config.subtitle
-            set_bg_color(canvas, bg_color=context.config.subtitle.subtitle_bg_color)
+            set_bg_color(canvas, bg_color=context.config.subtitle.bg_color)
             text_display_remain_sec = max(text_display_remain_sec - interval_sec, 0)
             if text_display_remain_sec <= 0:
                 canvas.delete(text_tag)

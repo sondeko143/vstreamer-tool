@@ -55,21 +55,25 @@ from vstreamer_protos.commander.commander_pb2 import PAUSE
 from vstreamer_protos.commander.commander_pb2 import RELOAD
 from vstreamer_protos.commander.commander_pb2 import RESUME
 from vstreamer_protos.commander.commander_pb2 import SET_FILTERS
-from vstreamer_protos.commander.commander_pb2 import SPEECH
 from vstreamer_protos.commander.commander_pb2 import SUBTITLE
 from vstreamer_protos.commander.commander_pb2 import TRANSLATE
+from vstreamer_protos.commander.commander_pb2 import TTS
 from vstreamer_protos.commander.commander_pb2 import Command
+from vstreamer_protos.commander.commander_pb2 import OperationChain
+from vstreamer_protos.commander.commander_pb2 import OperationRoute
 from vstreamer_protos.commander.commander_pb2_grpc import CommanderStub
 
-from vspeech.audio import list_all_devices
 from vspeech.config import Config
+from vspeech.config import F0ExtractorType
 from vspeech.config import ReplaceFilter
-from vspeech.config import SpeechWorkerType
 from vspeech.config import TranscriptionWorkerType
+from vspeech.config import TtsWorkerType
 from vspeech.config import VoicevoxParam
 from vspeech.config import VR2Param
 from vspeech.gui.autocomplete_combobox import AutocompleteCombobox
+from vspeech.lib.audio import list_all_devices
 from vspeech.logger import logger
+from vspeech.shared_context import EventAddress
 
 try:
     from pyvcroid2 import VcRoid2
@@ -217,6 +221,7 @@ class VspeechGUI(Frame):
     stop_bt: Button
     templates: Variable
     filters: Variable
+    routes_list: Variable
 
     @staticmethod
     def get_operation_from_str(ope_str: str):
@@ -224,8 +229,8 @@ class VspeechGUI(Frame):
             return TRANSLATE
         if ope_str.upper() == "SUBTITLE":
             return SUBTITLE
-        if ope_str.upper() == "SPEECH":
-            return SPEECH
+        if ope_str.upper() == "TTS":
+            return TTS
 
     @staticmethod
     def is_file_json(file_path: Union[str, Path]):
@@ -316,15 +321,17 @@ class VspeechGUI(Frame):
         self.draw_rec_tab(notebook=notebook)
         self.draw_playback_tab(notebook=notebook)
         self.draw_transcription_tab(notebook=notebook)
-        self.draw_speech_tab(notebook=notebook)
+        self.draw_tts_tab(notebook=notebook)
         self.draw_subtitle_tab(notebook=notebook)
         self.draw_translation_tab(notebook=notebook)
+        self.draw_vc_tab(notebook=notebook)
         if use_vroid2:
             self.draw_vr2_tab(notebook=notebook)
         self.draw_voicevox_tab(notebook=notebook)
         self.draw_ami_tab(notebook=notebook)
         self.draw_gcp_tab(notebook=notebook)
         self.draw_whisper_tab(notebook=notebook)
+        self.draw_rvc_tab(notebook=notebook)
         self.draw_template_text_tab(notebook=notebook)
         self.draw_filter_tab(notebook=notebook)
 
@@ -406,7 +413,7 @@ class VspeechGUI(Frame):
         ).grid(column=0, row=current_row, sticky=EW)
         self.draw_sb(
             frame=tab_frame,
-            config_name=f"{prefix}.record_interval_sec",
+            config_name=f"{prefix}.interval_sec",
             from_=0,
             to=10,
             increment=0.1,
@@ -433,35 +440,57 @@ class VspeechGUI(Frame):
             to=10,
             increment=1,
         ).grid(column=1, row=current_row, sticky=EW)
-        self.draw_cs_tb(tab_frame, config_name=f"{prefix}.destinations").grid(
-            column=0, row=current_row, sticky=EW, columnspan=max_columns
+        current_row += 1
+        text = "Routes:"
+        label = Label(tab_frame, text=text)
+        label.grid(padx=5, pady=5, column=0, row=current_row, sticky=W)
+        current_row += 1
+        route_candidate = Entry(tab_frame)
+        route_candidate.grid(
+            padx=5, pady=5, column=0, row=current_row, columnspan=max_columns, sticky=EW
         )
+        current_row += 1
+        add_bt = Button(
+            tab_frame,
+            text="add",
+            command=partial(self.add_route, route_candidate),
+        )
+        add_bt.grid(padx=5, pady=5, column=0, row=current_row, sticky=W)
+        current_row += 1
+        routes_list = self.config.recording.routes_list
+        self.routes_list = Variable(value=[",".join(r) for r in routes_list])
+        routes_lb = Listbox(tab_frame, listvariable=self.routes_list, height=6)
+        routes_lb.grid(
+            padx=5, pady=5, column=0, row=current_row, columnspan=max_columns, sticky=EW
+        )
+        current_row += 1
+        del_bt = Button(
+            tab_frame,
+            text="del",
+            command=partial(self.del_route, routes_lb),
+        )
+        del_bt.grid(column=0, row=current_row, padx=5, pady=5, sticky=W)
         notebook.add(tab_frame, text="rec")
 
-    def draw_speech_tab(self, notebook: Notebook):
+    def draw_tts_tab(self, notebook: Notebook):
         tab_frame = Frame(self)
         tab_frame.pack(fill=X)
         max_columns = 4
         for i in range(max_columns):
             tab_frame.columnconfigure(i, weight=1)
-        prefix = "speech"
+        prefix = "tts"
         current_row = 0
         self.draw_checkbutton(frame=tab_frame, config_name=f"{prefix}.enable").grid(
             column=0, row=current_row, columnspan=max_columns, sticky=W
         )
         current_row += 1
-        worker_types = {
-            worker_type.name: worker_type for worker_type in SpeechWorkerType
-        }
+        worker_types = {worker_type.name: worker_type for worker_type in TtsWorkerType}
         self.draw_cb(
             frame=tab_frame,
             candidates=worker_types,
-            config_name=f"{prefix}.speech_worker_type",
+            config_name=f"{prefix}.worker_type",
         ).grid(column=0, row=current_row, columnspan=max_columns, sticky=EW)
         current_row += 1
-        self.draw_cs_tb(tab_frame, config_name=f"{prefix}.destinations").grid(
-            column=0, row=current_row, sticky=EW, columnspan=max_columns
-        )
         notebook.add(tab_frame, text="tts")
 
     def draw_playback_tab(self, notebook: Notebook):
@@ -496,7 +525,7 @@ class VspeechGUI(Frame):
         current_row += 1
         self.draw_sb(
             frame=tab_frame,
-            config_name=f"{prefix}.speech_volume",
+            config_name=f"{prefix}.volume",
             from_=0,
             to=100,
             increment=1,
@@ -604,19 +633,19 @@ class VspeechGUI(Frame):
         current_row += 1
         self.draw_sb(
             frame=tab_frame,
-            config_name=f"{prefix}.subtitle_window_width",
+            config_name=f"{prefix}.window_width",
             from_=0,
             to=65535,
             increment=1,
         ).grid(column=0, row=current_row, sticky=EW)
         self.draw_sb(
             frame=tab_frame,
-            config_name=f"{prefix}.subtitle_window_height",
+            config_name=f"{prefix}.window_height",
             from_=0,
             to=65535,
             increment=1,
         ).grid(column=1, row=current_row, sticky=EW)
-        self.draw_tb(tab_frame, config_name=f"{prefix}.subtitle_bg_color").grid(
+        self.draw_tb(tab_frame, config_name=f"{prefix}.bg_color").grid(
             column=2, row=current_row, sticky=EW
         )
         notebook.add(tab_frame, text="sub")
@@ -639,12 +668,9 @@ class VspeechGUI(Frame):
         self.draw_cb(
             frame=tab_frame,
             candidates=worker_types,
-            config_name=f"{prefix}.transcription_worker_type",
+            config_name=f"{prefix}.worker_type",
         ).grid(column=0, row=current_row, columnspan=max_columns, sticky=EW)
         current_row += 1
-        self.draw_cs_tb(tab_frame, config_name=f"{prefix}.destinations").grid(
-            column=0, row=current_row, sticky=EW, columnspan=max_columns
-        )
         notebook.add(tab_frame, text="transc")
 
     def draw_translation_tab(self, notebook: Notebook):
@@ -666,10 +692,20 @@ class VspeechGUI(Frame):
             column=1, row=current_row, sticky=EW
         )
         current_row += 1
-        self.draw_cs_tb(tab_frame, config_name=f"{prefix}.destinations").grid(
-            column=0, row=current_row, sticky=EW, columnspan=max_columns
-        )
         notebook.add(tab_frame, text="transl")
+
+    def draw_vc_tab(self, notebook: Notebook):
+        tab_frame = Frame(self)
+        tab_frame.pack(fill=X)
+        max_columns = 3
+        for i in range(max_columns):
+            tab_frame.columnconfigure(i, weight=1)
+        prefix = "vc"
+        current_row = 0
+        self.draw_checkbutton(frame=tab_frame, config_name=f"{prefix}.enable").grid(
+            column=0, row=current_row, columnspan=max_columns, sticky=W
+        )
+        notebook.add(tab_frame, text="vc")
 
     def draw_ami_tab(self, notebook: Notebook):
         tab_frame = Frame(self)
@@ -679,22 +715,22 @@ class VspeechGUI(Frame):
             tab_frame.columnconfigure(i, weight=1)
         prefix = "ami"
         current_row = 0
-        self.draw_tb(tab_frame, config_name=f"{prefix}.ami_appkey").grid(
+        self.draw_tb(tab_frame, config_name=f"{prefix}.appkey").grid(
             column=0, row=current_row, columnspan=max_columns, sticky=EW
         )
         current_row += 1
-        self.draw_tb(tab_frame, config_name=f"{prefix}.ami_engine_uri").grid(
+        self.draw_tb(tab_frame, config_name=f"{prefix}.engine_uri").grid(
             column=0, row=current_row, columnspan=max_columns, sticky=EW
         )
         current_row += 1
-        self.draw_tb(tab_frame, config_name=f"{prefix}.ami_engine_name").grid(
+        self.draw_tb(tab_frame, config_name=f"{prefix}.engine_name").grid(
             column=0, row=current_row, sticky=EW
         )
-        self.draw_tb(tab_frame, config_name=f"{prefix}.ami_service_id").grid(
+        self.draw_tb(tab_frame, config_name=f"{prefix}.service_id").grid(
             column=1, row=current_row, sticky=EW
         )
         current_row += 1
-        self.draw_tb(tab_frame, config_name=f"{prefix}.ami_extra_parameters").grid(
+        self.draw_tb(tab_frame, config_name=f"{prefix}.extra_parameters").grid(
             column=0, row=current_row, sticky=EW, columnspan=max_columns
         )
         notebook.add(tab_frame, text="ami")
@@ -706,7 +742,7 @@ class VspeechGUI(Frame):
         for i in range(max_columns):
             tab_frame.columnconfigure(i, weight=1)
         prefix = "gcp"
-        self.draw_tb(tab_frame, config_name=f"{prefix}.gcp_project_id").grid(
+        self.draw_tb(tab_frame, config_name=f"{prefix}.project_id").grid(
             column=0, row=0, columnspan=max_columns, sticky=EW
         )
         self.draw_tb(tab_frame, config_name=f"{prefix}.service_account_file_path").grid(
@@ -722,25 +758,78 @@ class VspeechGUI(Frame):
             tab_frame.columnconfigure(i, weight=1)
         prefix = "whisper"
         current_row = 0
-        self.draw_tb(tab_frame, config_name=f"{prefix}.whisper_model").grid(
+        self.draw_tb(tab_frame, config_name=f"{prefix}.model").grid(
             column=0, row=current_row, columnspan=max_columns, sticky=EW
         )
         current_row += 1
         self.draw_sb(
             frame=tab_frame,
-            config_name=f"{prefix}.whisper_no_speech_prob_threshold",
+            config_name=f"{prefix}.no_speech_prob_threshold",
             from_=0,
             to=1,
             increment=0.01,
         ).grid(column=0, row=current_row, sticky=EW)
         self.draw_sb(
             frame=tab_frame,
-            config_name=f"{prefix}.whisper_logprob_threshold",
+            config_name=f"{prefix}.logprob_threshold",
             from_=float("-inf"),
             to=1,
             increment=0.01,
         ).grid(column=1, row=current_row, sticky=EW)
         notebook.add(tab_frame, text="whisper")
+
+    def draw_rvc_tab(self, notebook: Notebook):
+        tab_frame = Frame(self)
+        tab_frame.pack(fill=X)
+        max_columns = 3
+        for i in range(max_columns):
+            tab_frame.columnconfigure(i, weight=1)
+        prefix = "rvc"
+        current_row = 0
+        self.draw_tb(tab_frame, config_name=f"{prefix}.model_file").grid(
+            column=0, row=current_row, columnspan=max_columns, sticky=EW
+        )
+        current_row += 1
+        self.draw_tb(tab_frame, config_name=f"{prefix}.hubert_model_file").grid(
+            column=0, row=current_row, columnspan=max_columns, sticky=EW
+        )
+        current_row += 1
+        self.draw_sb(
+            frame=tab_frame,
+            config_name=f"{prefix}.f0_up_key",
+            from_=-64,
+            to=64,
+            increment=1,
+        ).grid(column=0, row=current_row, sticky=EW)
+        self.draw_sb(
+            frame=tab_frame,
+            config_name=f"{prefix}.window",
+            from_=0,
+            to=1024,
+            increment=1,
+        ).grid(column=1, row=current_row, sticky=EW)
+        self.draw_sb(
+            frame=tab_frame,
+            config_name=f"{prefix}.quality",
+            from_=0,
+            to=1,
+            increment=1,
+        ).grid(column=2, row=current_row, sticky=EW)
+        current_row += 1
+        self.draw_sb(
+            frame=tab_frame,
+            config_name=f"{prefix}.gpu_id",
+            from_=0,
+            to=1024,
+            increment=1,
+        ).grid(column=0, row=current_row, sticky=EW)
+        f0_types = {f0_type.name: f0_type for f0_type in F0ExtractorType}
+        self.draw_cb(
+            frame=tab_frame,
+            candidates=f0_types,
+            config_name=f"{prefix}.f0_extractor_type",
+        ).grid(column=1, row=current_row, sticky=EW)
+        notebook.add(tab_frame, text="rvc")
 
     def draw_vr2_tab(self, notebook: Notebook):
         tab_frame = Frame(self)
@@ -754,7 +843,7 @@ class VspeechGUI(Frame):
             self.draw_cb(
                 frame=tab_frame,
                 candidates={v: v for v in voice_lists},
-                config_name=f"{prefix}.vr2_voice_name",
+                config_name=f"{prefix}.voice_name",
             ).grid(column=0, row=1, columnspan=max_columns, sticky=EW)
             params = list(get_type_hints(VR2Param).keys())
             chunked_list: List[List[str]] = list()
@@ -769,7 +858,7 @@ class VspeechGUI(Frame):
                     )
                     self.draw_sb(
                         frame=tab_frame,
-                        config_name=f"{prefix}.vr2_params.{param_name}",
+                        config_name=f"{prefix}.params.{param_name}",
                         from_=min_value,
                         to=max_value,
                         increment=0.01,
@@ -789,7 +878,7 @@ class VspeechGUI(Frame):
         )
         self.draw_sb(
             frame=tab_frame,
-            config_name=f"{prefix}.voicevox_speaker_id",
+            config_name=f"{prefix}.speaker_id",
             from_=0,
             to=10,
             increment=1,
@@ -802,7 +891,7 @@ class VspeechGUI(Frame):
             for column, param_name in enumerate(params_chunk):
                 self.draw_sb(
                     frame=tab_frame,
-                    config_name=f"{prefix}.voicevox_params.{param_name}",
+                    config_name=f"{prefix}.params.{param_name}",
                     from_=-1.0,
                     to=2.0,
                     increment=0.01,
@@ -903,13 +992,16 @@ class VspeechGUI(Frame):
         del_bt.grid(column=0, row=current_row, padx=5, pady=5, sticky=W)
         notebook.add(tab_frame, text="filt")
 
-    def operations_for_send_text(self):
+    def operations_for_send_text(self) -> list[OperationChain]:
         operations = [
             VspeechGUI.get_operation_from_str(o)
             for o in self.config.text_send_operations
         ]
-        operations = [o for o in operations if o]
-        return operations
+        return [
+            OperationChain(operations=[OperationRoute(operation=o)])
+            for o in operations
+            if o
+        ]
 
     def send_selected_template_texts(self, listbox: Listbox):
         selected_indices = cast(Iterable[int], listbox.curselection())
@@ -917,7 +1009,7 @@ class VspeechGUI(Frame):
             text = cast(str, listbox.get(i))
             self.send_message(
                 Command(
-                    operations=self.operations_for_send_text(),
+                    chains=self.operations_for_send_text(),
                     text=text.strip(),
                 )
             )
@@ -947,8 +1039,12 @@ class VspeechGUI(Frame):
         value = text.get()
         try:
             rf = ReplaceFilter.from_str(value)
-        except ValueError:
-            logger.warning("%s 無効な値です。", value)
+        except ValueError as e:
+            messagebox.showwarning(
+                "warning",
+                f"Invalid value: {e}",
+            )
+            logger.warning("%s 無効な値です: %s", e)
             return
         filters: List[str] = list(self.filters.get())  # type: ignore
         filters.append(str(rf))
@@ -956,7 +1052,14 @@ class VspeechGUI(Frame):
         self.config.filters.clear()
         for filter in filters:
             self.config.filters.append(ReplaceFilter.from_str(filter))
-        self.send_message(Command(operations=[SET_FILTERS], filters=filters))
+        self.send_message(
+            Command(
+                chains=[
+                    OperationChain(operations=[OperationRoute(operation=SET_FILTERS)])
+                ],
+                filters=filters,
+            )
+        )
         self.master.title(f"vspeech: {self.config_file_path}*")
 
     def del_filter(self, listbox: Listbox):
@@ -969,7 +1072,48 @@ class VspeechGUI(Frame):
         self.config.filters.clear()
         for filter in filters:
             self.config.filters.append(ReplaceFilter.from_str(filter))
-        self.send_message(Command(operations=[SET_FILTERS], filters=filters))
+        self.send_message(
+            Command(
+                chains=[
+                    OperationChain(operations=[OperationRoute(operation=SET_FILTERS)])
+                ],
+                filters=filters,
+            )
+        )
+        self.master.title(f"vspeech: {self.config_file_path}*")
+
+    def add_route(self, text: Entry):
+        value = text.get()
+        new_routes_value = value
+        try:
+            [EventAddress.from_string(v.strip()) for v in new_routes_value.split(",")]
+        except ValueError as e:
+            messagebox.showwarning(
+                "warning",
+                f"Invalid value: {e}",
+            )
+            logger.warning("無効な値です: %s", e)
+            return
+        routes_list: list[str] = list(self.routes_list.get())  # type: ignore
+        routes_list.append(new_routes_value)
+        self.routes_list.set(routes_list)
+        self.config.recording.routes_list.clear()
+        for routes in routes_list:
+            new_routes = [r.strip() for r in routes.split(",") if r]
+            self.config.recording.routes_list.append(new_routes)
+        self.master.title(f"vspeech: {self.config_file_path}*")
+
+    def del_route(self, listbox: Listbox):
+        selected_indices = cast(Iterable[int], listbox.curselection())
+        routes_list: list[str] = list(self.routes_list.get())  # type: ignore
+        for i in selected_indices:
+            text = listbox.get(i)
+            routes_list = [routes for routes in routes_list if routes != text]
+        self.routes_list.set(routes_list)
+        self.config.recording.routes_list.clear()
+        for routes in routes_list:
+            new_routes = [r.strip() for r in routes.split(",")]
+            self.config.recording.routes_list.append(new_routes)
         self.master.title(f"vspeech: {self.config_file_path}*")
 
     def update_completion_list(
@@ -1063,7 +1207,7 @@ class VspeechGUI(Frame):
             selected_item_value = getattr(nest, child)
             selected_item_label = entry.get_label_for_item_value(selected_item_value)
             logger.info(f"{name}: {selected_item_value}")
-            if selected_item_label:
+            if selected_item_label or selected_item_label == 0:
                 entry.set(selected_item_label)
         self.templates.set(self.config.template_texts)
         self.filters.set([str(f) for f in self.config.filters])
@@ -1124,7 +1268,7 @@ class VspeechGUI(Frame):
             for line in lines:
                 self.send_message(
                     Command(
-                        operations=self.operations_for_send_text(),
+                        chains=self.operations_for_send_text(),
                         text=line.strip(),
                     )
                 )
@@ -1132,9 +1276,23 @@ class VspeechGUI(Frame):
     def pause_or_resume(self):
         if self.thread:
             if self.paused:
-                self.send_message(Command(operations=[RESUME]))
+                self.send_message(
+                    Command(
+                        chains=[
+                            OperationChain(
+                                operations=[OperationRoute(operation=RESUME)]
+                            )
+                        ]
+                    )
+                )
             else:
-                self.send_message(Command(operations=[PAUSE]))
+                self.send_message(
+                    Command(
+                        chains=[
+                            OperationChain(operations=[OperationRoute(operation=PAUSE)])
+                        ]
+                    )
+                )
             self.paused = not self.paused
             self.pr_toggle_bt.configure(text="resume" if self.paused else "pause")
 
@@ -1161,7 +1319,8 @@ class VspeechGUI(Frame):
             self.temp_config_file_path = Path(temp_config_file.name)
         self.send_message(
             Command(
-                operations=[RELOAD], file_path=str(self.temp_config_file_path.resolve())
+                chains=[OperationChain(operations=[OperationRoute(operation=RELOAD)])],
+                file_path=str(self.temp_config_file_path.resolve()),
             )
         )
 
@@ -1193,7 +1352,7 @@ class VspeechGUI(Frame):
 def gui(config: str, theme: str):
     root = Window(themename=theme)
     root.title("vspeech")
-    root.geometry("500x600")
+    root.geometry("550x700")
     root.resizable(width=True, height=True)
     app = VspeechGUI(root, config)
     root.protocol("WM_DELETE_WINDOW", app.on_close)

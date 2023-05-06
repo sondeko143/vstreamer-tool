@@ -21,22 +21,17 @@ from httpx import AsyncClient
 from httpx import HTTPError
 from pydantic import ValidationError
 
-from vspeech.ami import AmiResponse
-from vspeech.ami import text_removed_filler_symbol
 from vspeech.config import TranscriptionWorkerType
 from vspeech.config import get_sample_size
-from vspeech.gcp import get_credentials
+from vspeech.lib.ami import parse_response
+from vspeech.lib.gcp import get_credentials
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import SoundInput
+from vspeech.shared_context import SoundOutput
 from vspeech.shared_context import WorkerInput
 from vspeech.shared_context import WorkerOutput
-
-try:
-    from vspeech.transliterate import get_transliterated_text
-except ModuleNotFoundError:
-    logger.info("mozc not found")
 
 try:
     from whisper import load_model
@@ -95,8 +90,8 @@ async def transcribe_request_google(
 async def transcript_worker_whisper(
     context: SharedContext,
     in_queue: Queue[WorkerInput],
-) -> AsyncGenerator[str, None]:
-    model = load_model(context.config.whisper.whisper_model)
+) -> AsyncGenerator[WorkerOutput, None]:
+    model = load_model(context.config.whisper.model)
     while True:
         config = context.config.whisper
         recorded = await in_queue.get()
@@ -113,22 +108,30 @@ async def transcript_worker_whisper(
                     audio="./recorded.wav",
                     model=model,
                     language="ja",
-                    no_speech_threshold=config.whisper_no_speech_prob_threshold,
-                    logprob_threshold=config.whisper_logprob_threshold,
+                    no_speech_threshold=config.no_speech_prob_threshold,
+                    logprob_threshold=config.logprob_threshold,
                 )
                 logger.info("transcribed: %s", result)
                 transcribed = "".join(
                     [
                         segment["text"]
                         for segment in result["segments"]
-                        if segment["no_speech_prob"]
-                        < config.whisper_no_speech_prob_threshold
-                        and segment["avg_logprob"] > config.whisper_logprob_threshold
+                        if segment["no_speech_prob"] < config.no_speech_prob_threshold
+                        and segment["avg_logprob"] > config.logprob_threshold
                         and segment["temperature"] < 1.0
                     ]
                 )
                 if transcribed:
-                    yield transcribed
+                    yield WorkerOutput(
+                        followings=recorded.following_events,
+                        text=transcribed,
+                        sound=SoundOutput(
+                            data=recorded.sound.data,
+                            rate=recorded.sound.rate,
+                            format=recorded.sound.format,
+                            channels=recorded.sound.channels,
+                        ),
+                    )
                 if context.config.recording_log:
                     await log_transcribed(
                         context.config.recording_log_dir,
@@ -142,7 +145,7 @@ async def transcript_worker_whisper(
 async def transcript_worker_google(
     context: SharedContext,
     in_queue: Queue[WorkerInput],
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[WorkerOutput, None]:
     credentials = get_credentials(context.config.gcp)
     client = SpeechAsyncClient(credentials=credentials)
     logger.info("transcript worker [google] started")
@@ -163,14 +166,23 @@ async def transcript_worker_google(
                 r = await transcribe_request_google(
                     client=client,
                     request=request,
-                    timeout=gcp.gcp_request_timeout,
-                    max_retry_count=gcp.gcp_max_retry_count,
-                    retry_delay_sec=gcp.gcp_retry_delay_sec,
+                    timeout=gcp.request_timeout,
+                    max_retry_count=gcp.max_retry_count,
+                    retry_delay_sec=gcp.retry_delay_sec,
                 )
                 transcribed = "".join([result.alternatives[0].transcript for result in r.results])  # type: ignore
                 logger.info("transcribed: %s", r)
                 if transcribed:
-                    yield transcribed
+                    yield WorkerOutput(
+                        followings=recorded.following_events,
+                        text=transcribed,
+                        sound=SoundOutput(
+                            data=recorded.sound.data,
+                            rate=recorded.sound.rate,
+                            format=recorded.sound.format,
+                            channels=recorded.sound.channels,
+                        ),
+                    )
                 if context.config.recording_log:
                     await log_transcribed(
                         context.config.recording_log_dir,
@@ -186,40 +198,40 @@ async def transcript_worker_google(
 async def transcript_worker_ami(
     context: SharedContext,
     in_queue: Queue[WorkerInput],
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[WorkerOutput, None]:
     logger.info("transcript worker [ami] started")
     while True:
         ami_config = context.config.ami
-        async with AsyncClient(timeout=ami_config.ami_request_timeout) as client:
+        async with AsyncClient(timeout=ami_config.request_timeout) as client:
             recorded = await in_queue.get()
             try:
                 sample_size = get_sample_size(recorded.sound.format)
                 with wav(recorded.sound, sample_size=sample_size) as wav_file:
                     data = {
-                        "d": f"grammarFileNames={ami_config.ami_engine_name} profileId={ami_config.ami_service_id} {ami_config.ami_extra_parameters}",
-                        "u": ami_config.ami_appkey,
+                        "d": f"grammarFileNames={ami_config.engine_name} profileId={ami_config.service_id} {ami_config.extra_parameters}",
+                        "u": ami_config.appkey,
                     }
                     files = {"a": wav_file}
                     logger.info("transcribing...")
-                    r = await client.post(
-                        ami_config.ami_engine_uri, data=data, files=files
-                    )
+                    r = await client.post(ami_config.engine_uri, data=data, files=files)
                     res_json = r.json()
                     logger.info("transcribed: %s", res_json)
-                    res_body = AmiResponse.parse_obj(res_json)
-                    if context.config.transcription.transliterate_with_mozc:
-                        text = get_transliterated_text(res_body=res_body)
-                    else:
-                        text = text_removed_filler_symbol(res_body)
-                    spoken = "".join(
-                        [
-                            "".join([token.spoken for token in result.tokens])
-                            for result in res_body.results
-                        ]
+                    text, spoken = parse_response(
+                        res_json,
+                        use_mozc=context.config.transcription.transliterate_with_mozc,
                     )
                     if text:
                         logger.info("transliterate: %s -> %s", spoken, text)
-                        yield text
+                        yield WorkerOutput(
+                            followings=recorded.following_events,
+                            text=text,
+                            sound=SoundOutput(
+                                data=recorded.sound.data,
+                                rate=recorded.sound.rate,
+                                format=recorded.sound.format,
+                                channels=recorded.sound.channels,
+                            ),
+                        )
                     if context.config.recording_log:
                         await log_transcribed(
                             context.config.recording_log_dir,
@@ -239,21 +251,17 @@ async def transcription_worker(
     out_queue: Queue[WorkerOutput],
 ):
     config = context.config.transcription
-    if config.transcription_worker_type == TranscriptionWorkerType.ACP:
+    if config.worker_type == TranscriptionWorkerType.ACP:
         generator = transcript_worker_ami
-    elif config.transcription_worker_type == TranscriptionWorkerType.GCP:
+    elif config.worker_type == TranscriptionWorkerType.GCP:
         generator = transcript_worker_google
-    elif config.transcription_worker_type == TranscriptionWorkerType.WHISPER:
+    elif config.worker_type == TranscriptionWorkerType.WHISPER:
         generator = transcript_worker_whisper
     else:
         raise ValueError("transcription worker type unknown.")
     try:
-        async for transcription in generator(context=context, in_queue=in_queue):
-            out_queue.put_nowait(
-                WorkerOutput(
-                    source=EventType.transcription, text=transcription, sound=None
-                )
-            )
+        async for transcribed in generator(context=context, in_queue=in_queue):
+            out_queue.put_nowait(transcribed)
     except CancelledError:
         logger.debug("transcription worker cancelled")
         raise
