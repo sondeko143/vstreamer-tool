@@ -1,18 +1,23 @@
 import pytest
+from pydantic import ValidationError
 from vstreamer_protos.commander.commander_pb2 import PAUSE
 from vstreamer_protos.commander.commander_pb2 import PLAYBACK
 from vstreamer_protos.commander.commander_pb2 import RELOAD
 from vstreamer_protos.commander.commander_pb2 import RESUME
 from vstreamer_protos.commander.commander_pb2 import SET_FILTERS
-from vstreamer_protos.commander.commander_pb2 import SPEECH
 from vstreamer_protos.commander.commander_pb2 import SUBTITLE
 from vstreamer_protos.commander.commander_pb2 import SUBTITLE_TRANSLATED
 from vstreamer_protos.commander.commander_pb2 import TRANSCRIBE
 from vstreamer_protos.commander.commander_pb2 import TRANSLATE
+from vstreamer_protos.commander.commander_pb2 import TTS
 from vstreamer_protos.commander.commander_pb2 import Command
+from vstreamer_protos.commander.commander_pb2 import Operation
+from vstreamer_protos.commander.commander_pb2 import OperationChain
+from vstreamer_protos.commander.commander_pb2 import OperationRoute
 from vstreamer_protos.commander.commander_pb2 import Sound
 
 from vspeech.config import Config
+from vspeech.config import EventType
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import WorkerInput
 
@@ -22,163 +27,172 @@ def app_context() -> SharedContext:
     return SharedContext(config=Config())
 
 
+def create_command(
+    operations: list[Operation],
+    sound: Sound | None = None,
+    text: str | None = None,
+    file_path: str | None = None,
+    filters: list[str] | None = None,
+) -> Command:
+    return Command(
+        chains=[
+            OperationChain(operations=[OperationRoute(operation=op)])
+            for op in operations
+        ],
+        sound=sound,
+        text=text,
+        file_path=file_path,
+        filters=filters,
+    )
+
+
 def test_from_command_sound_data_invalid():
     with pytest.raises(ValueError) as excinfo:
-        WorkerInput.from_command(Command(operations=[TRANSCRIBE]))
-    assert "sound data is required" == str(excinfo.value)
+        WorkerInput.from_command(create_command(operations=[TRANSCRIBE]))
+    assert "sound input is invalid" in str(excinfo.value)
 
     with pytest.raises(ValueError) as excinfo:
-        WorkerInput.from_command(Command(operations=[PLAYBACK], sound=Sound()))
-    assert "sound data is required" == str(excinfo.value)
-
-    with pytest.raises(ValueError) as excinfo:
-        WorkerInput.from_command(
-            Command(operations=[TRANSCRIBE], sound=Sound(data=b"dummy"))
-        )
-    assert "sound data is required" == str(excinfo.value)
+        WorkerInput.from_command(create_command(operations=[PLAYBACK], sound=Sound()))
+    assert "sound input is invalid" in str(excinfo.value)
 
     with pytest.raises(ValueError) as excinfo:
         WorkerInput.from_command(
-            Command(operations=[PLAYBACK], sound=Sound(rate=44110))
+            create_command(operations=[TRANSCRIBE], sound=Sound(data=b"dummy"))
         )
-    assert "sound data is required" == str(excinfo.value)
+    assert "sound input is invalid" in str(excinfo.value)
 
     with pytest.raises(ValueError) as excinfo:
         WorkerInput.from_command(
-            Command(operations=[TRANSCRIBE], sound=Sound(data=b"", rate=0))
+            create_command(operations=[PLAYBACK], sound=Sound(rate=44110))
         )
-    assert "sound data is required" == str(excinfo.value)
+    assert "sound input is invalid" in str(excinfo.value)
 
     with pytest.raises(ValueError) as excinfo:
-        WorkerInput.from_command(Command(operations=[PLAYBACK, TRANSCRIBE]))
-    assert "sound data is required" == str(excinfo.value)
+        WorkerInput.from_command(
+            create_command(operations=[TRANSCRIBE], sound=Sound(data=b"", rate=0))
+        )
+    assert "sound input is invalid" in str(excinfo.value)
+
+    with pytest.raises(ValueError) as excinfo:
+        WorkerInput.from_command(create_command(operations=[PLAYBACK, TRANSCRIBE]))
+    assert "sound input is invalid" in str(excinfo.value)
 
 
 def test_from_command_sound_data_valid():
     worker_input = WorkerInput.from_command(
-        Command(
+        create_command(
             operations=[TRANSCRIBE],
             sound=Sound(data=b"dummy", rate=44110, channels=1, format=8),
         )
     )
     assert (
-        worker_input.operations == [TRANSCRIBE]
-        and worker_input.sound.data == b"dummy"
-        and worker_input.sound.rate == 44110
-        and worker_input.sound.channels == 1
-        and worker_input.sound.format == 8
+        worker_input[0].current_event == EventType.transcription
+        and worker_input[0].sound.data == b"dummy"
+        and worker_input[0].sound.rate == 44110
+        and worker_input[0].sound.channels == 1
+        and worker_input[0].sound.format == 8
     )
 
     worker_input = WorkerInput.from_command(
-        Command(
-            operations=[PLAYBACK],
-            sound=Sound(data=b"dummy", rate=44110, channels=1, format=8),
-        )
-    )
-    assert (
-        worker_input.operations == [PLAYBACK]
-        and worker_input.sound.data == b"dummy"
-        and worker_input.sound.rate == 44110
-        and worker_input.sound.channels == 1
-        and worker_input.sound.format == 8
-    )
-
-    worker_input = WorkerInput.from_command(
-        Command(
+        create_command(
             operations=[PLAYBACK, TRANSCRIBE],
             sound=Sound(data=b"dummy", rate=44110, channels=1, format=8),
         )
     )
     assert (
-        worker_input.operations == [PLAYBACK, TRANSCRIBE]
-        and worker_input.sound.data == b"dummy"
-        and worker_input.sound.rate == 44110
-        and worker_input.sound.channels == 1
-        and worker_input.sound.format == 8
+        worker_input[0].current_event == EventType.playback
+        and worker_input[0].sound.data == b"dummy"
+        and worker_input[0].sound.rate == 44110
+        and worker_input[0].sound.channels == 1
+        and worker_input[0].sound.format == 8
     )
-
-
-def test_from_command_text_data_invalid():
-    with pytest.raises(ValueError) as excinfo:
-        WorkerInput.from_command(Command(operations=[SPEECH]))
-    assert "text data is required" == str(excinfo.value)
-
-    with pytest.raises(ValueError) as excinfo:
-        WorkerInput.from_command(Command(operations=[SUBTITLE], text=None))
-    assert "text data is required" == str(excinfo.value)
-
-    with pytest.raises(ValueError) as excinfo:
-        WorkerInput.from_command(Command(operations=[SUBTITLE_TRANSLATED], text=""))
-    assert "text data is required" == str(excinfo.value)
-
-    with pytest.raises(ValueError) as excinfo:
-        WorkerInput.from_command(Command(operations=[TRANSLATE]))
-    assert "text data is required" == str(excinfo.value)
-
-    with pytest.raises(ValueError) as excinfo:
-        WorkerInput.from_command(
-            Command(operations=[SPEECH, SUBTITLE, SUBTITLE_TRANSLATED, TRANSLATE])
-        )
-    assert "text data is required" == str(excinfo.value)
+    assert (
+        worker_input[1].current_event == EventType.transcription
+        and worker_input[1].sound.data == b"dummy"
+        and worker_input[1].sound.rate == 44110
+        and worker_input[1].sound.channels == 1
+        and worker_input[1].sound.format == 8
+    )
 
 
 def test_from_command_text_data_valid():
-    worker_input = WorkerInput.from_command(Command(operations=[SPEECH], text="dummy"))
-    assert worker_input.operations == [SPEECH] and worker_input.text == "dummy"
-
     worker_input = WorkerInput.from_command(
-        Command(
-            operations=[SPEECH, SUBTITLE, SUBTITLE_TRANSLATED, TRANSLATE], text="dummy"
-        )
+        create_command(operations=[TTS], text="dummy")
     )
     assert (
-        worker_input.operations == [SPEECH, SUBTITLE, SUBTITLE_TRANSLATED, TRANSLATE]
-        and worker_input.text == "dummy"
+        worker_input[0].current_event == EventType.tts
+        and worker_input[0].text == "dummy"
+    )
+
+    worker_input = WorkerInput.from_command(
+        create_command(operations=[TTS, SUBTITLE], text="dummy")
+    )
+    assert (
+        worker_input[0].current_event == EventType.tts
+        and worker_input[0].text == "dummy"
+    )
+    assert (
+        worker_input[1].current_event == EventType.subtitle
+        and worker_input[1].text == "dummy"
     )
 
 
 def test_from_command_reload_invalid():
-    with pytest.raises(ValueError) as excinfo:
-        WorkerInput.from_command(Command(operations=[RELOAD]))
-    assert "file path is required" == str(excinfo.value)
+    with pytest.raises(ValidationError) as excinfo:
+        WorkerInput.from_command(create_command(operations=[RELOAD]))
+    assert "file_path is required" in str(excinfo.value)
 
-    with pytest.raises(ValueError) as excinfo:
-        WorkerInput.from_command(Command(operations=[RELOAD], file_path=None))
-    assert "file path is required" == str(excinfo.value)
+    with pytest.raises(ValidationError) as excinfo:
+        WorkerInput.from_command(create_command(operations=[RELOAD], file_path=None))
+    assert "file_path is required" in str(excinfo.value)
 
-    with pytest.raises(ValueError) as excinfo:
-        WorkerInput.from_command(Command(operations=[RELOAD], file_path=""))
-    assert "file path is required" == str(excinfo.value)
+    with pytest.raises(ValidationError) as excinfo:
+        WorkerInput.from_command(create_command(operations=[RELOAD], file_path=""))
+    assert "file_path is required" in str(excinfo.value)
 
 
 def test_from_command_reload_valid():
     worker_input = WorkerInput.from_command(
-        Command(operations=[RELOAD], file_path="dummy")
+        create_command(operations=[RELOAD], file_path="dummy")
     )
-    assert worker_input.operations == [RELOAD] and worker_input.file_path == "dummy"
+    assert (
+        worker_input[0].current_event == EventType.reload
+        and worker_input[0].file_path == "dummy"
+    )
 
 
 def test_from_command_set_filters_valid():
-    worker_input = WorkerInput.from_command(Command(operations=[SET_FILTERS]))
-    assert worker_input.operations == [SET_FILTERS] and worker_input.filters == []
+    worker_input = WorkerInput.from_command(create_command(operations=[SET_FILTERS]))
+    assert (
+        worker_input[0].current_event == EventType.set_filters
+        and [f for f in worker_input[0].filters] == []
+    )
 
     worker_input = WorkerInput.from_command(
-        Command(operations=[SET_FILTERS], filters=None)
+        create_command(operations=[SET_FILTERS], filters=None)
     )
-    assert worker_input.operations == [SET_FILTERS] and worker_input.filters == []
+    assert (
+        worker_input[0].current_event == EventType.set_filters
+        and [f for f in worker_input[0].filters] == []
+    )
 
     worker_input = WorkerInput.from_command(
-        Command(operations=[SET_FILTERS], filters=["f1", "f2"])
+        create_command(operations=[SET_FILTERS], filters=["f1", "f2"])
     )
-    assert worker_input.operations == [SET_FILTERS] and worker_input.filters == [
+
+    assert worker_input[0].current_event == EventType.set_filters and [
+        f for f in worker_input[0].filters
+    ] == [
         "f1",
         "f2",
     ]
 
 
 def test_from_command_set_pause_resume_valid():
-    worker_input = WorkerInput.from_command(Command(operations=[PAUSE]))
-    assert worker_input.operations == [PAUSE]
+    worker_input = WorkerInput.from_command(create_command(operations=[PAUSE]))
+    assert worker_input[0].current_event == EventType.pause
 
-    worker_input = WorkerInput.from_command(Command(operations=[RESUME], filters=None))
-    assert worker_input.operations == [RESUME]
+    worker_input = WorkerInput.from_command(
+        create_command(operations=[RESUME], filters=None)
+    )
+    assert worker_input[0].current_event == EventType.resume

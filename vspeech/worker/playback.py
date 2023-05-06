@@ -7,11 +7,11 @@ from asyncio import to_thread
 from pyaudio import PyAudio
 from pyaudio import Stream
 
-from vspeech.audio import get_device_name
-from vspeech.audio import get_pa_format
-from vspeech.audio import search_device
 from vspeech.config import PlaybackConfig
 from vspeech.config import SampleFormat
+from vspeech.lib.audio import get_device_name
+from vspeech.lib.audio import get_pa_format
+from vspeech.lib.audio import search_device
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
@@ -62,6 +62,7 @@ async def playback_worker(
 ):
     audio = PyAudio()
     try:
+        logger.info("playback worker started.")
         while True:
             speech = await in_queue.get()
             try:
@@ -74,7 +75,7 @@ async def playback_worker(
                 )
                 logger.info("playback...")
                 await playback(
-                    volume=context.config.playback.speech_volume,
+                    volume=context.config.playback.volume,
                     stream=output_stream,
                     data=speech.sound.data,
                 )

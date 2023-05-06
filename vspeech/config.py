@@ -4,8 +4,6 @@ from enum import Enum
 from enum import IntEnum
 from pathlib import Path
 from typing import IO
-from typing import Dict
-from typing import List
 from typing import Optional
 from typing import Union
 
@@ -42,13 +40,18 @@ def get_sample_size(format: SampleFormat) -> int:
 
 
 class EventType(Enum):
-    speech = "speech"
+    tts = "tts"
+    vc = "vc"
     subtitle = "subtitle"
     subtitle_translated = "subtitle_translated"
     transcription = "transcription"
     translation = "translation"
     recording = "recording"
     playback = "playback"
+    pause = "pause"
+    resume = "resume"
+    reload = "reload"
+    set_filters = "set_filters"
 
 
 class TranscriptionWorkerType(Enum):
@@ -57,7 +60,7 @@ class TranscriptionWorkerType(Enum):
     WHISPER = "WHISPER"
 
 
-class SpeechWorkerType(Enum):
+class TtsWorkerType(Enum):
     VR2 = "VR2"
     VOICEVOX = "VOICEVOX"
 
@@ -103,14 +106,14 @@ class ReplaceFilter(BaseModel):
 
 class RecordingConfig(BaseModel):
     enable: bool = True
-    destinations: List[str] = Field(default_factory=lambda: ["transcription"])
+    routes_list: list[list[str]] = Field(default_factory=lambda: [["transcription"]])
     format: SampleFormat = SampleFormat.INT16
     channels: int = Field(
         default=1, cli=("-c", "--channels"), description="recording channels"
     )
     rate: int = Field(default=16000, description="recording rate")
     chunk: int = Field(default=1024, description="recording block size")
-    record_interval_sec: float = Field(
+    interval_sec: float = Field(
         default=0.5, cli=("-s", "--interval_sec"), description="recording interval sec."
     )
     silence_threshold: int = Field(
@@ -136,22 +139,18 @@ class RecordingConfig(BaseModel):
 
 class TranscriptionConfig(BaseModel):
     enable: bool = True
-    destinations: List[str] = Field(
-        default_factory=lambda: ["speech", "subtitle", "translation"]
-    )
-    transcription_worker_type: TranscriptionWorkerType = TranscriptionWorkerType.ACP
+    worker_type: TranscriptionWorkerType = TranscriptionWorkerType.ACP
     transliterate_with_mozc: bool = False
 
 
-class SpeechConfig(BaseModel):
+class TtsConfig(BaseModel):
     enable: bool = True
-    destinations: List[str] = Field(default_factory=lambda: ["playback"])
-    speech_worker_type: SpeechWorkerType = SpeechWorkerType.VR2
+    worker_type: TtsWorkerType = TtsWorkerType.VR2
 
 
 class PlaybackConfig(BaseModel):
     enable: bool = True
-    speech_volume: int = 100
+    volume: int = 100
     output_host_api_name: Optional[str] = Field(
         default=None,
         description="PortAudio host api name to select an output device",
@@ -179,92 +178,113 @@ class SubtitleTextConfig(BaseModel):
 
 class SubtitleConfig(BaseModel):
     enable: bool = True
-    subtitle_window_width: int = 1600
-    subtitle_window_height: int = 120
-    subtitle_bg_color: str = "#00ff00"
+    window_width: int = 1600
+    window_height: int = 120
+    bg_color: str = "#00ff00"
     text: SubtitleTextConfig = Field(default_factory=SubtitleTextConfig)
     translated: SubtitleTextConfig = Field(default_factory=SubtitleTextConfig)
 
 
 class TranslationConfig(BaseModel):
     enable: bool = True
-    destinations: List[str] = Field(default_factory=lambda: ["subtitle_translated"])
     source_language_code: Optional[str] = "ja"
     target_language_code: str = "en"
 
 
+class VcConfig(BaseModel):
+    enable: bool = True
+
+
 class AmiConfig(BaseModel):
-    ami_appkey: str = Field(
-        default="", description="Amivoice Cloud Platform API APPKEY"
-    )
-    ami_engine_name: str = Field(
+    appkey: str = Field(default="", description="Amivoice Cloud Platform API APPKEY")
+    engine_name: str = Field(
         default="", description="AmiVoice Cloud Platform API engine name"
     )
-    ami_engine_uri: str = Field(
+    engine_uri: str = Field(
         default="",
         description="AmiVoice Cloud Platform API engine uri (sync http only)",
     )
-    ami_service_id: str = Field(
+    service_id: str = Field(
         default="", description="AmiVoice Cloud Platform API service id"
     )
-    ami_request_timeout: float = 3.0
-    ami_extra_parameters: str = "keepFillerToken=1"
+    request_timeout: float = 3.0
+    extra_parameters: str = "keepFillerToken=1"
 
 
 class GcpConfig(BaseModel):
-    gcp_project_id: str = Field(
-        default="", description="Google cloud platform project ID"
-    )
+    project_id: str = Field(default="", description="Google cloud platform project ID")
     service_account_file_path: Path = Field(
         default="", description="Google Cloud Platform API credentials file (key.json)"
     )
-    service_account_info: Dict[str, str] = Field(
+    service_account_info: dict[str, str] = Field(
         default_factory=dict,
         description="Google Cloud Platform API service account info",
     )
-    gcp_request_timeout: float = 3.0
-    gcp_max_retry_count: int = 5
-    gcp_retry_delay_sec: float = 0.5
+    request_timeout: float = 3.0
+    max_retry_count: int = 5
+    retry_delay_sec: float = 0.5
     location: str = Field(default="asia-northeast1")
 
 
 class Vr2Config(BaseModel):
-    vr2_params: VR2Param = Field(default_factory=VR2Param)
-    vr2_voice_name: Optional[str] = None
+    params: VR2Param = Field(default_factory=VR2Param)
+    voice_name: Optional[str] = None
 
 
 class WhisperConfig(BaseModel):
-    whisper_model: str = "base"
-    whisper_no_speech_prob_threshold: float = 0.6
-    whisper_logprob_threshold: float = -1.0
+    model: str = "base"
+    no_speech_prob_threshold: float = 0.6
+    logprob_threshold: float = -1.0
 
 
 class VoicevoxConfig(BaseModel):
-    voicevox_speaker_id: int = 1
-    voicevox_params: VoicevoxParam = Field(default_factory=VoicevoxParam)
+    speaker_id: int = 1
+    params: VoicevoxParam = Field(default_factory=VoicevoxParam)
     openjtalk_dir: Path = Path("./voicevox_core/open_jtalk_dic_utf_8-1.11")
+
+
+class RvcQuality(IntEnum):
+    zero = 0
+    one = 1
+
+
+class F0ExtractorType(Enum):
+    dio = "dio"
+    harvest = "harvest"
+
+
+class RvcConfig(BaseModel):
+    model_file: Path = Field(default="")
+    hubert_model_file: Path = Field(default="")
+    f0_up_key: int = Field(default=0)
+    window: int = Field(default=160)
+    quality: RvcQuality = Field(default=RvcQuality.zero)
+    gpu_id: int = Field(default=0)
+    f0_extractor_type: F0ExtractorType = Field(default=F0ExtractorType.harvest)
 
 
 class Config(BaseSettings):
     recording: RecordingConfig = Field(default_factory=RecordingConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
-    speech: SpeechConfig = Field(default_factory=SpeechConfig)
+    tts: TtsConfig = Field(default_factory=TtsConfig)
     playback: PlaybackConfig = Field(default_factory=PlaybackConfig)
     subtitle: SubtitleConfig = Field(default_factory=SubtitleConfig)
     translation: TranslationConfig = Field(default_factory=TranslationConfig)
+    vc: VcConfig = Field(default_factory=VcConfig)
     ami: AmiConfig = Field(default_factory=AmiConfig)
     gcp: GcpConfig = Field(default_factory=GcpConfig)
     vr2: Vr2Config = Field(default_factory=Vr2Config)
     whisper: WhisperConfig = Field(default_factory=WhisperConfig)
     voicevox: VoicevoxConfig = Field(default_factory=VoicevoxConfig)
+    rvc: RvcConfig = Field(default_factory=RvcConfig)
 
     listen_address: str = "[::]"
     listen_port: int = Field(default=8080, env="PORT")
-    template_texts: List[str] = Field(default_factory=lambda: [""])
-    text_send_operations: List[str] = Field(
-        default_factory=lambda: ["translate", "subtitle", "speech"]
+    template_texts: list[str] = Field(default_factory=lambda: [""])
+    text_send_operations: list[str] = Field(
+        default_factory=lambda: ["translate", "subtitle", "tts"]
     )
-    filters: List[ReplaceFilter] = []
+    filters: list[ReplaceFilter] = []
     log_file: str = "./voice_%%Y_%%m_%%d.log"
     log_level: Union[int, str] = logging.INFO
     recording_log: bool = False

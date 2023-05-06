@@ -1,12 +1,11 @@
 from asyncio import AbstractEventLoop
 from asyncio import CancelledError
 from asyncio import Queue
-from asyncio import current_task
 from asyncio import to_thread
 from typing import List
 
 from vspeech.config import SampleFormat
-from vspeech.config import SpeechWorkerType
+from vspeech.config import TtsWorkerType
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
@@ -14,48 +13,11 @@ from vspeech.shared_context import SoundOutput
 from vspeech.shared_context import WorkerInput
 from vspeech.shared_context import WorkerOutput
 
-try:
-    from vspeech.voicevox import Voicevox
-except ImportError as e:
-    logger.warning(e)
-
-try:
-    from vspeech.voiceroid import VR2
-except ModuleNotFoundError:
-    logger.info("pyvcroid2 not found")
-
-
-def vr2_reload(context: SharedContext, vr2: "VR2"):
-    config = context.config.vr2
-    task = current_task()
-    if not task:
-        return
-    task_name = task.get_name()
-    if not context.reload.get(task_name):
-        return
-    if config.vr2_voice_name:
-        logger.info("vr2 reload voice_name: %s", config.vr2_voice_name)
-        vr2.load_voice(config.vr2_voice_name, config.vr2_params)
-    context.reload[task_name] = False
-
-
-def voicevox_reload(context: SharedContext, vvox: "Voicevox"):
-    config = context.config.voicevox
-    task = current_task()
-    if not task:
-        return
-    task_name = task.get_name()
-    if not context.reload.get(task_name):
-        return
-    if config.voicevox_speaker_id and not vvox.is_model_loaded(
-        config.voicevox_speaker_id
-    ):
-        logger.info("vvox reload voice_name: %s", config.voicevox_speaker_id)
-        vvox.load_model(config.voicevox_speaker_id)
-    context.reload[task_name] = False
-
 
 async def vroid2_worker(context: SharedContext, in_queue: Queue[WorkerInput]):
+    from vspeech.lib.voiceroid import VR2
+    from vspeech.lib.voiceroid import vr2_reload
+
     vr2 = VR2()
     with vr2.vc_roid2:
         lang_list: List[str] = vr2.list_languages()
@@ -65,8 +27,8 @@ async def vroid2_worker(context: SharedContext, in_queue: Queue[WorkerInput]):
             vr2.load_language(lang_list[0])
         else:
             raise Exception("No language library")
-        if context.config.vr2.vr2_voice_name:
-            voice_name = context.config.vr2.vr2_voice_name
+        if context.config.vr2.voice_name:
+            voice_name = context.config.vr2.voice_name
         else:
             voice_list: List[str] = vr2.list_voices()
             if voice_list:
@@ -74,8 +36,8 @@ async def vroid2_worker(context: SharedContext, in_queue: Queue[WorkerInput]):
             else:
                 raise Exception("No voice library")
         logger.info("vr2 voice: %s", voice_name)
-        logger.info("speech worker [vr2] started")
-        vr2.load_voice(voice_name, context.config.vr2.vr2_params)
+        logger.info("tts worker [vr2] started")
+        vr2.load_voice(voice_name, context.config.vr2.params)
         while True:
             transcribed = await in_queue.get()
             vr2_reload(context, vr2=vr2)
@@ -86,7 +48,7 @@ async def vroid2_worker(context: SharedContext, in_queue: Queue[WorkerInput]):
                 )
                 logger.info("voice generated")
                 yield WorkerOutput(
-                    source=EventType.speech,
+                    followings=transcribed.following_events,
                     sound=SoundOutput(
                         data=speech, rate=44110, format=SampleFormat.INT16, channels=1
                     ),
@@ -97,9 +59,12 @@ async def vroid2_worker(context: SharedContext, in_queue: Queue[WorkerInput]):
 
 
 async def voicevox_worker(context: SharedContext, in_queue: Queue[WorkerInput]):
+    from vspeech.lib.voicevox import Voicevox
+    from vspeech.lib.voicevox import voicevox_reload
+
     vvox = Voicevox(context.config.voicevox.openjtalk_dir)
-    vvox.load_model(context.config.voicevox.voicevox_speaker_id)
-    logger.info("speech worker [voicevox] started")
+    vvox.load_model(context.config.voicevox.speaker_id)
+    logger.info("tts worker [voicevox] started")
     while True:
         transcribed = await in_queue.get()
         voicevox_reload(context=context, vvox=vvox)
@@ -108,48 +73,47 @@ async def voicevox_worker(context: SharedContext, in_queue: Queue[WorkerInput]):
             speech = await to_thread(
                 vvox.voicevox_tts,
                 text=transcribed.text,
-                speaker_id=context.config.voicevox.voicevox_speaker_id,
-                params=context.config.voicevox.voicevox_params,
+                speaker_id=context.config.voicevox.speaker_id,
+                params=context.config.voicevox.params,
             )
             logger.info("voice generated")
             yield WorkerOutput(
-                source=EventType.speech,
+                followings=transcribed.following_events,
                 sound=SoundOutput(
                     data=speech[44:], rate=24000, format=SampleFormat.INT16, channels=1
                 ),
-                text=None,
             )
         except UnicodeEncodeError as e:
             logger.warning(e)
 
 
-async def speech_worker(
+async def tts_worker(
     context: SharedContext, in_queue: Queue[WorkerInput], out_queue: Queue[WorkerOutput]
 ):
-    config = context.config.speech
-    if config.speech_worker_type == SpeechWorkerType.VR2:
+    config = context.config.tts
+    if config.worker_type == TtsWorkerType.VR2:
         worker = vroid2_worker
-    elif config.speech_worker_type == SpeechWorkerType.VOICEVOX:
+    elif config.worker_type == TtsWorkerType.VOICEVOX:
         worker = voicevox_worker
     else:
-        raise ValueError("speech worker type unknown.")
+        raise ValueError("tts worker type unknown.")
     while True:
         try:
             async for output in worker(context=context, in_queue=in_queue):
                 out_queue.put_nowait(output)
         except CancelledError:
-            logger.debug("speech worker cancelled")
+            logger.debug("tts worker cancelled")
             raise
 
 
-def create_speech_task(
+def create_tts_task(
     loop: AbstractEventLoop,
     context: SharedContext,
 ):
     in_queue = Queue[WorkerInput]()
-    event = EventType.speech
+    event = EventType.tts
     context.input_queues[event] = in_queue
     return loop.create_task(
-        speech_worker(context, in_queue=in_queue, out_queue=context.sender_queue),
+        tts_worker(context, in_queue=in_queue, out_queue=context.sender_queue),
         name=event.name,
     )

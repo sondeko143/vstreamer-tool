@@ -14,23 +14,9 @@ import click
 from vspeech.config import Config
 from vspeech.logger import configure_logger
 from vspeech.logger import logger
-from vspeech.receiver import create_receiver_task
-from vspeech.sender import create_sender_task
 from vspeech.shared_context import SharedContext
-from vspeech.speech import create_speech_task
-from vspeech.transcription import create_transcription_task
-from vspeech.translation import create_translation_task
-
-try:
-    from vspeech.subtitle import create_subtitle_task
-except ImportError:
-    pass
-
-try:
-    from vspeech.playback import create_playback_task
-    from vspeech.recording import create_recording_task
-except ModuleNotFoundError:
-    pass
+from vspeech.worker.receiver import create_receiver_task
+from vspeech.worker.sender import create_sender_task
 
 
 async def cancel_tasks(tasks: List[Task[Any]]):
@@ -46,29 +32,40 @@ async def cancel_tasks(tasks: List[Task[Any]]):
                 logger.info("cancelled %s", task.get_name())
 
 
-def validation_config(config: Config):
-    pass
-
-
 async def vspeech_coro(loop: AbstractEventLoop, config: Config):
-    validation_config(config)
     context = SharedContext(config=config)
     tasks = [
         create_sender_task(loop=loop, context=context),
         create_receiver_task(loop=loop, context=context),
     ]
     if config.recording.enable:
+        from vspeech.worker.recording import create_recording_task
+
         tasks.append(create_recording_task(loop=loop, context=context))
-    if config.speech.enable:
-        tasks.append(create_speech_task(loop=loop, context=context))
+    if config.tts.enable:
+        from vspeech.worker.tts import create_tts_task
+
+        tasks.append(create_tts_task(loop=loop, context=context))
     if config.transcription.enable:
+        from vspeech.worker.transcription import create_transcription_task
+
         tasks.append(create_transcription_task(loop=loop, context=context))
     if config.subtitle.enable:
+        from vspeech.worker.subtitle import create_subtitle_task
+
         tasks.append(create_subtitle_task(loop=loop, context=context))
     if config.translation.enable:
+        from vspeech.worker.translation import create_translation_task
+
         tasks.append(create_translation_task(loop=loop, context=context))
     if config.playback.enable:
+        from vspeech.worker.playback import create_playback_task
+
         tasks.append(create_playback_task(loop=loop, context=context))
+    if config.vc.enable:
+        from vspeech.worker.vc import create_vc_task
+
+        tasks.append(create_vc_task(loop=loop, context=context))
     tasks = [task for task in tasks if task]
     try:
         await wait(tasks, return_when=FIRST_COMPLETED)
