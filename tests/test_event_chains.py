@@ -1,8 +1,17 @@
 import pytest
+from vstreamer_protos.commander.commander_pb2 import PLAYBACK
+from vstreamer_protos.commander.commander_pb2 import TRANSCRIBE
+from vstreamer_protos.commander.commander_pb2 import TRANSLATE
+from vstreamer_protos.commander.commander_pb2 import TTS
+from vstreamer_protos.commander.commander_pb2 import OperationChain
+from vstreamer_protos.commander.commander_pb2 import OperationRoute
 
 from vspeech.config import EventType
+from vspeech.config import SampleFormat
 from vspeech.shared_context import EventAddress
 from vspeech.shared_context import FollowingEvents
+from vspeech.shared_context import SoundOutput
+from vspeech.shared_context import WorkerInput
 from vspeech.shared_context import WorkerOutput
 
 
@@ -58,31 +67,61 @@ def followings() -> FollowingEvents:
 
 
 def test_worker_output_remotes(followings: FollowingEvents):
-    output = WorkerOutput(followings=followings)
+    output = WorkerOutput(
+        followings=followings,
+        sound=SoundOutput(
+            data=b"aaa", rate=16000, format=SampleFormat.INT16, channels=1
+        ),
+        text="aaa",
+    )
     remotes = output.remotes
     assert remotes == set(["", "remote"])
-    remotes = output.events("")
-    assert remotes == [
-        [EventType.transcription, EventType.tts],
-        [EventType.transcription, EventType.subtitle],
-        [
-            EventType.transcription,
-            EventType.translation,
-            EventType.subtitle_translated,
+
+
+def test_worker_output_to_inputs(followings: FollowingEvents):
+    output = WorkerOutput(
+        followings=followings,
+        sound=SoundOutput(
+            data=b"aaa", rate=16000, format=SampleFormat.INT16, channels=1
+        ),
+        text="aaa",
+    )
+    inputs = WorkerInput.from_output(output, remote="")
+    assert {i.current_event: i.following_events for i in inputs} == {
+        EventType.transcription: [
+            [EventType.tts],
+            [EventType.subtitle],
+            [
+                EventType.translation,
+                EventType.subtitle_translated,
+            ],
+            [
+                EventType.translation,
+                EventType.subtitle_translated,
+            ],
         ],
-        [
-            EventType.transcription,
-            EventType.translation,
-            EventType.subtitle_translated,
-        ],
-        [EventType.playback],
-    ]
-    remotes = output.events("remote")
-    assert remotes == [
-        [
-            EventAddress(event=EventType.transcription, remote="remote"),
-            EventType.translation,
-            EventType.tts,
-        ],
-        [EventAddress(event=EventType.playback, remote="remote")],
+        EventType.playback: [[]],
+    }
+
+
+def test_worker_output_to_command(followings: FollowingEvents):
+    output = WorkerOutput(
+        followings=followings,
+        sound=SoundOutput(
+            data=b"aaa", rate=16000, format=SampleFormat.INT16, channels=1
+        ),
+        text="aaa",
+    )
+    command = output.to_pb("remote")
+    assert command.chains == [
+        OperationChain(
+            operations=[
+                OperationRoute(operation=TRANSCRIBE, remote="remote"),
+                OperationRoute(operation=TRANSLATE, remote=""),
+                OperationRoute(operation=TTS, remote=""),
+            ],
+        ),
+        OperationChain(
+            operations=[OperationRoute(operation=PLAYBACK, remote="remote")]
+        ),
     ]

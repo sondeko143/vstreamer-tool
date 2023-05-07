@@ -194,14 +194,14 @@ class WorkerOutput:
     def remotes(self):
         return get_remotes_of_events(self.followings)
 
-    def events(self, remote: str) -> FollowingEvents:
+    def events(self, remote: str):
         return get_events_of_remote(self.followings, remote=remote)
 
-    def to_pb(self) -> Command:
+    def to_pb(self, remote: str) -> Command:
+        events = self.events(remote)
         return Command(
             chains=[
-                OperationChain(operations=[f.to_pb() for f in fs])
-                for fs in self.followings
+                OperationChain(operations=[f.to_pb() for f in fs]) for fs in events
             ],
             text=self.text,
             sound=self.sound.to_pb() if self.sound else None,
@@ -252,8 +252,8 @@ class WorkerInput(BaseModel):
         return values
 
     @classmethod
-    def from_output(cls, output: WorkerOutput):
-        first_event_maps = get_first_event_map(output.followings)
+    def from_output(cls, output: WorkerOutput, remote: str):
+        first_event_maps = get_first_event_map(output.events(remote))
         return [
             WorkerInput(
                 current_event=first_event.event,

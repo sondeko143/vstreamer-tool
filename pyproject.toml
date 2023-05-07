@@ -23,7 +23,7 @@ voicevox-core = [
 google-cloud-speech = "^2.19.0"
 toml = "^0.10.2"
 click = "^8.1.3"
-vstreamer-protos = { url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-9a5d1966/vstreamer_protos-0.1.0-py3-none-any.whl" }
+vstreamer-protos = { url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-91cf58c5/vstreamer_protos-0.1.0-py3-none-any.whl" }
 
 [tool.poetry.group.dev.dependencies]
 docutils = "^0.19"

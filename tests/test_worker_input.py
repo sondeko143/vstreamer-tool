@@ -6,9 +6,7 @@ from vstreamer_protos.commander.commander_pb2 import RELOAD
 from vstreamer_protos.commander.commander_pb2 import RESUME
 from vstreamer_protos.commander.commander_pb2 import SET_FILTERS
 from vstreamer_protos.commander.commander_pb2 import SUBTITLE
-from vstreamer_protos.commander.commander_pb2 import SUBTITLE_TRANSLATED
 from vstreamer_protos.commander.commander_pb2 import TRANSCRIBE
-from vstreamer_protos.commander.commander_pb2 import TRANSLATE
 from vstreamer_protos.commander.commander_pb2 import TTS
 from vstreamer_protos.commander.commander_pb2 import Command
 from vstreamer_protos.commander.commander_pb2 import Operation

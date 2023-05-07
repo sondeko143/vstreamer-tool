@@ -16,6 +16,7 @@ from grpc import ssl_channel_credentials
 from grpc.aio import AioRpcError
 from grpc.aio import insecure_channel
 from grpc.aio import secure_channel
+from vstreamer_protos.commander.commander_pb2 import Command
 from vstreamer_protos.commander.commander_pb2 import Response
 from vstreamer_protos.commander.commander_pb2_grpc import CommanderStub
 
@@ -71,13 +72,18 @@ def get_channel(address: str, credentials: IDTokenCredentials):
 async def send_command(
     credentials: IDTokenCredentials,
     address: str,
-    worker_output: WorkerOutput,
+    command: Command,
 ):
-    command = worker_output.to_pb()
     try:
         async with get_channel(address=address, credentials=credentials) as channel:
             stub = CommanderStub(channel)
-            logger.info("send: %s to %s", command, address)
+            logger.info(
+                "send: o(%s), s(%s), t(%s), to %s",
+                command.chains,
+                len(command.sound.data),
+                command.text,
+                address,
+            )
             res = cast(Response, await stub.process_command(command))
             logger.info("success response: %s", res)
     except (RefreshError, MutualTLSChannelError, AioRpcError) as e:
@@ -99,11 +105,11 @@ async def sender(
                         await send_command(
                             credentials=credentials,
                             address=remote,
-                            worker_output=worker_output,
+                            command=worker_output.to_pb(remote=remote),
                         )
                     else:
                         for worker_input in WorkerInput.from_output(
-                            output=worker_output
+                            output=worker_output, remote=remote
                         ):
                             process_command(
                                 context=context,
