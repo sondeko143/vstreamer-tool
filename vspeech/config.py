@@ -281,8 +281,8 @@ class Config(BaseSettings):
     listen_address: str = "[::]"
     listen_port: int = Field(default=8080, env="PORT")
     template_texts: list[str] = Field(default_factory=lambda: [""])
-    text_send_operations: list[str] = Field(
-        default_factory=lambda: ["translate", "subtitle", "tts"]
+    text_send_operations: list[list[str]] = Field(
+        default_factory=lambda: [["tts", "playback"]]
     )
     filters: list[ReplaceFilter] = []
     log_file: str = "./voice_%%Y_%%m_%%d.log"

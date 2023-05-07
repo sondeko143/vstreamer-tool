@@ -37,6 +37,7 @@ from typing import get_type_hints
 import click
 import grpc
 import toml
+import vstreamer_protos.commander.commander_pb2
 from humps import pascalize
 from toml.encoder import TomlArraySeparatorEncoder
 from ttkbootstrap import Button
@@ -55,9 +56,6 @@ from vstreamer_protos.commander.commander_pb2 import PAUSE
 from vstreamer_protos.commander.commander_pb2 import RELOAD
 from vstreamer_protos.commander.commander_pb2 import RESUME
 from vstreamer_protos.commander.commander_pb2 import SET_FILTERS
-from vstreamer_protos.commander.commander_pb2 import SUBTITLE
-from vstreamer_protos.commander.commander_pb2 import TRANSLATE
-from vstreamer_protos.commander.commander_pb2 import TTS
 from vstreamer_protos.commander.commander_pb2 import Command
 from vstreamer_protos.commander.commander_pb2 import OperationChain
 from vstreamer_protos.commander.commander_pb2 import OperationRoute
@@ -225,12 +223,7 @@ class VspeechGUI(Frame):
 
     @staticmethod
     def get_operation_from_str(ope_str: str):
-        if ope_str.upper() == "TRANSLATE":
-            return TRANSLATE
-        if ope_str.upper() == "SUBTITLE":
-            return SUBTITLE
-        if ope_str.upper() == "TTS":
-            return TTS
+        return getattr(vstreamer_protos.commander.commander_pb2, ope_str.upper())
 
     @staticmethod
     def is_file_json(file_path: Union[str, Path]):
@@ -948,10 +941,6 @@ class VspeechGUI(Frame):
             frame=tab_frame, config_name=f"listen_port", from_=0, to=65535, increment=1
         ).grid(column=1, row=current_row, sticky=EW)
         current_row += 1
-        self.draw_cs_tb(
-            frame=tab_frame,
-            config_name=f"text_send_operations",
-        ).grid(column=0, row=current_row, sticky=EW, columnspan=max_columns)
         notebook.add(tab_frame, text="templ")
 
     def draw_filter_tab(self, notebook: Notebook):
@@ -993,14 +982,16 @@ class VspeechGUI(Frame):
         notebook.add(tab_frame, text="filt")
 
     def operations_for_send_text(self) -> list[OperationChain]:
-        operations = [
-            VspeechGUI.get_operation_from_str(o)
-            for o in self.config.text_send_operations
-        ]
         return [
-            OperationChain(operations=[OperationRoute(operation=o)])
-            for o in operations
-            if o
+            OperationChain(
+                operations=[
+                    OperationRoute(operation=VspeechGUI.get_operation_from_str(o))
+                    for o in os
+                    if o
+                ]
+            )
+            for os in self.config.text_send_operations
+            if os
         ]
 
     def send_selected_template_texts(self, listbox: Listbox):

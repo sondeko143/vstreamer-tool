@@ -86,7 +86,7 @@ def is_text_event(event: EventType) -> bool:
 def operation_to_event(operation: Operation) -> EventType:
     if operation == TRANSCRIBE:
         return EventType.transcription
-    if operation == TRANSCRIBE:
+    if operation == TRANSLATE:
         return EventType.translation
     if operation == SUBTITLE:
         return EventType.subtitle
