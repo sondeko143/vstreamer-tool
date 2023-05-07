@@ -359,8 +359,6 @@ async def rvc_worker(
     logger.info("vc worker started")
     while True:
         speech = await in_queue.get()
-        if not speech.text:
-            continue
         rvc_config = context.config.rvc
         try:
             logger.info("voice changing...")

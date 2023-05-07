@@ -1,9 +1,10 @@
-listen_address = "localhost:19827"
-template_texts = [ "こんにちは！",
- "お疲れさまでした。失礼します。",
-]
+listen_address = "localhost"
+listen_port = 19827
+template_texts = ["こんにちは！", "お疲れさまでした。失礼します。"]
 log_file = "./log/voice_%%Y_%%m_%%d.log"
 log_level = "INFO"
+recording_log = false
+recording_log_dir = "./reclog"
 [[filters]]
 pattern = "foo"
 replaced = "bar"
@@ -14,13 +15,28 @@ replaced = "好き"
 
 [recording]
 enable = true
-destinations = [ "transcription" ]
-format = 8
+routes_list = [
+    [
+        "transcription",
+        "subtitle",
+    ],
+    [
+        "transcription",
+        "translation",
+        "subtitle_translated",
+    ],
+    [
+        "transcription",
+        "vc",
+        "playback",
+    ],
+]
+format = 4
 channels = 1
 rate = 16000
-chunk = 16000
-record_interval_sec = 1.0
-silence_threshold = -40
+chunk = 12800
+interval_sec = 0.8
+silence_threshold = -45
 max_recording_sec = 10.0
 input_host_api_name = ""
 input_device_name = ""
@@ -28,82 +44,104 @@ input_device_index = 0
 
 [transcription]
 enable = true
-destinations = [
-    "subtitle",
-    "translation",
-    "speech",
-]
-transcription_worker_type = "WHISPER"
+worker_type = "ACP"
 transliterate_with_mozc = false
 
-[speech]
+[tts]
 enable = true
-destinations = [ "playback" ]
-speech_worker_type = "VOICEVOX"
+worker_type = "VR2"
 
 [playback]
 enable = true
-speech_volume = 45
+volume = "100"
 output_host_api_name = ""
 output_device_name = ""
 output_device_index = 1
 
 [subtitle]
 enable = true
-min_subtitle_display_sec = 4.5
-max_subtitle_text_len = 40
-max_subtitle_translated_len = 50
-subtitle_window_width = 1920
-subtitle_window_height = 120
-subtitle_font_size = 20
-subtitle_font_family = "Meiryo UI"
-subtitle_font_style = "bold"
-subtitle_font_color = "#80daeb"
+window_width = 1920
+window_height = 120
+bg_color = "systemTransparent"
 
 [translation]
 enable = true
-destinations = [ "subtitle_translated" ]
 source_language_code = "ja"
 target_language_code = "en"
 
+[vc]
+enable = true
+
 [ami]
-ami_appkey = ""
-ami_engine_name = "-a-general"
-ami_engine_uri = "https://acp-api.amivoice.com/v1/nolog/recognize"
-ami_service_id = ""
-ami_request_timeout = 30.0
-ami_extra_parameters = "keepFillerToken=0"
+appkey = ""
+engine_name = ""
+engine_uri = ""
+service_id = ""
+request_timeout = 30.0
+extra_parameters = "keepFillerToken=0"
 
 [gcp]
-gcp_project_id = "dummy-11111"
-gcp_credentials_file_path = "/path/to/key.json"
-gcp_request_timeout = 3.0
-gcp_max_retry_count = 5
-gcp_retry_delay_sec = 0.1
+project_id = ""
+service_account_file_path = ""
+request_timeout = 3.0
+max_retry_count = 5
+retry_delay_sec = 0.1
+location = "asia-northeast1"
 
 [vr2]
-vr2_voice_name = "akari_44"
+voice_name = "akari_44"
 
 [whisper]
-whisper_model = "small"
-whisper_no_speech_prob_threshold = 0.6
-whisper_logprob_threshold = -1.0
+model = "small"
+no_speech_prob_threshold = 0.6
+logprob_threshold = -1.0
 
 [voicevox]
-voicevox_speaker_id = 2
-openjtalk_dir = "open_jtalk_dic_utf_8-1.11"
+speaker_id = 2
+openjtalk_dir = "./open_jtalk_dic_utf_8-1.11"
 
-[vr2.vr2_params]
+[rvc]
+model_file = "./dummy_simple.onnx"
+hubert_model_file = "./hubert_base.pt"
+f0_up_key = 12
+window = 160
+quality = 0
+gpu_id = 0
+f0_extractor_type = "harvest"
+
+[subtitle.text]
+display_sec_per_letter = 0.4
+min_display_sec = 6.0
+max_text_len = 32
+font_size = 24
+font_family = "Meiryo UI"
+font_style = "bold"
+font_color = "#ffffff"
+outline_color = "#000000"
+
+[subtitle.translated]
+display_sec_per_letter = 0.2
+min_display_sec = 6.0
+max_text_len = 40
+font_size = 22
+font_family = "Meiryo UI"
+font_style = "bold"
+font_color = "#ffffff"
+outline_color = "#000000"
+
+[gcp.service_account_info]
+
+[vr2.params]
 volume = 1.0
-speed = 1.25
-pitch = 0.85
-emphasis = 0.72
+speed = 1.0
+pitch = 1.0
+emphasis = 1.0
 pause_middle = 150.0
 pause_long = 370.0
 pause_sentence = 800.0
 master_volume = 1.0
 
-[voicevox.voicevox_params]
+[voicevox.params]
 speed_scale = 1.0
 pitch_scale = 0.0
 intonation_scale = 1.0

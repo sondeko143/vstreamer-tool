@@ -16,8 +16,8 @@ files = [
 name = "antlr4-python3-runtime"
 version = "4.8"
 description = "ANTLR 4.8 runtime for Python 3.7"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "antlr4-python3-runtime-4.8.tar.gz", hash = "sha256:15793f5d0512a372b4e7d2284058ad32ce7dd27126b105fb0b2245130445db33"},
@@ -72,8 +72,8 @@ yaml = ["PyYAML"]
 name = "bitarray"
 version = "2.7.3"
 description = "efficient arrays of booleans -- C extension"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "bitarray-2.7.3-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:979d42e0b2c3113526f9716a461e08671788a23ce7e3b5cd090ce3e6a6762641"},
@@ -242,8 +242,8 @@ files = [
 name = "cffi"
 version = "1.15.1"
 description = "Foreign Function Interface for Python calling C code."
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "cffi-1.15.1-cp27-cp27m-macosx_10_9_x86_64.whl", hash = "sha256:a66d3508133af6e8548451b25058d5812812ec3798c886bf38ed24a98216fab2"},
@@ -419,8 +419,8 @@ colorama = {version = "*", markers = "platform_system == \"Windows\""}
 name = "cmake"
 version = "3.26.3"
 description = "CMake is an open-source, cross-platform family of tools designed to build, test and package software"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "cmake-3.26.3-py2.py3-none-macosx_10_10_universal2.macosx_10_10_x86_64.macosx_11_0_arm64.macosx_11_0_universal2.whl", hash = "sha256:9d38ea5b4999f8f042a071bea3e213f085bac26d7ab54cb5a4c6a193c4baf132"},
@@ -461,8 +461,8 @@ files = [
 name = "coloredlogs"
 version = "15.0.1"
 description = "Colored terminal output for Python's logging module"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*"
 files = [
     {file = "coloredlogs-15.0.1-py2.py3-none-any.whl", hash = "sha256:612ee75c546f53e92e70049c9dbfcc18c935a2b9a53b66085ce9ef6a6e5c0934"},
@@ -546,8 +546,8 @@ toml = ["tomli"]
 name = "cython"
 version = "0.29.34"
 description = "The Cython compiler for writing C extensions for the Python language."
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=2.6, !=3.0.*, !=3.1.*, !=3.2.*"
 files = [
     {file = "Cython-0.29.34-cp27-cp27m-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:742544024ddb74314e2d597accdb747ed76bd126e61fcf49940a5b5be0a8f381"},
@@ -623,8 +623,8 @@ test = ["pytest (>=6)"]
 name = "fairseq"
 version = "0.12.2"
 description = "Facebook AI Research Sequence-to-Sequence Toolkit"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "fairseq-0.12.2-cp36-cp36m-macosx_10_9_x86_64.whl", hash = "sha256:fe65b07c5121b7cda0c7a17166994a6b0059259ce37881b6daa117b8c209b662"},
@@ -653,8 +653,8 @@ tqdm = "*"
 name = "faiss-cpu"
 version = "1.7.4"
 description = "A library for efficient similarity search and clustering of dense vectors."
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "faiss-cpu-1.7.4.tar.gz", hash = "sha256:265dc31b0c079bf4433303bf6010f73922490adff9188b915e2d3f5e9c82dd0a"},
@@ -688,8 +688,8 @@ files = [
 name = "faiss-gpu"
 version = "1.7.2"
 description = "A library for efficient similarity search and clustering of dense vectors."
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "faiss_gpu-1.7.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c98abc1aac06cb4cb94de223b3186bd4a60d15fd3cae42271604168abc081ca5"},
@@ -703,8 +703,8 @@ files = [
 name = "ffmpeg-python"
 version = "0.2.0"
 description = "Python bindings for FFmpeg - with complex filtering support"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "ffmpeg-python-0.2.0.tar.gz", hash = "sha256:65225db34627c578ef0e11c8b1eb528bb35e024752f6f10b78c011f6f64c4127"},
@@ -721,8 +721,8 @@ dev = ["Sphinx (==2.1.0)", "future (==0.17.1)", "numpy (==1.16.4)", "pytest (==4
 name = "filelock"
 version = "3.12.0"
 description = "A platform independent file lock."
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.7"
 files = [
     {file = "filelock-3.12.0-py3-none-any.whl", hash = "sha256:ad98852315c2ab702aeb628412cbf7e95b7ce8c3bf9565670b4eaecf1db370a9"},
@@ -737,8 +737,8 @@ testing = ["covdefaults (>=2.3)", "coverage (>=7.2.3)", "diff-cover (>=7.5)", "p
 name = "flatbuffers"
 version = "23.3.3"
 description = "The FlatBuffers serialization format for Python"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "flatbuffers-23.3.3-py2.py3-none-any.whl", hash = "sha256:5ad36d376240090757e8f0a2cfaf6abcc81c6536c0dc988060375fd0899121f8"},
@@ -749,8 +749,8 @@ files = [
 name = "future"
 version = "0.18.3"
 description = "Clean single-source support for Python 3 and 2"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=2.6, !=3.0.*, !=3.1.*, !=3.2.*"
 files = [
     {file = "future-0.18.3.tar.gz", hash = "sha256:34a17436ed1e96697a86f9de3d15a3b0be01d8bc8de9c1dffd59fb8234ed5307"},
@@ -1057,8 +1057,8 @@ socks = ["socksio (>=1.0.0,<2.0.0)"]
 name = "humanfriendly"
 version = "10.0"
 description = "Human friendly output for text interfaces using Python"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*"
 files = [
     {file = "humanfriendly-10.0-py2.py3-none-any.whl", hash = "sha256:1697e1a8a8f550fd43c2865cd84542fc175a61dcb779b6fee18cf6b6ccba1477"},
@@ -1072,8 +1072,8 @@ pyreadline3 = {version = "*", markers = "sys_platform == \"win32\" and python_ve
 name = "hydra-core"
 version = "1.0.7"
 description = "A framework for elegantly configuring complex applications"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "hydra-core-1.0.7.tar.gz", hash = "sha256:58cc3f7531995b6d8de162ca21f936e17bdaebd4d1e8614d63c32e17c2e41e45"},
@@ -1130,8 +1130,8 @@ requirements-deprecated-finder = ["pip-api", "pipreqs"]
 name = "jinja2"
 version = "3.1.2"
 description = "A very fast and expressive template engine."
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.7"
 files = [
     {file = "Jinja2-3.1.2-py3-none-any.whl", hash = "sha256:6088930bfe239f0e6710546ab9c19c9ef35e29792895fed6e6e31a023a182a61"},
@@ -1148,8 +1148,8 @@ i18n = ["Babel (>=2.7)"]
 name = "lit"
 version = "16.0.3"
 description = "A Software Testing Tool"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "lit-16.0.3.tar.gz", hash = "sha256:25524fe51fa3261212cfd86a8891429ed0460e247384c5a2001612d08e362e00"},
@@ -1159,8 +1159,8 @@ files = [
 name = "llvmlite"
 version = "0.40.0"
 description = "lightweight wrapper around basic LLVM functionality"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.8"
 files = [
     {file = "llvmlite-0.40.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:90a46db1ed219d93ef05245ec17cf243074ec2b2687209cb310a803a2c2510dc"},
@@ -1193,8 +1193,8 @@ files = [
 name = "lxml"
 version = "4.9.2"
 description = "Powerful and Pythonic XML processing library combining libxml2/libxslt with the ElementTree API."
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, != 3.4.*"
 files = [
     {file = "lxml-4.9.2-cp27-cp27m-macosx_10_15_x86_64.whl", hash = "sha256:76cf573e5a365e790396a5cc2b909812633409306c6531a6877c59061e42c4f2"},
@@ -1311,8 +1311,8 @@ testing = ["coverage", "pytest", "pytest-cov", "pytest-regressions"]
 name = "markupsafe"
 version = "2.1.2"
 description = "Safely add untrusted strings to HTML/XML markup."
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.7"
 files = [
     {file = "MarkupSafe-2.1.2-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:665a36ae6f8f20a4676b53224e33d456a6f5a72657d9c83c2aa00765072f31f7"},
@@ -1383,8 +1383,8 @@ files = [
 name = "mecab"
 version = "0.996.3"
 description = "MeCab binding for many OSs (Windows, macOS, and Linux)"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "mecab-0.996.3-cp27-cp27m-win32.whl", hash = "sha256:7c42c76ffe551688fca424e4e8e8e6adffa79f80c7f40f5699af449321b13887"},
@@ -1406,8 +1406,8 @@ files = [
 name = "more-itertools"
 version = "9.1.0"
 description = "More routines for operating on iterables, beyond itertools"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.7"
 files = [
     {file = "more-itertools-9.1.0.tar.gz", hash = "sha256:cabaa341ad0389ea83c17a94566a53ae4c9d07349861ecb14dc6d0345cf9ac5d"},
@@ -1418,8 +1418,8 @@ files = [
 name = "mozcpy"
 version = "0.1.1"
 description = "Mozc for Python: yet another Kana-Kanji converter"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "mozcpy-0.1.1.tar.gz", hash = "sha256:ed86eac64a6b313a2ca00f85da5fef5774bacd66f6311b75c28d45b231fcbb63"},
@@ -1432,8 +1432,8 @@ mecab = "*"
 name = "mpmath"
 version = "1.3.0"
 description = "Python library for arbitrary-precision floating-point arithmetic"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "mpmath-1.3.0-py3-none-any.whl", hash = "sha256:a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c"},
@@ -1462,8 +1462,8 @@ files = [
 name = "networkx"
 version = "3.1"
 description = "Python package for creating and manipulating graphs and networks"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.8"
 files = [
     {file = "networkx-3.1-py3-none-any.whl", hash = "sha256:4f33f68cb2afcf86f28a45f43efc27a9386b535d567d2127f8f61d51dec58d36"},
@@ -1481,8 +1481,8 @@ test = ["codecov (>=2.1)", "pytest (>=7.2)", "pytest-cov (>=4.0)"]
 name = "numba"
 version = "0.57.0"
 description = "compiling Python code using LLVM"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.8"
 files = [
     {file = "numba-0.57.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:2e2c14c411545e80bf0f1a33232fb0bd6aa3368f86e56eeffc7f6d3ac16ea3fd"},
@@ -1520,7 +1520,7 @@ name = "numpy"
 version = "1.23.5"
 description = "NumPy is the fundamental package for array computing with Python."
 category = "main"
-optional = false
+optional = true
 python-versions = ">=3.8"
 files = [
     {file = "numpy-1.23.5-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:9c88793f78fca17da0145455f0d7826bcb9f37da4764af27ac945488116efe63"},
@@ -1557,8 +1557,8 @@ files = [
 name = "omegaconf"
 version = "2.0.6"
 description = "A flexible configuration library"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.6"
 files = [
     {file = "omegaconf-2.0.6-py3-none-any.whl", hash = "sha256:9e349fd76819b95b47aa628edea1ff83fed5b25108608abdd6c7fdca188e302a"},
@@ -1573,8 +1573,8 @@ typing-extensions = "*"
 name = "onnxruntime-gpu"
 version = "1.14.1"
 description = "ONNX Runtime is a runtime accelerator for Machine Learning models"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "onnxruntime_gpu-1.14.1-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6cd3118ec8c0567006f5998a7467677c88ad8cfbb6d3b26fd17f7c3326762a5e"},
@@ -1599,8 +1599,8 @@ sympy = "*"
 name = "openai-whisper"
 version = "20230314"
 description = "Robust Speech Recognition via Large-Scale Weak Supervision"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.8"
 files = []
 develop = false
@@ -1627,7 +1627,7 @@ resolved_reference = "248b6cb124225dd263bb9bd32d060b6517e067f8"
 name = "packaging"
 version = "23.1"
 description = "Core utilities for Python packages"
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=3.7"
 files = [
@@ -1663,8 +1663,8 @@ files = [
 name = "pillow"
 version = "9.5.0"
 description = "Python Imaging Library (Fork)"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.7"
 files = [
     {file = "Pillow-9.5.0-cp310-cp310-macosx_10_10_x86_64.whl", hash = "sha256:ace6ca218308447b9077c14ea4ef381ba0b67ee78d64046b3f19cf4e1139ad16"},
@@ -1775,8 +1775,8 @@ testing = ["pytest", "pytest-benchmark"]
 name = "portalocker"
 version = "2.7.0"
 description = "Wraps the portalocker recipe for easy usage"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.5"
 files = [
     {file = "portalocker-2.7.0-py2.py3-none-any.whl", hash = "sha256:a07c5b4f3985c3cf4798369631fb7011adb498e2a46d8440efc75a8f29a0f983"},
@@ -1863,8 +1863,8 @@ pyasn1 = ">=0.4.6,<0.6.0"
 name = "pyaudio"
 version = "0.2.13"
 description = "Cross-platform audio I/O with PortAudio"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "PyAudio-0.2.13-cp310-cp310-win32.whl", hash = "sha256:48e29537ea22ae2ae323eebe297bfb2683831cee4f20d96964e131f65ab2161d"},
@@ -1887,8 +1887,8 @@ test = ["numpy"]
 name = "pycparser"
 version = "2.21"
 description = "C parser in Python"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*"
 files = [
     {file = "pycparser-2.21-py2.py3-none-any.whl", hash = "sha256:8ee45429555515e1f6b185e78100aea234072576aa43ab53aefcae078162fca9"},
@@ -1979,8 +1979,8 @@ files = [
 name = "pyreadline3"
 version = "3.4.1"
 description = "A python implementation of GNU readline."
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "pyreadline3-3.4.1-py3-none-any.whl", hash = "sha256:b0efb6516fd4fb07b45949053826a62fa4cb353db5be2bbb4a7aa1fdd1e345fb"},
@@ -2048,8 +2048,8 @@ pytest = ">=3.6.0"
 name = "pyvcroid2"
 version = "0.2.2"
 description = "Python Library to Access to Core DLL of VOICEROID2"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.4"
 files = []
 develop = false
@@ -2064,8 +2064,8 @@ resolved_reference = "01d7e4b30e6b055f8cf1a3b0ad1c35d211754027"
 name = "pywin32"
 version = "306"
 description = "Python for Window Extensions"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "pywin32-306-cp310-cp310-win32.whl", hash = "sha256:06d3420a5155ba65f0b72f2699b5bacf3109f36acbe8923765c22938a69dfc8d"},
@@ -2088,8 +2088,8 @@ files = [
 name = "pyworld"
 version = "0.3.3"
 description = "PyWorld: a Python wrapper for WORLD vocoder"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "pyworld-0.3.3-cp310-cp310-win_amd64.whl", hash = "sha256:729a675a7d2d0cde6bf9a02f39c059f0341e1ed1735e739a8c4cedf5043ff374"},
@@ -2114,7 +2114,7 @@ test = ["nose"]
 name = "pyyaml"
 version = "6.0"
 description = "YAML parser and emitter for Python"
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=3.6"
 files = [
@@ -2164,8 +2164,8 @@ files = [
 name = "regex"
 version = "2023.5.5"
 description = "Alternative regular expression module, to replace re."
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.6"
 files = [
     {file = "regex-2023.5.5-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:48c9ec56579d4ba1c88f42302194b8ae2350265cb60c64b7b9a88dcb7fbde309"},
@@ -2336,8 +2336,8 @@ pyasn1 = ">=0.1.3"
 name = "sacrebleu"
 version = "2.3.1"
 description = "Hassle-free computation of shareable, comparable, and reproducible BLEU, chrF, and TER scores"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.6"
 files = [
     {file = "sacrebleu-2.3.1-py3-none-any.whl", hash = "sha256:352227b8ca9e04ed509266d1fee6c8cff0ea1417c429f8c684645ad2db8b02e7"},
@@ -2360,8 +2360,8 @@ ko = ["mecab-ko (==1.0.0)", "mecab-ko-dic (>=1.0,<2.0)"]
 name = "scipy"
 version = "1.10.1"
 description = "Fundamental algorithms for scientific computing in Python"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "<3.12,>=3.8"
 files = [
     {file = "scipy-1.10.1-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:e7354fd7527a4b0377ce55f286805b34e8c54b91be865bac273f527e1b839019"},
@@ -2450,8 +2450,8 @@ pbr = ">=2.0.0,<2.1.0 || >2.1.0"
 name = "sympy"
 version = "1.11.1"
 description = "Computer algebra system (CAS) in Python"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.8"
 files = [
     {file = "sympy-1.11.1-py3-none-any.whl", hash = "sha256:938f984ee2b1e8eae8a07b884c8b7a1146010040fccddc6539c54f401c8f6fcf"},
@@ -2465,8 +2465,8 @@ mpmath = ">=0.19"
 name = "tabulate"
 version = "0.9.0"
 description = "Pretty-print tabular data"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.7"
 files = [
     {file = "tabulate-0.9.0-py3-none-any.whl", hash = "sha256:024ca478df22e9340661486f85298cff5f6dcdba14f3813e8830015b9ed1948f"},
@@ -2480,8 +2480,8 @@ widechars = ["wcwidth"]
 name = "tiktoken"
 version = "0.3.1"
 description = "tiktoken is a fast BPE tokeniser for use with OpenAI's models"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.8"
 files = [
     {file = "tiktoken-0.3.1-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:064048f506e747b636e2d70b66658743de32645d53287290734eb2b6ec43e6b5"},
@@ -2550,8 +2550,8 @@ files = [
 name = "torch"
 version = "2.0.0"
 description = "Tensors and Dynamic neural networks in Python with strong GPU acceleration"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.8.0"
 files = [
     {file = "torch-2.0.0-cp310-none-macosx_10_9_x86_64.whl", hash = "sha256:ce9b5a49bd513dff7950a5a07d6e26594dd51989cee05ba388b03e8e366fd5d5"},
@@ -2575,8 +2575,8 @@ url = "https://download.pytorch.org/whl/cpu/torch-2.0.0-cp310-none-macosx_10_9_x
 name = "torch"
 version = "2.0.0"
 description = "Tensors and Dynamic neural networks in Python with strong GPU acceleration"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.8.0"
 files = [
     {file = "torch-2.0.0-cp310-none-macosx_11_0_arm64.whl", hash = "sha256:53e1c33c6896583cdb9a583693e22e99266444c4a43392dddc562640d39e542b"},
@@ -2600,8 +2600,8 @@ url = "https://download.pytorch.org/whl/cpu/torch-2.0.0-cp310-none-macosx_11_0_a
 name = "torch"
 version = "2.0.0+cu118"
 description = "Tensors and Dynamic neural networks in Python with strong GPU acceleration"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.8.0"
 files = [
     {file = "torch-2.0.0%2Bcu118-cp310-cp310-linux_x86_64.whl", hash = "sha256:4b690e2b77f21073500c65d8bb9ea9656b8cb4e969f357370bbc992a3b074764"},
@@ -2626,8 +2626,8 @@ url = "https://download.pytorch.org/whl/cu118/torch-2.0.0%2Bcu118-cp310-cp310-li
 name = "torch"
 version = "2.0.0+cu118"
 description = "Tensors and Dynamic neural networks in Python with strong GPU acceleration"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.8.0"
 files = [
     {file = "torch-2.0.0%2Bcu118-cp310-cp310-win_amd64.whl", hash = "sha256:5ee2b7c19265b9c869525c378fcdf350510b8f3fc08af26da1a2587a34cea8f5"},
@@ -2651,8 +2651,8 @@ url = "https://download.pytorch.org/whl/cu118/torch-2.0.0%2Bcu118-cp310-cp310-wi
 name = "torchaudio"
 version = "2.0.1"
 description = "An audio package for PyTorch"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "torchaudio-2.0.1-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:b5d21ebbb55e7040d418d5062b0e882f9660d68b477b38fd436fa6c92ccbb52a"},
@@ -2669,8 +2669,8 @@ url = "https://download.pytorch.org/whl/cpu/torchaudio-2.0.1-cp310-cp310-macosx_
 name = "torchaudio"
 version = "2.0.1"
 description = "An audio package for PyTorch"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "torchaudio-2.0.1-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:6dbcd93b29d71a2f500f36a34ea5e467f510f773da85322098e6bdd8c9dc9948"},
@@ -2687,8 +2687,8 @@ url = "https://download.pytorch.org/whl/cpu/torchaudio-2.0.1-cp310-cp310-macosx_
 name = "torchaudio"
 version = "2.0.1+cu118"
 description = "An audio package for PyTorch"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "torchaudio-2.0.1%2Bcu118-cp310-cp310-linux_x86_64.whl", hash = "sha256:19c4ef9012324c4fb80ea66934551b7807d97148c28538e2eabafe16ab50e91c"},
@@ -2705,8 +2705,8 @@ url = "https://download.pytorch.org/whl/cu118/torchaudio-2.0.1%2Bcu118-cp310-cp3
 name = "torchaudio"
 version = "2.0.1+cu118"
 description = "An audio package for PyTorch"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "torchaudio-2.0.1%2Bcu118-cp310-cp310-win_amd64.whl", hash = "sha256:c7054eebe9f0f0ff74cb5bf883375f8164db6a89ed08007040cb336f6010375b"},
@@ -2723,8 +2723,8 @@ url = "https://download.pytorch.org/whl/cu118/torchaudio-2.0.1%2Bcu118-cp310-cp3
 name = "tqdm"
 version = "4.65.0"
 description = "Fast, Extensible Progress Meter"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.7"
 files = [
     {file = "tqdm-4.65.0-py3-none-any.whl", hash = "sha256:c4f53a17fe37e132815abceec022631be8ffe1b9381c2e6e30aa70edc99e9671"},
@@ -2744,8 +2744,8 @@ telegram = ["requests"]
 name = "triton"
 version = "2.0.0"
 description = "A language and compiler for custom Deep Learning operations"
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = "*"
 files = [
     {file = "triton-2.0.0-1-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:38806ee9663f4b0f7cd64790e96c579374089e58f49aac4a6608121aa55e2505"},
@@ -2782,8 +2782,8 @@ tutorials = ["matplotlib", "pandas", "tabulate"]
 name = "ttkbootstrap"
 version = "1.10.1"
 description = "A supercharged theme extension for tkinter that enables on-demand modern flat style themes inspired by Bootstrap."
-category = "dev"
-optional = false
+category = "main"
+optional = true
 python-versions = ">=3.7"
 files = [
     {file = "ttkbootstrap-1.10.1-py3-none-any.whl", hash = "sha256:c6a10ee5ea64051a0f8b75c20ef8e5f2417c62b4d0858c831683d4f2135aa573"},
@@ -2828,7 +2828,7 @@ name = "voicevox_core"
 version = "0.14.3+cpu"
 description = ""
 category = "main"
-optional = false
+optional = true
 python-versions = ">=3.8"
 files = [
     {file = "voicevox_core-0.14.3+cpu-cp38-abi3-linux_x86_64.whl", hash = "sha256:12421247abed95a26b96ffa000437e3b07876f0f5d864186361234169c2cfe7a"},
@@ -2847,7 +2847,7 @@ name = "voicevox_core"
 version = "0.14.3+cpu"
 description = ""
 category = "main"
-optional = false
+optional = true
 python-versions = ">=3.8"
 files = [
     {file = "voicevox_core-0.14.3+cpu-cp38-abi3-macosx_10_7_x86_64.whl", hash = "sha256:663fd44a1a6031b110575762cca7f1325d7f3a711f0fd7206d5bb977d9069993"},
@@ -2866,7 +2866,7 @@ name = "voicevox_core"
 version = "0.14.3+cpu"
 description = ""
 category = "main"
-optional = false
+optional = true
 python-versions = ">=3.8"
 files = [
     {file = "voicevox_core-0.14.3+cpu-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:dd5ba2f7be8bad6cf6d0b151e4abb6e82e4dd50a972829a1a554f72c2c83fb73"},
@@ -2885,7 +2885,7 @@ name = "voicevox_core"
 version = "0.14.3+cuda"
 description = ""
 category = "main"
-optional = false
+optional = true
 python-versions = ">=3.8"
 files = [
     {file = "voicevox_core-0.14.3+cuda-cp38-abi3-win_amd64.whl", hash = "sha256:ba987ea728a5fbbea50430737f042924c506849e6e337f95c99895dfc342082e"},
@@ -2917,7 +2917,17 @@ protobuf = ">=4.22.3,<5.0.0"
 [package.source]
 type = "url"
 url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-91cf58c5/vstreamer_protos-0.1.0-py3-none-any.whl"
+
+[extras]
+audio = ["PyAudio"]
+gui = ["pillow", "ttkbootstrap"]
+mozc = ["mozcpy"]
+rvc = ["fairseq", "faiss-cpu", "faiss-cpu", "faiss-gpu", "numpy", "onnxruntime-gpu", "pyworld", "scipy", "torch", "torch", "torch", "torch", "torchaudio", "torchaudio", "torchaudio", "torchaudio"]
+voicevox = ["voicevox-core", "voicevox-core", "voicevox-core", "voicevox-core"]
+vroid2 = ["pyvcroid2"]
+whisper = ["openai-whisper", "torch", "torch", "torch", "torch"]
+
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.10,<3.12"
-content-hash = "5064dd6fd726747eb18f8f43645d5f08765babf98ea47216493d57e45ad6a682"
+content-hash = "57666ce67fa747b6fed5db57b03f6c823a16e1f79954945fd7d9b08079a87d65"
