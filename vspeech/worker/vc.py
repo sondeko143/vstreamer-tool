@@ -393,9 +393,12 @@ async def vc_worker(
     context: SharedContext, in_queue: Queue[WorkerInput], out_queue: Queue[WorkerOutput]
 ):
     while True:
+        context.reset_need_reload()
         try:
             async for output in rvc_worker(context=context, in_queue=in_queue):
                 out_queue.put_nowait(output)
+                if context.need_reload:
+                    break
         except CancelledError:
             logger.debug("vc worker cancelled")
             raise
@@ -408,7 +411,9 @@ def create_vc_task(
     in_queue = Queue[WorkerInput]()
     event = EventType.vc
     context.input_queues[event] = in_queue
-    return loop.create_task(
+    task = loop.create_task(
         vc_worker(context, in_queue=in_queue, out_queue=context.sender_queue),
         name=event.name,
     )
+    context.worker_need_reload[task.get_name()] = False
+    return task

@@ -101,7 +101,6 @@ async def transcript_worker_whisper(
                 async with aio_open("./recorded.wav", mode="wb") as out:
                     await out.write(wav_file.read())
                     await out.flush()
-                wav_file.close()
                 logger.info("transcribing...")
                 result = await to_thread(
                     transcribe,
@@ -250,21 +249,25 @@ async def transcription_worker(
     in_queue: Queue[WorkerInput],
     out_queue: Queue[WorkerOutput],
 ):
-    config = context.config.transcription
-    if config.worker_type == TranscriptionWorkerType.ACP:
-        generator = transcript_worker_ami
-    elif config.worker_type == TranscriptionWorkerType.GCP:
-        generator = transcript_worker_google
-    elif config.worker_type == TranscriptionWorkerType.WHISPER:
-        generator = transcript_worker_whisper
-    else:
-        raise ValueError("transcription worker type unknown.")
-    try:
-        async for transcribed in generator(context=context, in_queue=in_queue):
-            out_queue.put_nowait(transcribed)
-    except CancelledError:
-        logger.debug("transcription worker cancelled")
-        raise
+    while True:
+        context.reset_need_reload()
+        config = context.config.transcription
+        if config.worker_type == TranscriptionWorkerType.ACP:
+            generator = transcript_worker_ami
+        elif config.worker_type == TranscriptionWorkerType.GCP:
+            generator = transcript_worker_google
+        elif config.worker_type == TranscriptionWorkerType.WHISPER:
+            generator = transcript_worker_whisper
+        else:
+            raise ValueError("transcription worker type unknown.")
+        try:
+            async for transcribed in generator(context=context, in_queue=in_queue):
+                out_queue.put_nowait(transcribed)
+                if context.need_reload:
+                    break
+        except CancelledError:
+            logger.debug("transcription worker cancelled")
+            raise
 
 
 def create_transcription_task(
@@ -274,9 +277,11 @@ def create_transcription_task(
     in_queue = Queue[WorkerInput]()
     event = EventType.transcription
     context.input_queues[event] = in_queue
-    return loop.create_task(
+    task = loop.create_task(
         transcription_worker(
             context, in_queue=in_queue, out_queue=context.sender_queue
         ),
         name=event.name,
     )
+    context.worker_need_reload[task.get_name()] = False
+    return task

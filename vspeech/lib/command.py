@@ -84,17 +84,17 @@ def process_command(context: SharedContext, request: WorkerInput):
         )
     if EventType.pause == current:
         logger.info("pause")
-        context.resume.clear()
+        context.running.clear()
     if EventType.resume == current:
         logger.info("resume")
-        context.resume.set()
+        context.running.set()
     if EventType.reload == current:
-        logger.info("reload")
         file_path = request.file_path
+        logger.info("reload: %s", file_path)
         with open(file_path, "rb") as f:
             context.config = Config.read_config_from_file(f)
-        for worker_name in context.reload.keys():
-            context.reload[worker_name] = True
+        for worker_name in context.worker_need_reload.keys():
+            context.worker_need_reload[worker_name] = True
     if EventType.set_filters == current:
         context.config.filters.clear()
         filters = request.filters

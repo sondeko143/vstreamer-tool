@@ -2,7 +2,9 @@ import audioop
 from asyncio import AbstractEventLoop
 from asyncio import CancelledError
 from asyncio import Queue
+from asyncio import Task
 from asyncio import to_thread
+from typing import NoReturn
 
 from pyaudio import PyAudio
 from pyaudio import Stream
@@ -56,7 +58,7 @@ def get_output_stream(
     return output_stream
 
 
-async def playback_worker(
+async def pyaudio_playback_worker(
     context: SharedContext,
     in_queue: Queue[WorkerInput],
 ):
@@ -74,7 +76,7 @@ async def playback_worker(
                     channels=speech.sound.channels,
                 )
                 logger.info("playback...")
-                await playback(
+                yield await playback(
                     volume=context.config.playback.volume,
                     stream=output_stream,
                     data=speech.sound.data,
@@ -82,21 +84,32 @@ async def playback_worker(
                 logger.info("playback end")
             except Exception as e:
                 logger.warning(e)
-    except CancelledError:
-        logger.info("playback worker cancelled")
-        raise
     finally:
         audio.terminate()
+
+
+async def playback_worker(context: SharedContext, in_queue: Queue[WorkerInput]):
+    while True:
+        context.reset_need_reload()
+        try:
+            async for _ in pyaudio_playback_worker(context=context, in_queue=in_queue):
+                if context.need_reload:
+                    break
+        except CancelledError:
+            logger.info("playback worker cancelled")
+            raise
 
 
 def create_playback_task(
     loop: AbstractEventLoop,
     context: SharedContext,
-):
+) -> Task[NoReturn]:
     in_queue = Queue[WorkerInput]()
     event = EventType.playback
     context.input_queues[event] = in_queue
-    return loop.create_task(
+    task = loop.create_task(
         playback_worker(context, in_queue=in_queue),
         name=event.name,
     )
+    context.worker_need_reload[task.get_name()] = False
+    return task

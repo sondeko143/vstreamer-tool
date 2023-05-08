@@ -1,5 +1,6 @@
 from asyncio import Event
 from asyncio import Queue
+from asyncio import current_task
 from collections import defaultdict
 from dataclasses import dataclass
 from dataclasses import field
@@ -292,11 +293,22 @@ InputQueues = Dict[EventType, Queue[WorkerInput]]
 class SharedContext:
     config: Config
     input_queues: InputQueues = field(default_factory=dict)
-    resume: Event = field(default_factory=Event)
+    running: Event = field(default_factory=Event)
     sender_queue: Queue[WorkerOutput] = field(default_factory=Queue)
-    reload: Dict[str, bool] = field(
-        default_factory=lambda: {worker_name.name: False for worker_name in EventType}
-    )
+    worker_need_reload: Dict[str, bool] = field(default_factory=lambda: {})
 
     def __post_init__(self):
-        self.resume.set()
+        self.running.set()
+
+    @property
+    def need_reload(self) -> bool:
+        task = current_task()
+        if not task:
+            return False
+        return self.worker_need_reload.get(task.get_name(), False)
+
+    def reset_need_reload(self):
+        task = current_task()
+        if not task:
+            return
+        self.worker_need_reload[task.get_name()] = False

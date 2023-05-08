@@ -80,13 +80,17 @@ async def translation_worker(
     in_queue: Queue[WorkerInput],
     out_queue: Queue[WorkerOutput],
 ):
-    try:
+    while True:
+        context.reset_need_reload()
         generator = translation_worker_google
-        async for translated in generator(context=context, in_queue=in_queue):
-            out_queue.put_nowait(translated)
-    except CancelledError:
-        logger.debug("transcription worker cancelled")
-        raise
+        try:
+            async for translated in generator(context=context, in_queue=in_queue):
+                out_queue.put_nowait(translated)
+                if context.need_reload:
+                    break
+        except CancelledError:
+            logger.debug("transcription worker cancelled")
+            raise
 
 
 def create_translation_task(
@@ -96,7 +100,9 @@ def create_translation_task(
     in_queue = Queue[WorkerInput]()
     event = EventType.translation
     context.input_queues[event] = in_queue
-    return loop.create_task(
+    task = loop.create_task(
         translation_worker(context, in_queue=in_queue, out_queue=context.sender_queue),
         name=event.name,
     )
+    context.worker_need_reload[task.get_name()] = False
+    return task

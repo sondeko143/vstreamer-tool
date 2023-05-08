@@ -90,20 +90,24 @@ async def voicevox_worker(context: SharedContext, in_queue: Queue[WorkerInput]):
 async def tts_worker(
     context: SharedContext, in_queue: Queue[WorkerInput], out_queue: Queue[WorkerOutput]
 ):
-    config = context.config.tts
-    if config.worker_type == TtsWorkerType.VR2:
-        worker = vroid2_worker
-    elif config.worker_type == TtsWorkerType.VOICEVOX:
-        worker = voicevox_worker
-    else:
-        raise ValueError("tts worker type unknown.")
     while True:
-        try:
-            async for output in worker(context=context, in_queue=in_queue):
-                out_queue.put_nowait(output)
-        except CancelledError:
-            logger.debug("tts worker cancelled")
-            raise
+        context.reset_need_reload()
+        config = context.config.tts
+        if config.worker_type == TtsWorkerType.VR2:
+            worker = vroid2_worker
+        elif config.worker_type == TtsWorkerType.VOICEVOX:
+            worker = voicevox_worker
+        else:
+            raise ValueError("tts worker type unknown.")
+        while True:
+            try:
+                async for output in worker(context=context, in_queue=in_queue):
+                    out_queue.put_nowait(output)
+                    if context.need_reload:
+                        break
+            except CancelledError:
+                logger.info("tts worker cancelled")
+                raise
 
 
 def create_tts_task(
@@ -113,7 +117,9 @@ def create_tts_task(
     in_queue = Queue[WorkerInput]()
     event = EventType.tts
     context.input_queues[event] = in_queue
-    return loop.create_task(
+    task = loop.create_task(
         tts_worker(context, in_queue=in_queue, out_queue=context.sender_queue),
         name=event.name,
     )
+    context.worker_need_reload[task.get_name()] = False
+    return task

@@ -1,4 +1,3 @@
-from asyncio import current_task
 from dataclasses import dataclass
 from dataclasses import field
 from typing import Optional
@@ -44,14 +43,10 @@ class VR2:
 
 
 def vr2_reload(context: SharedContext, vr2: "VR2"):
+    if not context.need_reload:
+        return
     config = context.config.vr2
-    task = current_task()
-    if not task:
-        return
-    task_name = task.get_name()
-    if not context.reload.get(task_name):
-        return
     if config.voice_name:
         logger.info("vr2 reload voice_name: %s", config.voice_name)
         vr2.load_voice(config.voice_name, config.params)
-    context.reload[task_name] = False
+    context.reset_need_reload()

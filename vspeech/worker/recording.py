@@ -2,10 +2,12 @@ import audioop
 from asyncio import AbstractEventLoop
 from asyncio import CancelledError
 from asyncio import Queue
+from asyncio import Task
 from asyncio import to_thread
 from math import log
 from typing import Any
 from typing import Callable
+from typing import NoReturn
 from typing import Optional
 from typing import Tuple
 
@@ -109,6 +111,7 @@ async def recording_task_loop(
 async def recording_worker(context: SharedContext, out_queue: Queue[WorkerOutput]):
     try:
         while True:
+            context.reset_need_reload()
             audio = PyAudio()
             stream = open_input_stream(audio, context.config.recording)
             sample_width = get_sample_size(context.config.recording.format)
@@ -118,7 +121,7 @@ async def recording_worker(context: SharedContext, out_queue: Queue[WorkerOutput
                     config=context.config.recording,
                     sample_width=sample_width,
                 ):
-                    if not context.resume.is_set():
+                    if not context.running.is_set():
                         logger.info("recording have been paused")
                         break
                     destinations = context.config.recording.routes_list
@@ -136,16 +139,23 @@ async def recording_worker(context: SharedContext, out_queue: Queue[WorkerOutput
                             ),
                         )
                     )
+                    if context.need_reload:
+                        break
             finally:
                 stream.close()
                 audio.terminate()
-            await context.resume.wait()
+            if not context.running.is_set():
+                await context.running.wait()
     except CancelledError:
         logger.debug("recording worker cancelled")
         raise
 
 
-def create_recording_task(loop: AbstractEventLoop, context: SharedContext):
-    return loop.create_task(
-        recording_worker(context, out_queue=context.sender_queue), name="recording_task"
+def create_recording_task(
+    loop: AbstractEventLoop, context: SharedContext
+) -> Task[NoReturn]:
+    task = loop.create_task(
+        recording_worker(context, out_queue=context.sender_queue), name="recording"
     )
+    context.worker_need_reload[task.get_name()] = False
+    return task
