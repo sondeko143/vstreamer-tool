@@ -24,12 +24,10 @@ class Commander(CommanderServicer):
 
     def process_command(self, request: Command, context: ServicerContext):
         logger.info(
-            "receive: o(%s), t(%s), sound(%s, %s, %s), %s, %s from %s",
+            "receive: o(%s), t(%s), sound(%s), %s, %s from %s",
             request.chains,
             request.text,
-            request.sound.rate,
-            request.sound.format,
-            request.sound.channels,
+            len(request.sound.data),
             request.file_path,
             request.filters,
             cast(str, context.peer()),

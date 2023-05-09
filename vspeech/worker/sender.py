@@ -85,7 +85,7 @@ async def send_command(
                 address,
             )
             res = cast(Response, await stub.process_command(command))
-            logger.info("success response: %s", res)
+            logger.info("success response: %s", str(res))
     except (RefreshError, MutualTLSChannelError, AioRpcError) as e:
         logger.warning(e)
 
