@@ -47,13 +47,11 @@ async def vroid2_worker(context: SharedContext, in_queue: Queue[WorkerInput]):
                     vr2.text_to_speech, transcribed.text, raw=True
                 )
                 logger.info("voice generated")
-                yield WorkerOutput(
-                    followings=transcribed.following_events,
-                    sound=SoundOutput(
-                        data=speech, rate=44110, format=SampleFormat.INT16, channels=1
-                    ),
-                    text=None,
+                worker_output = WorkerOutput.from_input(transcribed)
+                worker_output.sound = SoundOutput(
+                    data=speech, rate=44110, format=SampleFormat.INT16, channels=1
                 )
+                yield worker_output
             except Exception as e:
                 logger.warning(e)
 
@@ -77,12 +75,11 @@ async def voicevox_worker(context: SharedContext, in_queue: Queue[WorkerInput]):
                 params=context.config.voicevox.params,
             )
             logger.info("voice generated")
-            yield WorkerOutput(
-                followings=transcribed.following_events,
-                sound=SoundOutput(
-                    data=speech[44:], rate=24000, format=SampleFormat.INT16, channels=1
-                ),
+            worker_output = WorkerOutput.from_input(transcribed)
+            worker_output.sound = SoundOutput(
+                data=speech[44:], rate=24000, format=SampleFormat.INT16, channels=1
             )
+            yield worker_output
         except UnicodeEncodeError as e:
             logger.warning(e)
 

@@ -11,6 +11,8 @@ from typing import TypeAlias
 from typing import cast
 from urllib.parse import urlparse
 from urllib.parse import urlunparse
+from uuid import UUID
+from uuid import uuid4
 
 from pydantic import BaseModel
 from pydantic import root_validator
@@ -33,6 +35,7 @@ from vstreamer_protos.commander.commander_pb2 import Sound
 
 from vspeech.config import Config
 from vspeech.config import EventType
+from vspeech.config import RoutesList
 from vspeech.config import SampleFormat
 from vspeech.exceptions import EventToOperationConvertError
 
@@ -187,6 +190,7 @@ class SoundOutput:
 
 @dataclass
 class WorkerOutput:
+    input_id: UUID
     followings: FollowingEvents
     sound: SoundOutput | None = None
     text: str | None = None
@@ -206,6 +210,22 @@ class WorkerOutput:
             ],
             text=self.text,
             sound=self.sound.to_pb() if self.sound else None,
+        )
+
+    @classmethod
+    def from_input(cls, worker_input: "WorkerInput"):
+        return cls(
+            input_id=worker_input.input_id,
+            followings=worker_input.following_events,
+        )
+
+    @classmethod
+    def from_routes_list(cls, routes_list: RoutesList):
+        return cls(
+            input_id=uuid4(),
+            followings=[
+                [EventAddress.from_string(d) for d in ds] for ds in routes_list
+            ],
         )
 
 
@@ -234,6 +254,7 @@ class SoundInput(BaseModel):
 
 
 class WorkerInput(BaseModel):
+    input_id: UUID
     current_event: EventType
     following_events: FollowingEvents
     text: str
@@ -257,6 +278,7 @@ class WorkerInput(BaseModel):
         first_event_maps = get_first_event_map(output.events(remote))
         return [
             WorkerInput(
+                input_id=output.input_id,
                 current_event=first_event.event,
                 following_events=following_events,
                 text=output.text or "",
@@ -271,10 +293,12 @@ class WorkerInput(BaseModel):
 
     @classmethod
     def from_command(cls, command: Command) -> list["WorkerInput"]:
+        input_id = uuid4()
         events = command_to_events(command)
         first_event_maps = get_first_event_map(events)
         return [
             WorkerInput(
+                input_id=input_id,
                 current_event=first_event.event,
                 following_events=following_events,
                 text=command.text,
@@ -295,7 +319,7 @@ class SharedContext:
     input_queues: InputQueues = field(default_factory=dict)
     running: Event = field(default_factory=Event)
     sender_queue: Queue[WorkerOutput] = field(default_factory=Queue)
-    worker_need_reload: Dict[str, bool] = field(default_factory=lambda: {})
+    worker_need_reload: dict[str, bool] = field(default_factory=dict)
 
     def __post_init__(self):
         self.running.set()

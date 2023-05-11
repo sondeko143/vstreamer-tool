@@ -11,6 +11,7 @@ from pyaudio import Stream
 
 from vspeech.config import PlaybackConfig
 from vspeech.config import SampleFormat
+from vspeech.config import get_sample_size
 from vspeech.lib.audio import get_device_name
 from vspeech.lib.audio import get_pa_format
 from vspeech.lib.audio import search_device
@@ -20,9 +21,9 @@ from vspeech.shared_context import SharedContext
 from vspeech.shared_context import WorkerInput
 
 
-async def playback(volume: int, stream: Stream, data: bytes):
+async def playback(volume: int, stream: Stream, data: bytes, sample_width: int):
     if volume != 100:
-        _data = audioop.mul(data, 2, volume / 100.0)
+        _data = audioop.mul(data, sample_width, volume / 100.0)
     else:
         _data = data
     await to_thread(stream.write, _data)
@@ -80,6 +81,7 @@ async def pyaudio_playback_worker(
                     volume=context.config.playback.volume,
                     stream=output_stream,
                     data=speech.sound.data,
+                    sample_width=get_sample_size(speech.sound.format),
                 )
                 logger.info("playback end")
             except Exception as e:

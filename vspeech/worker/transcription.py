@@ -33,12 +33,6 @@ from vspeech.shared_context import SoundOutput
 from vspeech.shared_context import WorkerInput
 from vspeech.shared_context import WorkerOutput
 
-try:
-    from whisper import load_model
-    from whisper import transcribe
-except ModuleNotFoundError:
-    logger.info("whisper not found")
-
 
 async def log_transcribed(log_dir_parent: Path, wav_file: BytesIO, text: str):
     now = datetime.now()
@@ -91,6 +85,9 @@ async def transcript_worker_whisper(
     context: SharedContext,
     in_queue: Queue[WorkerInput],
 ) -> AsyncGenerator[WorkerOutput, None]:
+    from whisper import load_model
+    from whisper import transcribe
+
     model = load_model(context.config.whisper.model)
     while True:
         config = context.config.whisper
@@ -121,16 +118,15 @@ async def transcript_worker_whisper(
                     ]
                 )
                 if transcribed:
-                    yield WorkerOutput(
-                        followings=recorded.following_events,
-                        text=transcribed,
-                        sound=SoundOutput(
-                            data=recorded.sound.data,
-                            rate=recorded.sound.rate,
-                            format=recorded.sound.format,
-                            channels=recorded.sound.channels,
-                        ),
+                    worker_output = WorkerOutput.from_input(recorded)
+                    worker_output.sound = SoundOutput(
+                        data=recorded.sound.data,
+                        rate=recorded.sound.rate,
+                        format=recorded.sound.format,
+                        channels=recorded.sound.channels,
                     )
+                    worker_output.text = transcribed
+                    yield worker_output
                 if context.config.recording_log:
                     await log_transcribed(
                         context.config.recording_log_dir,
@@ -172,16 +168,15 @@ async def transcript_worker_google(
                 transcribed = "".join([result.alternatives[0].transcript for result in r.results])  # type: ignore
                 logger.info("transcribed: %s", r)
                 if transcribed:
-                    yield WorkerOutput(
-                        followings=recorded.following_events,
-                        text=transcribed,
-                        sound=SoundOutput(
-                            data=recorded.sound.data,
-                            rate=recorded.sound.rate,
-                            format=recorded.sound.format,
-                            channels=recorded.sound.channels,
-                        ),
+                    worker_output = WorkerOutput.from_input(recorded)
+                    worker_output.sound = SoundOutput(
+                        data=recorded.sound.data,
+                        rate=recorded.sound.rate,
+                        format=recorded.sound.format,
+                        channels=recorded.sound.channels,
                     )
+                    worker_output.text = transcribed
+                    yield worker_output
                 if context.config.recording_log:
                     await log_transcribed(
                         context.config.recording_log_dir,
@@ -221,16 +216,15 @@ async def transcript_worker_ami(
                     )
                     if text:
                         logger.info("transliterate: %s -> %s", spoken, text)
-                        yield WorkerOutput(
-                            followings=recorded.following_events,
-                            text=text,
-                            sound=SoundOutput(
-                                data=recorded.sound.data,
-                                rate=recorded.sound.rate,
-                                format=recorded.sound.format,
-                                channels=recorded.sound.channels,
-                            ),
+                        worker_output = WorkerOutput.from_input(recorded)
+                        worker_output.sound = SoundOutput(
+                            data=recorded.sound.data,
+                            rate=recorded.sound.rate,
+                            format=recorded.sound.format,
+                            channels=recorded.sound.channels,
                         )
+                        worker_output.text = text
+                        yield worker_output
                     if context.config.recording_log:
                         await log_transcribed(
                             context.config.recording_log_dir,

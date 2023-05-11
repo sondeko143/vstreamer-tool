@@ -70,7 +70,9 @@ async def translation_worker_google(
                 )
             )
             logger.info("translatedOutput: %s -> %s", transcribed.text, translated)
-            yield WorkerOutput(followings=transcribed.following_events, text=translated)
+            worker_output = WorkerOutput.from_input(transcribed)
+            worker_output.text = translated
+            yield worker_output
         except GoogleCloudError as e:
             logger.exception(e)
 

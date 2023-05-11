@@ -8,6 +8,7 @@ from pathlib import Path
 from subprocess import Popen
 from subprocess import TimeoutExpired
 from tempfile import NamedTemporaryFile
+from time import sleep
 from tkinter import BOTTOM
 from tkinter import END
 from tkinter import EW
@@ -211,7 +212,6 @@ class VspeechGUI(Frame):
     config_entry_map: Dict[Widgets, str]
     thread: Optional[Popen[bytes]]
     config_file_path: Path
-    temp_config_file_path: Path
     paused: bool = False
     pr_toggle_bt: Button
     send_bt: Button
@@ -1074,8 +1074,7 @@ class VspeechGUI(Frame):
         self.master.title(f"vspeech: {self.config_file_path}*")
 
     def add_route(self, text: Entry):
-        value = text.get()
-        new_routes_value = value
+        new_routes_value = text.get()
         try:
             [EventAddress.from_string(v.strip()) for v in new_routes_value.split(",")]
         except ValueError as e:
@@ -1239,19 +1238,36 @@ class VspeechGUI(Frame):
         with NamedTemporaryFile("w", delete=False, suffix=".json") as temp_config_file:
             temp_config_file.write(self.config.json())
             temp_config_file.flush()
-            self.temp_config_file_path = Path(temp_config_file.name)
-        self.thread = Popen(
-            [
-                sys.executable,
-                "-m",
-                "vspeech",
-                "--json-config",
-                self.temp_config_file_path,
-            ],
-        )
-        logger.info("process started %s", self.thread.pid)
-        self.on_start_process()
+        temp_config_file_path = Path(temp_config_file.name)
+        try:
+            self.thread = Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "vspeech",
+                    "--json-config",
+                    temp_config_file_path,
+                ],
+            )
+            self.wait_to_startup()
+            logger.info("process started %s", self.thread.pid)
+            self.on_start_process()
+        finally:
+            temp_config_file_path.unlink(missing_ok=True)
         self.check_process_running()
+
+    def wait_to_startup(self):
+        while True:
+            try:
+                self.send_message(
+                    Command(
+                        chains=self.operations_for_send_text(),
+                        text="",
+                    )
+                )
+                break
+            except grpc.RpcError:
+                sleep(0.5)
 
     def send_text(self, text: Text):
         if self.thread:
@@ -1303,21 +1319,24 @@ class VspeechGUI(Frame):
             self.on_terminated()
 
     def reload_config(self):
-        self.temp_config_file_path.unlink(missing_ok=True)
         with NamedTemporaryFile("w", delete=False, suffix=".json") as temp_config_file:
             temp_config_file.write(self.config.json())
             temp_config_file.flush()
-            self.temp_config_file_path = Path(temp_config_file.name)
-        self.send_message(
-            Command(
-                chains=[OperationChain(operations=[OperationRoute(operation=RELOAD)])],
-                file_path=str(self.temp_config_file_path.resolve()),
+        temp_config_file_path = Path(temp_config_file.name)
+        try:
+            self.send_message(
+                Command(
+                    chains=[
+                        OperationChain(operations=[OperationRoute(operation=RELOAD)])
+                    ],
+                    file_path=str(temp_config_file_path.resolve()),
+                )
             )
-        )
+        finally:
+            temp_config_file_path.unlink(missing_ok=True)
 
     def on_terminated(self):
         self.thread = None
-        self.temp_config_file_path.unlink(missing_ok=True)
         self.paused = False
         self.pr_toggle_bt.configure(text="pause", state="disabled")
         self.send_bt.configure(state="disabled")

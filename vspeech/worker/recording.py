@@ -12,7 +12,6 @@ from typing import Optional
 from typing import Tuple
 
 from pyaudio import PyAudio
-from pyaudio import Stream
 
 from vspeech.config import RecordingConfig
 from vspeech.config import get_sample_size
@@ -20,7 +19,6 @@ from vspeech.lib.audio import get_device_name
 from vspeech.lib.audio import get_pa_format
 from vspeech.lib.audio import search_device
 from vspeech.logger import logger
-from vspeech.shared_context import EventAddress
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import SoundOutput
 from vspeech.shared_context import WorkerOutput
@@ -66,84 +64,81 @@ def get_dbfs(interval_frames: bytes, sample_width: int):
     return 20 * log(rms / max_possible_val, 10)
 
 
-async def recording_task_loop(
-    stream: Stream, config: RecordingConfig, sample_width: int
-):
+async def pyaudio_recording_worker(config: RecordingConfig):
     interval_frame_count = 0
     interval_frames: bytes = b""
     speaking_frames: bytes = b""
     last_interval_frames: bytes = b""
     total_speaking_seconds = 0
     status = "waiting"
-    while stream.is_active():
-        in_data = await to_thread(stream.read, config.chunk)
-        interval_frame_count += config.chunk
-        interval_frames += in_data
-        approx_max_amp = get_dbfs(interval_frames, sample_width=sample_width)
-        if interval_frame_count >= config.rate * config.interval_sec:
-            speaking = approx_max_amp > config.silence_threshold
-            if status == "waiting" and speaking:
-                logger.info("voice recording...")
-                speaking_frames += last_interval_frames + interval_frames
-                status = "speaking"
-            elif status == "speaking":
-                speaking_frames += interval_frames
-                total_speaking_seconds += config.interval_sec
-                if not speaking or config.max_recording_sec < total_speaking_seconds:
-                    logger.info("voice stopped")
-                    status = "stopped"
-            elif status == "stopped":
-                speaking_frames += interval_frames
-                total_speaking_seconds += config.interval_sec
-                if not speaking or config.max_recording_sec < total_speaking_seconds:
-                    logger.info("voice recorded")
-                    yield speaking_frames
-                    status = "waiting"
-                    speaking_frames = b""
-                    interval_frames = b""
-                elif speaking:
+    audio = PyAudio()
+    stream = open_input_stream(audio, config)
+    sample_width = get_sample_size(config.format)
+    try:
+        while stream.is_active():
+            in_data = await to_thread(stream.read, config.chunk)
+            interval_frame_count += config.chunk
+            interval_frames += in_data
+            approx_max_amp = get_dbfs(interval_frames, sample_width=sample_width)
+            if interval_frame_count >= config.rate * config.interval_sec:
+                speaking = approx_max_amp > config.silence_threshold
+                if status == "waiting" and speaking:
+                    logger.info("voice recording...")
+                    speaking_frames += last_interval_frames + interval_frames
                     status = "speaking"
-            last_interval_frames = interval_frames
-            interval_frame_count = 0
-            interval_frames = b""
+                elif status == "speaking":
+                    speaking_frames += interval_frames
+                    total_speaking_seconds += config.interval_sec
+                    if (
+                        not speaking
+                        or config.max_recording_sec < total_speaking_seconds
+                    ):
+                        logger.info("voice stopped")
+                        status = "stopped"
+                elif status == "stopped":
+                    speaking_frames += interval_frames
+                    total_speaking_seconds += config.interval_sec
+                    if (
+                        not speaking
+                        or config.max_recording_sec < total_speaking_seconds
+                    ):
+                        logger.info("voice recorded")
+                        yield speaking_frames
+                        status = "waiting"
+                        speaking_frames = b""
+                        interval_frames = b""
+                    elif speaking:
+                        status = "speaking"
+                last_interval_frames = interval_frames
+                interval_frame_count = 0
+                interval_frames = b""
+    finally:
+        stream.close()
+        audio.terminate()
 
 
 async def recording_worker(context: SharedContext, out_queue: Queue[WorkerOutput]):
     try:
         while True:
             context.reset_need_reload()
-            audio = PyAudio()
-            stream = open_input_stream(audio, context.config.recording)
-            sample_width = get_sample_size(context.config.recording.format)
-            try:
-                async for frames in recording_task_loop(
-                    stream=stream,
-                    config=context.config.recording,
-                    sample_width=sample_width,
-                ):
-                    if not context.running.is_set():
-                        logger.info("recording have been paused")
-                        break
-                    destinations = context.config.recording.routes_list
-                    out_queue.put_nowait(
-                        WorkerOutput(
-                            followings=[
-                                [EventAddress.from_string(d) for d in ds]
-                                for ds in destinations
-                            ],
-                            sound=SoundOutput(
-                                data=frames,
-                                rate=context.config.recording.rate,
-                                format=context.config.recording.format,
-                                channels=context.config.recording.channels,
-                            ),
-                        )
-                    )
-                    if context.need_reload:
-                        break
-            finally:
-                stream.close()
-                audio.terminate()
+            async for frames in pyaudio_recording_worker(
+                config=context.config.recording,
+            ):
+                if not context.running.is_set():
+                    logger.info("recording have been paused")
+                    break
+                worker_output = WorkerOutput.from_routes_list(
+                    context.config.recording.routes_list
+                )
+                worker_output.sound = SoundOutput(
+                    data=frames,
+                    rate=context.config.recording.rate,
+                    format=context.config.recording.format,
+                    channels=context.config.recording.channels,
+                )
+                out_queue.put_nowait(worker_output)
+                if context.need_reload:
+                    break
             if not context.running.is_set():
                 await context.running.wait()
     except CancelledError:

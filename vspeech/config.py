@@ -5,6 +5,7 @@ from enum import IntEnum
 from pathlib import Path
 from typing import IO
 from typing import Optional
+from typing import TypeAlias
 from typing import Union
 
 import toml
@@ -104,9 +105,12 @@ class ReplaceFilter(BaseModel):
         return ReplaceFilter(pattern=pattern, replaced=replaced)
 
 
+RoutesList: TypeAlias = list[list[str]]
+
+
 class RecordingConfig(BaseModel):
     enable: bool = True
-    routes_list: list[list[str]] = Field(default_factory=lambda: [["transcription"]])
+    routes_list: RoutesList = Field(default_factory=lambda: [["transcription"]])
     format: SampleFormat = SampleFormat.INT16
     channels: int = Field(
         default=1, cli=("-c", "--channels"), description="recording channels"
