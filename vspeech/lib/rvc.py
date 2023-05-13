@@ -10,6 +10,7 @@ from fairseq import checkpoint_utils
 from fairseq.models.hubert import HubertModel
 from numpy.typing import NDArray
 from onnxruntime import InferenceSession
+from resampy import resample
 from scipy import signal
 from torch.nn import functional
 
@@ -220,7 +221,7 @@ def change_voice(
 ) -> NDArray[np.int16]:
     sound_data = np.frombuffer(voice_frames, dtype="int16")
     audio = sound_data.astype(np.float32) / 32768.0
-    # audio = resampy.resample(audio, sampling_rate, 16000)
+    audio = resample(audio, voice_sample_rate, 16000)
 
     repeat = 3 if half_available else 1
     repeat *= rvc_config.quality.value

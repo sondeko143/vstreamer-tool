@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 import pytest
 from vstreamer_protos.commander.commander_pb2 import PLAYBACK
 from vstreamer_protos.commander.commander_pb2 import TRANSCRIBE
@@ -68,6 +70,7 @@ def followings() -> FollowingEvents:
 
 def test_worker_output_remotes(followings: FollowingEvents):
     output = WorkerOutput(
+        input_id=uuid4(),
         followings=followings,
         sound=SoundOutput(
             data=b"aaa", rate=16000, format=SampleFormat.INT16, channels=1
@@ -80,6 +83,7 @@ def test_worker_output_remotes(followings: FollowingEvents):
 
 def test_worker_output_to_inputs(followings: FollowingEvents):
     output = WorkerOutput(
+        input_id=uuid4(),
         followings=followings,
         sound=SoundOutput(
             data=b"aaa", rate=16000, format=SampleFormat.INT16, channels=1
@@ -106,6 +110,7 @@ def test_worker_output_to_inputs(followings: FollowingEvents):
 
 def test_worker_output_to_command(followings: FollowingEvents):
     output = WorkerOutput(
+        input_id=uuid4(),
         followings=followings,
         sound=SoundOutput(
             data=b"aaa", rate=16000, format=SampleFormat.INT16, channels=1

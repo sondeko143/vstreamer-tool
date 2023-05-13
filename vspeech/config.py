@@ -4,6 +4,8 @@ from enum import Enum
 from enum import IntEnum
 from pathlib import Path
 from typing import IO
+from typing import Any
+from typing import Callable
 from typing import Optional
 from typing import TypeAlias
 from typing import Union
@@ -12,6 +14,8 @@ import toml
 from pydantic import BaseModel
 from pydantic import BaseSettings
 from pydantic import Field
+from pydantic import SecretStr
+from toml.encoder import TomlArraySeparatorEncoder
 
 from vspeech.exceptions import ReplaceFilterParseError
 
@@ -200,7 +204,9 @@ class VcConfig(BaseModel):
 
 
 class AmiConfig(BaseModel):
-    appkey: str = Field(default="", description="Amivoice Cloud Platform API APPKEY")
+    appkey: SecretStr = Field(
+        default=SecretStr(""), description="Amivoice Cloud Platform API APPKEY"
+    )
     engine_name: str = Field(
         default="", description="AmiVoice Cloud Platform API engine name"
     )
@@ -215,19 +221,20 @@ class AmiConfig(BaseModel):
     extra_parameters: str = "keepFillerToken=1"
 
 
+ServiceAccountInfo: TypeAlias = dict[str, SecretStr]
+
+
 class GcpConfig(BaseModel):
-    project_id: str = Field(default="", description="Google cloud platform project ID")
     service_account_file_path: Path = Field(
         default="", description="Google Cloud Platform API credentials file (key.json)"
     )
-    service_account_info: dict[str, str] = Field(
+    service_account_info: ServiceAccountInfo = Field(
         default_factory=dict,
         description="Google Cloud Platform API service account info",
     )
     request_timeout: float = 3.0
     max_retry_count: int = 5
     retry_delay_sec: float = 0.5
-    location: str = Field(default="asia-northeast1")
 
 
 class Vr2Config(BaseModel):
@@ -267,6 +274,15 @@ class RvcConfig(BaseModel):
     f0_extractor_type: F0ExtractorType = Field(default=F0ExtractorType.harvest)
 
 
+class CustomTomlEncoder(TomlArraySeparatorEncoder):  # type: ignore
+    def dump_value(self, v: Any) -> str:
+        if isinstance(v, Path):
+            v = str(v)
+        if isinstance(v, Enum):
+            v = v.value
+        return super().dump_value(v)
+
+
 class Config(BaseSettings):
     recording: RecordingConfig = Field(default_factory=RecordingConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
@@ -297,6 +313,10 @@ class Config(BaseSettings):
     class Config(BaseSettings.Config):
         env_prefix = "vspeech_"
         env_nested_delimiter = "__"
+        encode_secret: Callable[[SecretStr], str] = lambda v: v.get_secret_value()
+        json_encoders = {
+            SecretStr: encode_secret,
+        }
 
     @staticmethod
     def is_file_json(file_path: Union[str, Path]):
@@ -311,3 +331,18 @@ class Config(BaseSettings):
         else:
             config_obj = toml.loads(file.read().decode("utf-8"))
         return Config.parse_obj(config_obj)
+
+    def export_to_toml(self):
+        encoded = self.dict()
+        conf_dict = {
+            **encoded,
+            "ami": {**encoded["ami"], "appkey": self.ami.appkey.get_secret_value()},
+            "gcp": {
+                **encoded["gcp"],
+                "service_account_info": {
+                    k: v.get_secret_value()
+                    for k, v in self.gcp.service_account_info.items()
+                },
+            },
+        }
+        return toml.dumps(conf_dict, encoder=CustomTomlEncoder(dict, separator="\n"))

@@ -9,7 +9,6 @@ from pyvcroid2 import VcRoid2
 
 from vspeech.config import VR2Param
 from vspeech.logger import logger
-from vspeech.shared_context import SharedContext
 
 
 @dataclass
@@ -40,13 +39,3 @@ class VR2:
         self, text: str, timeout: Optional[float] = None, raw: bool = False
     ):
         return self.vc_roid2.textToSpeech(text, timeout=timeout, raw=raw)
-
-
-def vr2_reload(context: SharedContext, vr2: "VR2"):
-    if not context.need_reload:
-        return
-    config = context.config.vr2
-    if config.voice_name:
-        logger.info("vr2 reload voice_name: %s", config.voice_name)
-        vr2.load_voice(config.voice_name, config.params)
-    context.reset_need_reload()

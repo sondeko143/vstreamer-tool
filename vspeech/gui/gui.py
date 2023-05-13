@@ -1,5 +1,4 @@
 import sys
-from enum import Enum
 from functools import partial
 from logging import Handler
 from logging import LogRecord
@@ -37,10 +36,9 @@ from typing import get_type_hints
 
 import click
 import grpc
-import toml
 import vstreamer_protos.commander.commander_pb2
 from humps import pascalize
-from toml.encoder import TomlArraySeparatorEncoder
+from pydantic import SecretStr
 from ttkbootstrap import Button
 from ttkbootstrap import Checkbutton as ttkCheckbutton
 from ttkbootstrap import Entry
@@ -197,15 +195,6 @@ Widgets = Union[
 ]
 
 
-class CustomTomlEncoder(TomlArraySeparatorEncoder):  # type: ignore
-    def dump_value(self, v: Any) -> str:
-        if isinstance(v, Path):
-            v = str(v)
-        if isinstance(v, Enum):
-            v = v.value
-        return super().dump_value(v)
-
-
 class VspeechGUI(Frame):
     master: Tk
     config: Config
@@ -213,6 +202,7 @@ class VspeechGUI(Frame):
     thread: Optional[Popen[bytes]]
     config_file_path: Path
     paused: bool = False
+    run_bt: Button
     pr_toggle_bt: Button
     send_bt: Button
     reload_bt: Button
@@ -230,15 +220,12 @@ class VspeechGUI(Frame):
         file_name = str(file_path)
         return file_name.endswith(".json")
 
-    def config_to_toml_str(self):
-        return toml.dumps(self.config.dict())
-
     def write_config_to_file(self, file: IO[bytes]):
         file_name = file.name
         if VspeechGUI.is_file_json(file_name):
             file.write(bytes(self.config.json(), encoding="utf-8"))
         else:
-            file.write(bytes(toml.dumps(self.config.dict(), encoder=CustomTomlEncoder(dict, separator="\n")), encoding="utf-8"))  # type: ignore
+            file.write(bytes(self.config.export_to_toml(), encoding="utf-8"))  # type: ignore
 
     def read_config_from_file(self, file: IO[bytes]):
         self.config = Config.read_config_from_file(file)
@@ -328,8 +315,8 @@ class VspeechGUI(Frame):
         self.draw_template_text_tab(notebook=notebook)
         self.draw_filter_tab(notebook=notebook)
 
-        run_bt = Button(bt_frame, text="run", command=self.run_vspeech)
-        run_bt.pack(padx=5, pady=5, side=LEFT)
+        self.run_bt = Button(bt_frame, text="run", command=self.run_vspeech)
+        self.run_bt.pack(padx=5, pady=5, side=LEFT)
         self.pr_toggle_bt = Button(
             bt_frame,
             text="pause",
@@ -735,11 +722,8 @@ class VspeechGUI(Frame):
         for i in range(max_columns):
             tab_frame.columnconfigure(i, weight=1)
         prefix = "gcp"
-        self.draw_tb(tab_frame, config_name=f"{prefix}.project_id").grid(
-            column=0, row=0, columnspan=max_columns, sticky=EW
-        )
         self.draw_tb(tab_frame, config_name=f"{prefix}.service_account_file_path").grid(
-            column=0, row=1, columnspan=max_columns, sticky=EW
+            column=0, row=0, columnspan=max_columns, sticky=EW
         )
         notebook.add(tab_frame, text="gcp")
 
@@ -1210,7 +1194,11 @@ class VspeechGUI(Frame):
         nest = self.config
         for attribute in attributes:
             nest = getattr(nest, attribute)
-        setattr(nest, child, value)
+        attribute = getattr(nest, child)
+        if isinstance(attribute, SecretStr):
+            setattr(nest, child, SecretStr(str(value)))
+        else:
+            setattr(nest, child, value)
         self.master.title(f"vspeech: {self.config_file_path}*")
 
     def check_process_running(self):
@@ -1240,6 +1228,7 @@ class VspeechGUI(Frame):
             temp_config_file.flush()
         temp_config_file_path = Path(temp_config_file.name)
         try:
+            self.disable_buttons()
             self.thread = Popen(
                 [
                     sys.executable,
@@ -1338,12 +1327,21 @@ class VspeechGUI(Frame):
     def on_terminated(self):
         self.thread = None
         self.paused = False
+        self.run_bt.configure(state="active")
+        self.pr_toggle_bt.configure(text="pause", state="disabled")
+        self.send_bt.configure(state="disabled")
+        self.reload_bt.configure(state="disabled")
+        self.stop_bt.configure(state="disabled")
+
+    def disable_buttons(self):
+        self.run_bt.configure(state="disabled")
         self.pr_toggle_bt.configure(text="pause", state="disabled")
         self.send_bt.configure(state="disabled")
         self.reload_bt.configure(state="disabled")
         self.stop_bt.configure(state="disabled")
 
     def on_start_process(self):
+        self.run_bt.configure(state="active")
         self.pr_toggle_bt.configure(text="pause", state="active")
         self.send_bt.configure(state="active")
         self.reload_bt.configure(state="active")

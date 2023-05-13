@@ -9,6 +9,7 @@ from google.cloud.exceptions import GoogleCloudError
 from google.cloud.translate_v3 import TranslateTextRequest
 from google.cloud.translate_v3 import TranslationServiceAsyncClient
 
+from vspeech.config import Config
 from vspeech.lib.gcp import get_credentials
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
@@ -37,20 +38,20 @@ async def translate_request(
 
 
 async def translation_worker_google(
-    context: SharedContext, in_queue: Queue[WorkerInput]
+    config: Config, in_queue: Queue[WorkerInput]
 ) -> AsyncGenerator[WorkerOutput, None]:
-    credentials = get_credentials(context.config.gcp)
+    credentials = get_credentials(config.gcp)
     client = TranslationServiceAsyncClient(credentials=credentials)
     logger.info("translation worker [google] started")
     while True:
-        config = context.config.translation
-        gcp = context.config.gcp
+        translation = config.translation
+        gcp = config.gcp
         transcribed = await in_queue.get()
         request = TranslateTextRequest(
             contents=[transcribed.text],
-            source_language_code=config.source_language_code,
-            target_language_code=config.target_language_code,
-            parent=f"projects/{gcp.project_id}",
+            source_language_code=translation.source_language_code,
+            target_language_code=translation.target_language_code,
+            parent=f"projects/{credentials.project_id}",  # type: ignore
         )
         try:
             logger.info("translating... %s", transcribed.text)
@@ -82,17 +83,17 @@ async def translation_worker(
     in_queue: Queue[WorkerInput],
     out_queue: Queue[WorkerOutput],
 ):
-    while True:
-        context.reset_need_reload()
-        generator = translation_worker_google
-        try:
-            async for translated in generator(context=context, in_queue=in_queue):
+    try:
+        while True:
+            context.reset_need_reload()
+            generator = translation_worker_google
+            async for translated in generator(config=context.config, in_queue=in_queue):
                 out_queue.put_nowait(translated)
                 if context.need_reload:
                     break
-        except CancelledError:
-            logger.debug("transcription worker cancelled")
-            raise
+    except CancelledError:
+        logger.debug("transcription worker cancelled")
+        raise
 
 
 def create_translation_task(

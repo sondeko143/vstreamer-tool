@@ -9,7 +9,6 @@ from google.auth.exceptions import MutualTLSChannelError
 from google.auth.exceptions import RefreshError
 from google.auth.transport.grpc import AuthMetadataPlugin
 from google.auth.transport.requests import Request
-from google.oauth2.service_account import IDTokenCredentials
 from grpc import composite_channel_credentials
 from grpc import metadata_call_credentials
 from grpc import ssl_channel_credentials
@@ -23,6 +22,7 @@ from vstreamer_protos.commander.commander_pb2_grpc import CommanderStub
 from vspeech.config import Config
 from vspeech.exceptions import EventDestinationNotFoundError
 from vspeech.lib.command import process_command
+from vspeech.lib.gcp import GcpIDTokenCredentials
 from vspeech.lib.gcp import get_id_token_credentials
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
@@ -42,7 +42,7 @@ def get_event_destination(config: Config, source: EventType) -> List[str]:
 
 
 def async_secure_authorized_channel(
-    credentials: IDTokenCredentials, request: Request, target: str
+    credentials: GcpIDTokenCredentials, request: Request, target: str
 ):
     # async of google.auth.transport.grpc.secure_authorized_channel
     metadata_plugin = AuthMetadataPlugin(credentials, request)
@@ -54,11 +54,11 @@ def async_secure_authorized_channel(
     return secure_channel(target, composite_credentials)
 
 
-def get_channel(address: str, credentials: IDTokenCredentials):
+def get_channel(address: str, credentials: GcpIDTokenCredentials):
     url = urlparse(address)
     if url.scheme == "https" or url.port == 443:
         request = Request()
-        id_token_cred: IDTokenCredentials = credentials.with_target_audience(
+        id_token_cred: GcpIDTokenCredentials = credentials.with_target_audience(
             f"https://{url.hostname}/"
         )
         id_token_cred.refresh(request)
@@ -70,7 +70,7 @@ def get_channel(address: str, credentials: IDTokenCredentials):
 
 
 async def send_command(
-    credentials: IDTokenCredentials,
+    credentials: GcpIDTokenCredentials,
     address: str,
     command: Command,
 ):

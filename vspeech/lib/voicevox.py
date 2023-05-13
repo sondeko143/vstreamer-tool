@@ -3,8 +3,6 @@ from pathlib import Path
 from voicevox_core import AccelerationMode
 from voicevox_core import VoicevoxCore
 from vspeech.config import VoicevoxParam
-from vspeech.logger import logger
-from vspeech.shared_context import SharedContext
 
 
 class Voicevox:
@@ -29,13 +27,3 @@ class Voicevox:
             setattr(audio_query, key, value)
         wav = self.core.synthesis(audio_query, speaker_id=speaker_id)
         return wav
-
-
-def voicevox_reload(context: SharedContext, vvox: "Voicevox"):
-    if not context.need_reload:
-        return
-    config = context.config.voicevox
-    if config.speaker_id and not vvox.is_model_loaded(config.speaker_id):
-        logger.info("vvox reload voice_name: %s", config.speaker_id)
-        vvox.load_model(config.speaker_id)
-    context.reset_need_reload()

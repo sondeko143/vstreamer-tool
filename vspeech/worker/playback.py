@@ -9,6 +9,7 @@ from typing import NoReturn
 from pyaudio import PyAudio
 from pyaudio import Stream
 
+from vspeech.config import Config
 from vspeech.config import PlaybackConfig
 from vspeech.config import SampleFormat
 from vspeech.config import get_sample_size
@@ -60,7 +61,7 @@ def get_output_stream(
 
 
 async def pyaudio_playback_worker(
-    context: SharedContext,
+    config: Config,
     in_queue: Queue[WorkerInput],
 ):
     audio = PyAudio()
@@ -71,14 +72,14 @@ async def pyaudio_playback_worker(
             try:
                 output_stream = get_output_stream(
                     audio=audio,
-                    config=context.config.playback,
+                    config=config.playback,
                     rate=speech.sound.rate,
                     format=speech.sound.format,
                     channels=speech.sound.channels,
                 )
                 logger.info("playback...")
                 yield await playback(
-                    volume=context.config.playback.volume,
+                    volume=config.playback.volume,
                     stream=output_stream,
                     data=speech.sound.data,
                     sample_width=get_sample_size(speech.sound.format),
@@ -91,15 +92,17 @@ async def pyaudio_playback_worker(
 
 
 async def playback_worker(context: SharedContext, in_queue: Queue[WorkerInput]):
-    while True:
-        context.reset_need_reload()
-        try:
-            async for _ in pyaudio_playback_worker(context=context, in_queue=in_queue):
+    try:
+        while True:
+            context.reset_need_reload()
+            async for _ in pyaudio_playback_worker(
+                config=context.config, in_queue=in_queue
+            ):
                 if context.need_reload:
                     break
-        except CancelledError:
-            logger.info("playback worker cancelled")
-            raise
+    except CancelledError:
+        logger.info("playback worker cancelled")
+        raise
 
 
 def create_playback_task(

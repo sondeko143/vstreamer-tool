@@ -21,6 +21,7 @@ from httpx import AsyncClient
 from httpx import HTTPError
 from pydantic import ValidationError
 
+from vspeech.config import Config
 from vspeech.config import TranscriptionWorkerType
 from vspeech.config import get_sample_size
 from vspeech.lib.ami import parse_response
@@ -82,15 +83,15 @@ async def transcribe_request_google(
 
 
 async def transcript_worker_whisper(
-    context: SharedContext,
+    config: Config,
     in_queue: Queue[WorkerInput],
 ) -> AsyncGenerator[WorkerOutput, None]:
     from whisper import load_model
     from whisper import transcribe
 
-    model = load_model(context.config.whisper.model)
+    whisper_config = config.whisper
+    model = load_model(whisper_config.model)
     while True:
-        config = context.config.whisper
         recorded = await in_queue.get()
         try:
             sample_size = get_sample_size(recorded.sound.format)
@@ -104,16 +105,17 @@ async def transcript_worker_whisper(
                     audio="./recorded.wav",
                     model=model,
                     language="ja",
-                    no_speech_threshold=config.no_speech_prob_threshold,
-                    logprob_threshold=config.logprob_threshold,
+                    no_speech_threshold=whisper_config.no_speech_prob_threshold,
+                    logprob_threshold=whisper_config.logprob_threshold,
                 )
                 logger.info("transcribed: %s", result)
                 transcribed = "".join(
                     [
                         segment["text"]
                         for segment in result["segments"]
-                        if segment["no_speech_prob"] < config.no_speech_prob_threshold
-                        and segment["avg_logprob"] > config.logprob_threshold
+                        if segment["no_speech_prob"]
+                        < whisper_config.no_speech_prob_threshold
+                        and segment["avg_logprob"] > whisper_config.logprob_threshold
                         and segment["temperature"] < 1.0
                     ]
                 )
@@ -127,9 +129,9 @@ async def transcript_worker_whisper(
                     )
                     worker_output.text = transcribed
                     yield worker_output
-                if context.config.recording_log:
+                if config.recording_log:
                     await log_transcribed(
-                        context.config.recording_log_dir,
+                        config.recording_log_dir,
                         wav_file=wav_file,
                         text=transcribed,
                     )
@@ -138,14 +140,14 @@ async def transcript_worker_whisper(
 
 
 async def transcript_worker_google(
-    context: SharedContext,
+    config: Config,
     in_queue: Queue[WorkerInput],
 ) -> AsyncGenerator[WorkerOutput, None]:
-    credentials = get_credentials(context.config.gcp)
+    credentials = get_credentials(config.gcp)
     client = SpeechAsyncClient(credentials=credentials)
     logger.info("transcript worker [google] started")
+    gcp = config.gcp
     while True:
-        gcp = context.config.gcp
         recorded = await in_queue.get()
         try:
             sample_size = get_sample_size(recorded.sound.format)
@@ -153,7 +155,7 @@ async def transcript_worker_google(
                 rec_audio = RecognitionAudio(content=wav_file.read())
                 rec_config = RecognitionConfig(
                     encoding=RecognitionConfig.AudioEncoding.LINEAR16,
-                    sample_rate_hertz=context.config.recording.rate,
+                    sample_rate_hertz=config.recording.rate,
                     language_code="ja-JP",
                 )
                 logger.info("transcribing...")
@@ -177,9 +179,9 @@ async def transcript_worker_google(
                     )
                     worker_output.text = transcribed
                     yield worker_output
-                if context.config.recording_log:
+                if config.recording_log:
                     await log_transcribed(
-                        context.config.recording_log_dir,
+                        config.recording_log_dir,
                         wav_file=wav_file,
                         text=transcribed,
                     )
@@ -190,12 +192,12 @@ async def transcript_worker_google(
 
 
 async def transcript_worker_ami(
-    context: SharedContext,
+    config: Config,
     in_queue: Queue[WorkerInput],
 ) -> AsyncGenerator[WorkerOutput, None]:
     logger.info("transcript worker [ami] started")
+    ami_config = config.ami
     while True:
-        ami_config = context.config.ami
         async with AsyncClient(timeout=ami_config.request_timeout) as client:
             recorded = await in_queue.get()
             try:
@@ -203,7 +205,7 @@ async def transcript_worker_ami(
                 with wav(recorded.sound, sample_size=sample_size) as wav_file:
                     data = {
                         "d": f"grammarFileNames={ami_config.engine_name} profileId={ami_config.service_id} {ami_config.extra_parameters}",
-                        "u": ami_config.appkey,
+                        "u": ami_config.appkey.get_secret_value(),
                     }
                     files = {"a": wav_file}
                     logger.info("transcribing...")
@@ -212,7 +214,7 @@ async def transcript_worker_ami(
                     logger.info("transcribed: %s", res_json)
                     text, spoken = parse_response(
                         res_json,
-                        use_mozc=context.config.transcription.transliterate_with_mozc,
+                        use_mozc=config.transcription.transliterate_with_mozc,
                     )
                     if text:
                         logger.info("transliterate: %s -> %s", spoken, text)
@@ -225,9 +227,9 @@ async def transcript_worker_ami(
                         )
                         worker_output.text = text
                         yield worker_output
-                    if context.config.recording_log:
+                    if config.recording_log:
                         await log_transcribed(
-                            context.config.recording_log_dir,
+                            config.recording_log_dir,
                             wav_file=wav_file,
                             text=str(res_json),
                         )
@@ -243,25 +245,27 @@ async def transcription_worker(
     in_queue: Queue[WorkerInput],
     out_queue: Queue[WorkerOutput],
 ):
-    while True:
-        context.reset_need_reload()
-        config = context.config.transcription
-        if config.worker_type == TranscriptionWorkerType.ACP:
-            generator = transcript_worker_ami
-        elif config.worker_type == TranscriptionWorkerType.GCP:
-            generator = transcript_worker_google
-        elif config.worker_type == TranscriptionWorkerType.WHISPER:
-            generator = transcript_worker_whisper
-        else:
-            raise ValueError("transcription worker type unknown.")
-        try:
-            async for transcribed in generator(context=context, in_queue=in_queue):
+    try:
+        while True:
+            context.reset_need_reload()
+            config = context.config.transcription
+            if config.worker_type == TranscriptionWorkerType.ACP:
+                generator = transcript_worker_ami
+            elif config.worker_type == TranscriptionWorkerType.GCP:
+                generator = transcript_worker_google
+            elif config.worker_type == TranscriptionWorkerType.WHISPER:
+                generator = transcript_worker_whisper
+            else:
+                raise ValueError("transcription worker type unknown.")
+            async for transcribed in generator(
+                config=context.config, in_queue=in_queue
+            ):
                 out_queue.put_nowait(transcribed)
                 if context.need_reload:
                     break
-        except CancelledError:
-            logger.debug("transcription worker cancelled")
-            raise
+    except CancelledError:
+        logger.debug("transcription worker cancelled")
+        raise
 
 
 def create_transcription_task(

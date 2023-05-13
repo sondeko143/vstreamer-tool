@@ -5,13 +5,9 @@ from asyncio import Queue
 from asyncio import to_thread
 from typing import Any
 
+from vspeech.config import Config
 from vspeech.config import EventType
 from vspeech.config import SampleFormat
-from vspeech.lib.rvc import change_voice
-from vspeech.lib.rvc import create_session
-from vspeech.lib.rvc import get_device
-from vspeech.lib.rvc import half_precision_available
-from vspeech.lib.rvc import load_hubert_model
 from vspeech.logger import logger
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import SoundOutput
@@ -20,10 +16,16 @@ from vspeech.shared_context import WorkerOutput
 
 
 async def rvc_worker(
-    context: SharedContext,
+    config: Config,
     in_queue: Queue[WorkerInput],
 ):
-    rvc_config = context.config.rvc
+    from vspeech.lib.rvc import change_voice
+    from vspeech.lib.rvc import create_session
+    from vspeech.lib.rvc import get_device
+    from vspeech.lib.rvc import half_precision_available
+    from vspeech.lib.rvc import load_hubert_model
+
+    rvc_config = config.rvc
     device = get_device()
     half_available = half_precision_available(rvc_config.gpu_id)
     hubert_model = load_hubert_model(
@@ -39,7 +41,6 @@ async def rvc_worker(
     logger.info("vc worker started")
     while True:
         speech = await in_queue.get()
-        rvc_config = context.config.rvc
         try:
             logger.info("voice changing...")
             audio = await to_thread(
@@ -71,16 +72,16 @@ async def rvc_worker(
 async def vc_worker(
     context: SharedContext, in_queue: Queue[WorkerInput], out_queue: Queue[WorkerOutput]
 ):
-    while True:
-        context.reset_need_reload()
-        try:
-            async for output in rvc_worker(context=context, in_queue=in_queue):
+    try:
+        while True:
+            context.reset_need_reload()
+            async for output in rvc_worker(config=context.config, in_queue=in_queue):
                 out_queue.put_nowait(output)
                 if context.need_reload:
                     break
-        except CancelledError:
-            logger.debug("vc worker cancelled")
-            raise
+    except CancelledError:
+        logger.debug("vc worker cancelled")
+        raise
 
 
 def create_vc_task(
