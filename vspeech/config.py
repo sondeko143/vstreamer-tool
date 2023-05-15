@@ -58,6 +58,26 @@ class EventType(Enum):
     reload = "reload"
     set_filters = "set_filters"
 
+    @classmethod
+    def from_string(cls, name: str):
+        try:
+            return cls(name)
+        except ValueError as e:
+            if name in ["sub"]:
+                return EventType.subtitle
+            if name in ["sub_t"]:
+                return EventType.subtitle_translated
+            if name in ["transc"]:
+                return EventType.transcription
+            if name in ["transl"]:
+                return EventType.translation
+            if name in ["rec"]:
+                return EventType.recording
+            if name in ["play"]:
+                return EventType.playback
+            else:
+                raise e
+
 
 class TranscriptionWorkerType(Enum):
     ACP = "ACP"

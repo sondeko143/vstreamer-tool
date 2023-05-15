@@ -126,7 +126,7 @@ class EventAddress:
         address = (
             urlunparse((url.scheme, url.netloc, "", "", "", "")) if url.netloc else ""
         )
-        return cls(event=EventType(target_name), remote=address)
+        return cls(event=EventType.from_string(target_name), remote=address)
 
     def to_pb(self) -> OperationRoute:
         return OperationRoute(
