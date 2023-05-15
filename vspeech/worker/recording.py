@@ -69,11 +69,12 @@ async def pyaudio_recording_worker(config: RecordingConfig):
     interval_frames: bytes = b""
     speaking_frames: bytes = b""
     last_interval_frames: bytes = b""
-    total_speaking_seconds = 0
+    total_seconds_of_this_recording = 0
     status = "waiting"
     audio = PyAudio()
     stream = open_input_stream(audio, config)
     sample_width = get_sample_size(config.format)
+    stopping_time = 0
     try:
         while stream.is_active():
             in_data = await to_thread(stream.read, config.chunk)
@@ -88,26 +89,36 @@ async def pyaudio_recording_worker(config: RecordingConfig):
                     status = "speaking"
                 elif status == "speaking":
                     speaking_frames += interval_frames
-                    total_speaking_seconds += config.interval_sec
+                    total_seconds_of_this_recording += config.interval_sec
                     if (
                         not speaking
-                        or config.max_recording_sec < total_speaking_seconds
+                        or config.max_recording_sec < total_seconds_of_this_recording
                     ):
                         logger.info("voice stopped")
                         status = "stopped"
                 elif status == "stopped":
                     speaking_frames += interval_frames
-                    total_speaking_seconds += config.interval_sec
+                    total_seconds_of_this_recording += config.interval_sec
                     if (
-                        not speaking
-                        or config.max_recording_sec < total_speaking_seconds
+                        stopping_time > config.gradually_stopping_interval
+                        or config.max_recording_sec < total_seconds_of_this_recording
                     ):
-                        logger.info("voice recorded")
+                        logger.info(
+                            "voice recorded %s %s",
+                            stopping_time,
+                            total_seconds_of_this_recording,
+                        )
                         yield speaking_frames
                         status = "waiting"
                         speaking_frames = b""
                         interval_frames = b""
+                        stopping_time = 0
+                        total_seconds_of_this_recording = 0
+                    elif not speaking:
+                        stopping_time += 1
+                        logger.info("voice stopping")
                     elif speaking:
+                        stopping_time = 0
                         status = "speaking"
                 last_interval_frames = interval_frames
                 interval_frame_count = 0

@@ -420,6 +420,13 @@ class VspeechGUI(Frame):
             to=10,
             increment=1,
         ).grid(column=1, row=current_row, sticky=EW)
+        self.draw_sb(
+            frame=tab_frame,
+            config_name=f"{prefix}.gradually_stopping_interval",
+            from_=0,
+            to=10,
+            increment=1,
+        ).grid(column=2, row=current_row, sticky=EW)
         current_row += 1
         text = "Routes:"
         label = Label(tab_frame, text=text)

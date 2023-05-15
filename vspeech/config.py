@@ -134,6 +134,7 @@ class RecordingConfig(BaseModel):
         cli=("-m", "--max_recording_sec"),
         description="max wav file length to process",
     )
+    gradually_stopping_interval: int = Field(default=3)
     input_host_api_name: Optional[str] = Field(
         default=None, description="PortAudio host api name to select an input device"
     )
