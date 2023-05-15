@@ -61,7 +61,8 @@ def pitch_extract_harvest(
         frame_period=10,
     )
     f0 = cast(
-        NDArray[np.double], pyworld.stonemask(audio.astype(np.double), f0_, t, sr)  # type: ignore
+        NDArray[np.double],
+        pyworld.stonemask(audio.astype(np.double), f0_, t, sr),  # type: ignore
     )
     return signal.medfilt(f0, 3)
 
@@ -80,7 +81,10 @@ def pitch_extract_dio(
         channels_in_octave=2,
         frame_period=10,
     )
-    return cast(NDArray[np.double], pyworld.stonemask(audio.astype(np.double), f0_, t, sr))  # type: ignore
+    return cast(
+        NDArray[np.double],
+        pyworld.stonemask(audio.astype(np.double), f0_, t, sr),  # type: ignore
+    )
 
 
 def pitch_extract(
@@ -221,7 +225,7 @@ def change_voice(
 ) -> NDArray[np.int16]:
     sound_data = np.frombuffer(voice_frames, dtype="int16")
     audio = sound_data.astype(np.float32) / 32768.0
-    audio = resample(audio, voice_sample_rate, 16000)
+    audio = cast(NDArray[np.float32], resample(audio, voice_sample_rate, 16000))
 
     repeat = 3 if half_available else 1
     repeat *= rvc_config.quality.value

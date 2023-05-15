@@ -167,7 +167,9 @@ async def transcript_worker_google(
                     max_retry_count=gcp.max_retry_count,
                     retry_delay_sec=gcp.retry_delay_sec,
                 )
-                transcribed = "".join([result.alternatives[0].transcript for result in r.results])  # type: ignore
+                transcribed = "".join(
+                    [result.alternatives[0].transcript for result in r.results]
+                )
                 logger.info("transcribed: %s", r)
                 if transcribed:
                     worker_output = WorkerOutput.from_input(recorded)
@@ -204,7 +206,9 @@ async def transcript_worker_ami(
                 sample_size = get_sample_size(recorded.sound.format)
                 with wav(recorded.sound, sample_size=sample_size) as wav_file:
                     data = {
-                        "d": f"grammarFileNames={ami_config.engine_name} profileId={ami_config.service_id} {ami_config.extra_parameters}",
+                        "d": f"grammarFileNames={ami_config.engine_name} "
+                        f"profileId={ami_config.service_id} "
+                        f"{ami_config.extra_parameters}",
                         "u": ami_config.appkey.get_secret_value(),
                     }
                     files = {"a": wav_file}

@@ -5,7 +5,6 @@ from enum import IntEnum
 from pathlib import Path
 from typing import IO
 from typing import Any
-from typing import Callable
 from typing import Optional
 from typing import TypeAlias
 from typing import Union
@@ -334,7 +333,11 @@ class Config(BaseSettings):
     class Config(BaseSettings.Config):
         env_prefix = "vspeech_"
         env_nested_delimiter = "__"
-        encode_secret: Callable[[SecretStr], str] = lambda v: v.get_secret_value()
+
+        @staticmethod
+        def encode_secret(v: SecretStr):
+            return v.get_secret_value()
+
         json_encoders = {
             SecretStr: encode_secret,
         }

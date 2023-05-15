@@ -225,7 +225,7 @@ class VspeechGUI(Frame):
         if VspeechGUI.is_file_json(file_name):
             file.write(bytes(self.config.json(), encoding="utf-8"))
         else:
-            file.write(bytes(self.config.export_to_toml(), encoding="utf-8"))  # type: ignore
+            file.write(bytes(self.config.export_to_toml(), encoding="utf-8"))
 
     def read_config_from_file(self, file: IO[bytes]):
         self.config = Config.read_config_from_file(file)
@@ -926,10 +926,10 @@ class VspeechGUI(Frame):
         del_bt.pack(padx=5, pady=5, side=LEFT)
         self.draw_tb(
             frame=tab_frame,
-            config_name=f"listen_address",
+            config_name="listen_address",
         ).grid(column=0, row=current_row, sticky=EW)
         self.draw_sb(
-            frame=tab_frame, config_name=f"listen_port", from_=0, to=65535, increment=1
+            frame=tab_frame, config_name="listen_port", from_=0, to=65535, increment=1
         ).grid(column=1, row=current_row, sticky=EW)
         current_row += 1
         notebook.add(tab_frame, text="templ")
@@ -1218,7 +1218,8 @@ class VspeechGUI(Frame):
                 if self.thread.returncode > 0:
                     messagebox.showinfo(
                         "note",
-                        f"recording process stopped with returncode: {self.thread.returncode}",
+                        "recording process stopped with returncode: "
+                        f"{self.thread.returncode}",
                     )
                 self.on_terminated()
         except TimeoutExpired:
