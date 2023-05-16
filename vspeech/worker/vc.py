@@ -3,10 +3,11 @@ from asyncio import AbstractEventLoop
 from asyncio import CancelledError
 from asyncio import Queue
 from asyncio import to_thread
+from functools import partial
 from typing import Any
 
-from vspeech.config import Config
 from vspeech.config import EventType
+from vspeech.config import RvcConfig
 from vspeech.config import SampleFormat
 from vspeech.logger import logger
 from vspeech.shared_context import SharedContext
@@ -16,7 +17,7 @@ from vspeech.shared_context import WorkerOutput
 
 
 async def rvc_worker(
-    config: Config,
+    rvc_config: RvcConfig,
     in_queue: Queue[WorkerInput],
 ):
     from vspeech.lib.rvc import change_voice
@@ -25,7 +26,6 @@ async def rvc_worker(
     from vspeech.lib.rvc import half_precision_available
     from vspeech.lib.rvc import load_hubert_model
 
-    rvc_config = config.rvc
     device = get_device()
     half_available = half_precision_available(rvc_config.gpu_id)
     hubert_model = load_hubert_model(
@@ -42,7 +42,7 @@ async def rvc_worker(
     while True:
         speech = await in_queue.get()
         try:
-            logger.info("voice changing...")
+            logger.debug("voice changing...")
             audio = await to_thread(
                 change_voice,
                 voice_frames=speech.sound.data,
@@ -56,7 +56,7 @@ async def rvc_worker(
                 session=session,
                 f0_enabled=f0_enabled,
             )
-            logger.info("voice changed")
+            logger.debug("voice changed")
             worker_output = WorkerOutput.from_input(speech)
             worker_output.sound = SoundOutput(
                 data=audio.tobytes(),
@@ -75,7 +75,8 @@ async def vc_worker(
     try:
         while True:
             context.reset_need_reload()
-            async for output in rvc_worker(config=context.config, in_queue=in_queue):
+            worker = partial(rvc_worker, rvc_config=context.config.rvc)
+            async for output in worker(in_queue=in_queue):
                 out_queue.put_nowait(output)
                 if context.need_reload:
                     break

@@ -84,7 +84,7 @@ async def pyaudio_recording_worker(config: RecordingConfig):
             if interval_frame_count >= config.rate * config.interval_sec:
                 speaking = approx_max_amp > config.silence_threshold
                 if status == "waiting" and speaking:
-                    logger.info("voice recording...")
+                    logger.debug("voice recording...")
                     speaking_frames += last_interval_frames + interval_frames
                     status = "speaking"
                 elif status == "speaking":
@@ -94,7 +94,7 @@ async def pyaudio_recording_worker(config: RecordingConfig):
                         not speaking
                         or config.max_recording_sec < total_seconds_of_this_recording
                     ):
-                        logger.info("voice stopped")
+                        logger.debug("voice stopped")
                         status = "stopped"
                 elif status == "stopped":
                     speaking_frames += interval_frames
@@ -103,7 +103,7 @@ async def pyaudio_recording_worker(config: RecordingConfig):
                         stopping_time > config.gradually_stopping_interval
                         or config.max_recording_sec < total_seconds_of_this_recording
                     ):
-                        logger.info(
+                        logger.debug(
                             "voice recorded %s %s",
                             stopping_time,
                             total_seconds_of_this_recording,
@@ -116,7 +116,7 @@ async def pyaudio_recording_worker(config: RecordingConfig):
                         total_seconds_of_this_recording = 0
                     elif not speaking:
                         stopping_time += 1
-                        logger.info("voice stopping")
+                        logger.debug("voice stopping")
                     elif speaking:
                         stopping_time = 0
                         status = "speaking"
@@ -153,7 +153,7 @@ async def recording_worker(context: SharedContext, out_queue: Queue[WorkerOutput
             if not context.running.is_set():
                 await context.running.wait()
     except CancelledError:
-        logger.debug("recording worker cancelled")
+        logger.info("recording worker cancelled")
         raise
 
 

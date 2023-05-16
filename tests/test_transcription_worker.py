@@ -5,9 +5,9 @@ from uuid import uuid4
 from pytest_httpx import HTTPXMock
 
 from vspeech.config import AmiConfig
-from vspeech.config import Config
 from vspeech.config import EventType
 from vspeech.config import SampleFormat
+from vspeech.config import TranscriptionConfig
 from vspeech.shared_context import SoundInput
 from vspeech.shared_context import WorkerInput
 from vspeech.worker.transcription import transcript_worker_ami
@@ -71,12 +71,17 @@ async def test_ami(httpx_mock: HTTPXMock):
             "message": "",
         }
     )
-    config = Config(ami=AmiConfig(appkey="", engine_uri="https://dummy"))
+    config = TranscriptionConfig()
+    ami_config = AmiConfig(appkey="", engine_uri="https://dummy")
     queue = Queue[WorkerInput]()
     await put_queue(queue)
     try:
         output = await wait_for(
-            anext(transcript_worker_ami(config=config, in_queue=queue)),
+            anext(
+                transcript_worker_ami(
+                    config=config, ami_config=ami_config, in_queue=queue
+                )
+            ),
             10,
         )
         assert output.text == "えーとうーんちょっと"

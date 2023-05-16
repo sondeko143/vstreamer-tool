@@ -169,6 +169,8 @@ class TranscriptionConfig(BaseModel):
     enable: bool = True
     worker_type: TranscriptionWorkerType = TranscriptionWorkerType.ACP
     transliterate_with_mozc: bool = False
+    recording_log: bool = False
+    recording_log_dir: Path = Path("./rec")
 
 
 class TtsConfig(BaseModel):
@@ -327,8 +329,6 @@ class Config(BaseSettings):
     filters: list[ReplaceFilter] = []
     log_file: str = "./voice_%%Y_%%m_%%d.log"
     log_level: Union[int, str] = logging.INFO
-    recording_log: bool = False
-    recording_log_dir: Path = Path("./rec")
 
     class Config(BaseSettings.Config):
         env_prefix = "vspeech_"

@@ -1187,7 +1187,7 @@ class VspeechGUI(Frame):
                 nest = getattr(nest, attribute)
             selected_item_value = getattr(nest, child)
             selected_item_label = entry.get_label_for_item_value(selected_item_value)
-            logger.info(f"{name}: {selected_item_value}")
+            logger.debug(f"{name}: {selected_item_value}")
             if selected_item_label or selected_item_label == 0:
                 entry.set(selected_item_label)
         self.templates.set(self.config.template_texts)
@@ -1196,7 +1196,7 @@ class VspeechGUI(Frame):
     def set_config(self, widget: "Widgets", event: Any):
         value = widget.get_value()
         name = self.config_entry_map[widget]
-        logger.info(f"set {name}: {value}")
+        logger.debug(f"set {name}: {value}")
         *attributes, child = name.split(".")
         nest = self.config
         for attribute in attributes:

@@ -34,7 +34,7 @@ def put_queue(input_queues: InputQueues, dest_event: EventType, request: WorkerI
         queue = input_queues[dest_event]
         queue.put_nowait(request)
     except KeyError:
-        logger.info("worker %s not activated", dest_event)
+        logger.warn("worker %s not activated", dest_event)
 
 
 def process_command(context: SharedContext, request: WorkerInput):
@@ -83,14 +83,14 @@ def process_command(context: SharedContext, request: WorkerInput):
             request=request,
         )
     if EventType.pause == current:
-        logger.info("pause")
+        logger.debug("pause")
         context.running.clear()
     if EventType.resume == current:
-        logger.info("resume")
+        logger.debug("resume")
         context.running.set()
     if EventType.reload == current:
         file_path = request.file_path
-        logger.info("reload: %s", file_path)
+        logger.debug("reload: %s", file_path)
         with open(file_path, "rb") as f:
             context.config = Config.read_config_from_file(f)
         for worker_name in context.worker_need_reload.keys():

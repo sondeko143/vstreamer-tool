@@ -1,7 +1,6 @@
 from asyncio import AbstractEventLoop
 from asyncio import CancelledError
 from asyncio import Queue
-from typing import List
 from typing import cast
 from urllib.parse import urlparse
 
@@ -19,26 +18,14 @@ from vstreamer_protos.commander.commander_pb2 import Command
 from vstreamer_protos.commander.commander_pb2 import Response
 from vstreamer_protos.commander.commander_pb2_grpc import CommanderStub
 
-from vspeech.config import Config
 from vspeech.exceptions import EventDestinationNotFoundError
 from vspeech.lib.command import process_command
 from vspeech.lib.gcp import GcpIDTokenCredentials
 from vspeech.lib.gcp import get_id_token_credentials
 from vspeech.logger import logger
-from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import WorkerInput
 from vspeech.shared_context import WorkerOutput
-
-
-def get_event_destination(config: Config, source: EventType) -> List[str]:
-    try:
-        worker_config = getattr(config, source.value)
-        destinations = worker_config.destinations
-        logger.info("source: %s. destinations: %s", source, destinations)
-        return destinations
-    except AttributeError:
-        raise EventDestinationNotFoundError(f"Unknown event name {source}")
 
 
 def async_secure_authorized_channel(
