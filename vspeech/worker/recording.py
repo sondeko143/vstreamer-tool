@@ -132,20 +132,19 @@ async def recording_worker(context: SharedContext, out_queue: Queue[WorkerOutput
     try:
         while True:
             context.reset_need_reload()
+            rec_config = context.config.recording
             async for frames in pyaudio_recording_worker(
-                config=context.config.recording,
+                config=rec_config,
             ):
                 if not context.running.is_set():
                     logger.info("recording have been paused")
                     break
-                worker_output = WorkerOutput.from_routes_list(
-                    context.config.recording.routes_list
-                )
+                worker_output = WorkerOutput.from_routes_list(rec_config.routes_list)
                 worker_output.sound = SoundOutput(
                     data=frames,
-                    rate=context.config.recording.rate,
-                    format=context.config.recording.format,
-                    channels=context.config.recording.channels,
+                    rate=rec_config.rate,
+                    format=rec_config.format,
+                    channels=rec_config.channels,
                 )
                 out_queue.put_nowait(worker_output)
                 if context.need_reload:
