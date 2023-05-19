@@ -43,7 +43,7 @@ def half_precision_available(id: int):
         ):
             return False
     except Exception as e:
-        logger.warning(e)
+        logger.warning("%s", e)
         return False
 
     return True

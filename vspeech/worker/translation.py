@@ -95,6 +95,8 @@ async def translation_worker(
                 out_queue.put_nowait(translated)
                 if context.need_reload:
                     break
+            if not context.running.is_set():
+                await context.running.wait()
     except CancelledError:
         logger.debug("transcription worker cancelled")
         raise

@@ -141,7 +141,7 @@ async def transcript_worker_whisper(
                         text=transcribed,
                     )
         except WavError as e:
-            logger.warning(e)
+            logger.warning("%s", e)
 
 
 async def transcript_worker_google(
@@ -195,7 +195,7 @@ async def transcript_worker_google(
         except (HTTPError, AioRpcError, GoogleAPICallError) as e:
             logger.warning("transcription request error: %s", e)
         except WavError as e:
-            logger.warning(e)
+            logger.warning("%s", e)
 
 
 async def transcript_worker_ami(
@@ -246,7 +246,7 @@ async def transcript_worker_ami(
                 logger.warning("transcription request error: %s", e)
                 logger.exception(e)
             except WavError as e:
-                logger.warning(e)
+                logger.warning("%s", e)
 
 
 async def transcription_worker(
@@ -278,6 +278,8 @@ async def transcription_worker(
                 out_queue.put_nowait(transcribed)
                 if context.need_reload:
                     break
+            if not context.running.is_set():
+                await context.running.wait()
     except CancelledError:
         logger.info("transcription worker cancelled")
         raise

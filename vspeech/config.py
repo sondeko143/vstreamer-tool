@@ -56,6 +56,7 @@ class EventType(Enum):
     resume = "resume"
     reload = "reload"
     set_filters = "set_filters"
+    ping = "ping"
 
     @classmethod
     def from_string(cls, name: str):

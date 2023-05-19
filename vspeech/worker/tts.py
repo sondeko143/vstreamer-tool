@@ -54,7 +54,7 @@ async def vroid2_worker(vr2_config: Vr2Config, in_queue: Queue[WorkerInput]):
                 )
                 yield worker_output
             except Exception as e:
-                logger.warning(e)
+                logger.warning("%s", e)
 
 
 async def voicevox_worker(vvox_config: VoicevoxConfig, in_queue: Queue[WorkerInput]):
@@ -80,7 +80,7 @@ async def voicevox_worker(vvox_config: VoicevoxConfig, in_queue: Queue[WorkerInp
             )
             yield worker_output
         except UnicodeEncodeError as e:
-            logger.warning(e)
+            logger.warning("%s", e)
 
 
 async def tts_worker(
@@ -100,6 +100,8 @@ async def tts_worker(
                 out_queue.put_nowait(output)
                 if context.need_reload:
                     break
+            if not context.running.is_set():
+                await context.running.wait()
     except CancelledError:
         logger.info("tts worker cancelled")
         raise

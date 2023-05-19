@@ -80,6 +80,8 @@ async def vc_worker(
                 out_queue.put_nowait(output)
                 if context.need_reload:
                     break
+            if not context.running.is_set():
+                await context.running.wait()
     except CancelledError:
         logger.debug("vc worker cancelled")
         raise

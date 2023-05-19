@@ -52,12 +52,14 @@ from ttkbootstrap import Text
 from ttkbootstrap import Window
 from ttkbootstrap.themes.standard import STANDARD_THEMES
 from vstreamer_protos.commander.commander_pb2 import PAUSE
+from vstreamer_protos.commander.commander_pb2 import PING
 from vstreamer_protos.commander.commander_pb2 import RELOAD
 from vstreamer_protos.commander.commander_pb2 import RESUME
 from vstreamer_protos.commander.commander_pb2 import SET_FILTERS
 from vstreamer_protos.commander.commander_pb2 import Command
 from vstreamer_protos.commander.commander_pb2 import OperationChain
 from vstreamer_protos.commander.commander_pb2 import OperationRoute
+from vstreamer_protos.commander.commander_pb2 import Response
 from vstreamer_protos.commander.commander_pb2_grpc import CommanderStub
 
 from vspeech.config import Config
@@ -1026,7 +1028,7 @@ class VspeechGUI(Frame):
                 "warning",
                 f"Invalid value: {e}",
             )
-            logger.warning("%s 無効な値です: %s", e)
+            logger.warning("%s 無効な値です: %s", value, e)
             return
         filters: List[str] = list(self.filters.get())  # type: ignore
         filters.append(str(rf))
@@ -1254,14 +1256,10 @@ class VspeechGUI(Frame):
         self.check_process_running()
 
     def wait_to_startup(self):
-        while True:
+        max_retry = 5
+        for _ in range(max_retry):
             try:
-                self.send_message(
-                    Command(
-                        chains=self.operations_for_send_text(),
-                        text="",
-                    )
-                )
+                self.send_ping()
                 break
             except grpc.RpcError:
                 sleep(0.5)
@@ -1307,6 +1305,25 @@ class VspeechGUI(Frame):
                 stub = CommanderStub(channel)
                 stub.process_command(command)
                 logger.info("send: %s", command)
+
+    def send_ping(self):
+        if self.thread:
+            address = f"{self.config.listen_address}:{self.config.listen_port}"
+            with grpc.insecure_channel(address) as channel:
+                stub = CommanderStub(channel)
+                response = cast(
+                    Response,
+                    stub.process_command(
+                        Command(
+                            chains=[
+                                OperationChain(
+                                    operations=[OperationRoute(operation=PING)]
+                                )
+                            ]
+                        )
+                    ),
+                )
+                logger.info("ping: %s", str(response))
 
     def terminate_main(self):
         if self.thread:

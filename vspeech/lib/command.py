@@ -89,12 +89,14 @@ def process_command(context: SharedContext, request: WorkerInput):
         logger.debug("resume")
         context.running.set()
     if EventType.reload == current:
+        context.running.clear()
         file_path = request.file_path
         logger.debug("reload: %s", file_path)
         with open(file_path, "rb") as f:
             context.config = Config.read_config_from_file(f)
         for worker_name in context.worker_need_reload.keys():
             context.worker_need_reload[worker_name] = True
+        context.running.set()
     if EventType.set_filters == current:
         context.config.filters.clear()
         filters = request.filters
@@ -105,3 +107,5 @@ def process_command(context: SharedContext, request: WorkerInput):
                 context.config.filters.append(ReplaceFilter.from_str(filter))
             except ReplaceFilterParseError:
                 logger.warning("ignore invalid filter string %s", filter)
+    if EventType.ping == current:
+        logger.info("ping.")

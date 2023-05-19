@@ -17,6 +17,7 @@ from uuid import uuid4
 from pydantic import BaseModel
 from pydantic import root_validator
 from vstreamer_protos.commander.commander_pb2 import PAUSE
+from vstreamer_protos.commander.commander_pb2 import PING
 from vstreamer_protos.commander.commander_pb2 import PLAYBACK
 from vstreamer_protos.commander.commander_pb2 import RELOAD
 from vstreamer_protos.commander.commander_pb2 import RESUME
@@ -110,6 +111,8 @@ def operation_to_event(operation: Operation) -> EventType:
         return EventType.reload
     if operation == SET_FILTERS:
         return EventType.set_filters
+    if operation == PING:
+        return EventType.ping
     raise EventToOperationConvertError(f"Unsupported operation {operation}")
 
 
