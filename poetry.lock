@@ -790,14 +790,14 @@ grpcio-gcp = ["grpcio-gcp (>=0.2.2,<1.0dev)"]
 
 [[package]]
 name = "google-auth"
-version = "2.18.0"
+version = "2.18.1"
 description = "Google Authentication Library"
 category = "main"
 optional = false
 python-versions = ">=2.7,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*"
 files = [
-    {file = "google-auth-2.18.0.tar.gz", hash = "sha256:c66b488a8b005b23ccb97b1198b6cece516c91869091ac5b7c267422db2733c7"},
-    {file = "google_auth-2.18.0-py2.py3-none-any.whl", hash = "sha256:ef3f3a67fa54d421a1c155864570f9a8de9179cedc937bda496b7a8ca338e936"},
+    {file = "google-auth-2.18.1.tar.gz", hash = "sha256:d7a3249027e7f464fbbfd7ee8319a08ad09d2eea51578575c4bd360ffa049ccb"},
+    {file = "google_auth-2.18.1-py2.py3-none-any.whl", hash = "sha256:55a395cdfd3f3dd3f649131d41f97c17b4ed8a2aac1be3502090c716314e8a37"},
 ]
 
 [package.dependencies]
@@ -981,14 +981,14 @@ files = [
 
 [[package]]
 name = "httpcore"
-version = "0.17.0"
+version = "0.17.1"
 description = "A minimal low-level HTTP client."
 category = "main"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "httpcore-0.17.0-py3-none-any.whl", hash = "sha256:0fdfea45e94f0c9fd96eab9286077f9ff788dd186635ae61b312693e4d943599"},
-    {file = "httpcore-0.17.0.tar.gz", hash = "sha256:cc045a3241afbf60ce056202301b4d8b6af08845e3294055eb26b09913ef903c"},
+    {file = "httpcore-0.17.1-py3-none-any.whl", hash = "sha256:628e768aaeec1f7effdc6408ba1c3cdbd7487c1fc570f7d66844ec4f003e1ca4"},
+    {file = "httpcore-0.17.1.tar.gz", hash = "sha256:caf508597c525f9b8bfff187e270666309f63115af30f7d68b16143a403c8356"},
 ]
 
 [package.dependencies]
@@ -1003,14 +1003,14 @@ socks = ["socksio (>=1.0.0,<2.0.0)"]
 
 [[package]]
 name = "httpx"
-version = "0.24.0"
+version = "0.24.1"
 description = "The next generation HTTP client."
 category = "main"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "httpx-0.24.0-py3-none-any.whl", hash = "sha256:447556b50c1921c351ea54b4fe79d91b724ed2b027462ab9a329465d147d5a4e"},
-    {file = "httpx-0.24.0.tar.gz", hash = "sha256:507d676fc3e26110d41df7d35ebd8b3b8585052450f4097401c9be59d928c63e"},
+    {file = "httpx-0.24.1-py3-none-any.whl", hash = "sha256:06781eb9ac53cde990577af654bd990a4949de37a28bdb4a230d434f3a30b9bd"},
+    {file = "httpx-0.24.1.tar.gz", hash = "sha256:5853a43053df830c20f8110c5e69fe44d035d850b2dfe795e196f00fdb774bdd"},
 ]
 
 [package.dependencies]
@@ -1097,13 +1097,13 @@ i18n = ["Babel (>=2.7)"]
 
 [[package]]
 name = "lit"
-version = "16.0.3"
+version = "16.0.5"
 description = "A Software Testing Tool"
 category = "main"
 optional = true
 python-versions = "*"
 files = [
-    {file = "lit-16.0.3.tar.gz", hash = "sha256:25524fe51fa3261212cfd86a8891429ed0460e247384c5a2001612d08e362e00"},
+    {file = "lit-16.0.5.tar.gz", hash = "sha256:40b0224271f7832991874a6285e13da343963110f0d7c9c6e1e53f3ace901dc0"},
 ]
 
 [[package]]
@@ -1810,25 +1810,25 @@ testing = ["google-api-core[grpc] (>=1.31.5)"]
 
 [[package]]
 name = "protobuf"
-version = "4.23.0"
+version = "4.23.1"
 description = ""
 category = "main"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "protobuf-4.23.0-cp310-abi3-win32.whl", hash = "sha256:6c16657d6717a0c62d5d740cb354fbad1b0d8cb811669e06fc1caa0ff4799ddd"},
-    {file = "protobuf-4.23.0-cp310-abi3-win_amd64.whl", hash = "sha256:baca40d067dddd62141a129f244703160d278648b569e90bb0e3753067644711"},
-    {file = "protobuf-4.23.0-cp37-abi3-macosx_10_9_universal2.whl", hash = "sha256:2b94bd6df92d71bd1234a2ffe7ce96ddf6d10cf637a18d6b55ad0a89fbb7fc21"},
-    {file = "protobuf-4.23.0-cp37-abi3-manylinux2014_aarch64.whl", hash = "sha256:9f5a0fbfcdcc364f3986f9ed9f8bb1328fb84114fd790423ff3d7fdb0f85c2d1"},
-    {file = "protobuf-4.23.0-cp37-abi3-manylinux2014_x86_64.whl", hash = "sha256:ebde3a023b8e11bfa6c890ef34cd6a8b47d586f26135e86c21344fe433daf2e2"},
-    {file = "protobuf-4.23.0-cp37-cp37m-win32.whl", hash = "sha256:7cb5b9a05ce52c6a782bb97de52679bd3438ff2b7460eff5da348db65650f227"},
-    {file = "protobuf-4.23.0-cp37-cp37m-win_amd64.whl", hash = "sha256:6fe180b56e1169d72ecc4acbd39186339aed20af5384531b8e8979b02bbee159"},
-    {file = "protobuf-4.23.0-cp38-cp38-win32.whl", hash = "sha256:d5a35ff54e3f62e8fc7be02bb0d2fbc212bba1a5a9cc2748090690093996f07b"},
-    {file = "protobuf-4.23.0-cp38-cp38-win_amd64.whl", hash = "sha256:e62fb869762b4ba18666370e2f8a18f17f8ab92dd4467295c6d38be6f8fef60b"},
-    {file = "protobuf-4.23.0-cp39-cp39-win32.whl", hash = "sha256:03eee35b60317112a72d19c54d0bff7bc58ff12fea4cd7b018232bd99758ffdf"},
-    {file = "protobuf-4.23.0-cp39-cp39-win_amd64.whl", hash = "sha256:36f5370a930cb77c8ad2f4135590c672d0d2c72d4a707c7d0058dce4b4b4a598"},
-    {file = "protobuf-4.23.0-py3-none-any.whl", hash = "sha256:9744e934ea5855d12191040ea198eaf704ac78665d365a89d9572e3b627c2688"},
-    {file = "protobuf-4.23.0.tar.gz", hash = "sha256:5f1eba1da2a2f3f7df469fccddef3cc060b8a16cfe3cc65961ad36b4dbcf59c5"},
+    {file = "protobuf-4.23.1-cp310-abi3-win32.whl", hash = "sha256:410bcc0a5b279f634d3e16082ce221dfef7c3392fac723500e2e64d1806dd2be"},
+    {file = "protobuf-4.23.1-cp310-abi3-win_amd64.whl", hash = "sha256:32e78beda26d7a101fecf15d7a4a792278a0d26a31bc327ff05564a9d68ab8ee"},
+    {file = "protobuf-4.23.1-cp37-abi3-macosx_10_9_universal2.whl", hash = "sha256:f9510cac91e764e86acd74e2b7f7bc5e6127a7f3fb646d7c8033cfb84fd1176a"},
+    {file = "protobuf-4.23.1-cp37-abi3-manylinux2014_aarch64.whl", hash = "sha256:346990f634272caac1f09efbcfbbacb23098b1f606d172534c6fa2d9758bb436"},
+    {file = "protobuf-4.23.1-cp37-abi3-manylinux2014_x86_64.whl", hash = "sha256:3ce113b3f3362493bddc9069c2163a38f240a9ed685ff83e7bcb756b05e1deb0"},
+    {file = "protobuf-4.23.1-cp37-cp37m-win32.whl", hash = "sha256:2036a3a1e7fc27f973fa0a7888dce712393af644f4695385f117886abc792e39"},
+    {file = "protobuf-4.23.1-cp37-cp37m-win_amd64.whl", hash = "sha256:3b8905eafe4439076e1f58e9d1fa327025fd2777cf90f14083092ae47f77b0aa"},
+    {file = "protobuf-4.23.1-cp38-cp38-win32.whl", hash = "sha256:5b9cd6097e6acae48a68cb29b56bc79339be84eca65b486910bb1e7a30e2b7c1"},
+    {file = "protobuf-4.23.1-cp38-cp38-win_amd64.whl", hash = "sha256:decf119d54e820f298ee6d89c72d6b289ea240c32c521f00433f9dc420595f38"},
+    {file = "protobuf-4.23.1-cp39-cp39-win32.whl", hash = "sha256:91fac0753c3c4951fbb98a93271c43cc7cf3b93cf67747b3e600bb1e5cc14d61"},
+    {file = "protobuf-4.23.1-cp39-cp39-win_amd64.whl", hash = "sha256:ac50be82491369a9ec3710565777e4da87c6d2e20404e0abb1f3a8f10ffd20f0"},
+    {file = "protobuf-4.23.1-py3-none-any.whl", hash = "sha256:65f0ac96ef67d7dd09b19a46aad81a851b6f85f89725577f16de38f2d68ad477"},
+    {file = "protobuf-4.23.1.tar.gz", hash = "sha256:95789b569418a3e32a53f43d7763be3d490a831e9c08042539462b6d972c2d7e"},
 ]
 
 [[package]]
@@ -2488,14 +2488,14 @@ files = [
 
 [[package]]
 name = "stevedore"
-version = "5.0.0"
+version = "5.1.0"
 description = "Manage dynamic plugins for Python applications"
 category = "dev"
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "stevedore-5.0.0-py3-none-any.whl", hash = "sha256:bd5a71ff5e5e5f5ea983880e4a1dd1bb47f8feebbb3d95b592398e2f02194771"},
-    {file = "stevedore-5.0.0.tar.gz", hash = "sha256:2c428d2338976279e8eb2196f7a94910960d9f7ba2f41f3988511e95ca447021"},
+    {file = "stevedore-5.1.0-py3-none-any.whl", hash = "sha256:8cc040628f3cea5d7128f2e76cf486b2251a4e543c7b938f58d9a377f6694a2d"},
+    {file = "stevedore-5.1.0.tar.gz", hash = "sha256:a54534acf9b89bc7ed264807013b505bf07f74dbe4bcfa37d32bd063870b087c"},
 ]
 
 [package.dependencies]
@@ -2625,7 +2625,6 @@ opt-einsum = ["opt-einsum (>=3.3)"]
 [package.source]
 type = "url"
 url = "https://download.pytorch.org/whl/cpu/torch-2.0.1-cp310-none-macosx_10_9_x86_64.whl"
-
 [[package]]
 name = "torch"
 version = "2.0.1"
@@ -2650,7 +2649,6 @@ opt-einsum = ["opt-einsum (>=3.3)"]
 [package.source]
 type = "url"
 url = "https://download.pytorch.org/whl/cpu/torch-2.0.1-cp310-none-macosx_11_0_arm64.whl"
-
 [[package]]
 name = "torch"
 version = "2.0.1+cu118"
@@ -2676,7 +2674,6 @@ opt-einsum = ["opt-einsum (>=3.3)"]
 [package.source]
 type = "url"
 url = "https://download.pytorch.org/whl/cu118/torch-2.0.1%2Bcu118-cp310-cp310-linux_x86_64.whl"
-
 [[package]]
 name = "torch"
 version = "2.0.1+cu118"
@@ -2701,7 +2698,6 @@ opt-einsum = ["opt-einsum (>=3.3)"]
 [package.source]
 type = "url"
 url = "https://download.pytorch.org/whl/cu118/torch-2.0.1%2Bcu118-cp310-cp310-win_amd64.whl"
-
 [[package]]
 name = "torchaudio"
 version = "2.0.2"
@@ -2719,7 +2715,6 @@ torch = "2.0.1"
 [package.source]
 type = "url"
 url = "https://download.pytorch.org/whl/cpu/torchaudio-2.0.2-cp310-cp310-macosx_10_9_x86_64.whl"
-
 [[package]]
 name = "torchaudio"
 version = "2.0.2"
@@ -2737,7 +2732,6 @@ torch = "2.0.1"
 [package.source]
 type = "url"
 url = "https://download.pytorch.org/whl/cpu/torchaudio-2.0.2-cp310-cp310-macosx_11_0_arm64.whl"
-
 [[package]]
 name = "torchaudio"
 version = "2.0.2+cu118"
@@ -2755,7 +2749,6 @@ torch = "2.0.1"
 [package.source]
 type = "url"
 url = "https://download.pytorch.org/whl/cu118/torchaudio-2.0.2%2Bcu118-cp310-cp310-linux_x86_64.whl"
-
 [[package]]
 name = "torchaudio"
 version = "2.0.2+cu118"
@@ -2773,7 +2766,6 @@ torch = "2.0.1"
 [package.source]
 type = "url"
 url = "https://download.pytorch.org/whl/cu118/torchaudio-2.0.2%2Bcu118-cp310-cp310-win_amd64.whl"
-
 [[package]]
 name = "tqdm"
 version = "4.65.0"
@@ -2895,7 +2887,6 @@ pydantic = ">=1.9.2,<2"
 [package.source]
 type = "url"
 url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cpu-cp38-abi3-linux_x86_64.whl"
-
 [[package]]
 name = "voicevox_core"
 version = "0.14.3+cpu"
@@ -2914,7 +2905,6 @@ pydantic = ">=1.9.2,<2"
 [package.source]
 type = "url"
 url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cpu-cp38-abi3-macosx_10_7_x86_64.whl"
-
 [[package]]
 name = "voicevox_core"
 version = "0.14.3+cpu"
@@ -2933,7 +2923,6 @@ pydantic = ">=1.9.2,<2"
 [package.source]
 type = "url"
 url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cpu-cp38-abi3-macosx_11_0_arm64.whl"
-
 [[package]]
 name = "voicevox_core"
 version = "0.14.3+cuda"
@@ -2952,7 +2941,6 @@ pydantic = ">=1.9.2,<2"
 [package.source]
 type = "url"
 url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cuda-cp38-abi3-win_amd64.whl"
-
 [[package]]
 name = "vstreamer-protos"
 version = "0.1.0"
@@ -2961,7 +2949,7 @@ category = "main"
 optional = false
 python-versions = ">=3.10,<4.0"
 files = [
-    {file = "vstreamer_protos-0.1.0-py3-none-any.whl", hash = "sha256:f691fb6344bd6536f2b62c7f015b7e03348691f63691a805d97c2f292be2e429"},
+    {file = "vstreamer_protos-0.1.0-py3-none-any.whl", hash = "sha256:aa26fe9bdc6bc74b4146d6e61ad6eaa707768bcc98ae42fda60baaec3b7b2d55"},
 ]
 
 [package.dependencies]
@@ -2970,8 +2958,7 @@ protobuf = ">=4.22.3,<5.0.0"
 
 [package.source]
 type = "url"
-url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-91cf58c5/vstreamer_protos-0.1.0-py3-none-any.whl"
-
+url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-19718583/vstreamer_protos-0.1.0-py3-none-any.whl"
 [extras]
 audio = ["PyAudio"]
 gui = ["pillow", "ttkbootstrap"]
@@ -2984,4 +2971,4 @@ whisper = ["openai-whisper", "torch", "torch", "torch", "torch"]
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.10,<3.12"
-content-hash = "7775980ad9efbce238823ec671aa869ba0db08080806656bd89e1d011cb1c531"
+content-hash = "2be2b16f6e46a258e7e44e901d24b1b16e912e24790a965070572cc9b4e1daf0"
