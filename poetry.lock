@@ -2625,6 +2625,7 @@ opt-einsum = ["opt-einsum (>=3.3)"]
 [package.source]
 type = "url"
 url = "https://download.pytorch.org/whl/cpu/torch-2.0.1-cp310-none-macosx_10_9_x86_64.whl"
+
 [[package]]
 name = "torch"
 version = "2.0.1"
@@ -2649,6 +2650,7 @@ opt-einsum = ["opt-einsum (>=3.3)"]
 [package.source]
 type = "url"
 url = "https://download.pytorch.org/whl/cpu/torch-2.0.1-cp310-none-macosx_11_0_arm64.whl"
+
 [[package]]
 name = "torch"
 version = "2.0.1+cu118"
@@ -2674,6 +2676,7 @@ opt-einsum = ["opt-einsum (>=3.3)"]
 [package.source]
 type = "url"
 url = "https://download.pytorch.org/whl/cu118/torch-2.0.1%2Bcu118-cp310-cp310-linux_x86_64.whl"
+
 [[package]]
 name = "torch"
 version = "2.0.1+cu118"
@@ -2698,6 +2701,7 @@ opt-einsum = ["opt-einsum (>=3.3)"]
 [package.source]
 type = "url"
 url = "https://download.pytorch.org/whl/cu118/torch-2.0.1%2Bcu118-cp310-cp310-win_amd64.whl"
+
 [[package]]
 name = "torchaudio"
 version = "2.0.2"
@@ -2715,6 +2719,7 @@ torch = "2.0.1"
 [package.source]
 type = "url"
 url = "https://download.pytorch.org/whl/cpu/torchaudio-2.0.2-cp310-cp310-macosx_10_9_x86_64.whl"
+
 [[package]]
 name = "torchaudio"
 version = "2.0.2"
@@ -2732,6 +2737,7 @@ torch = "2.0.1"
 [package.source]
 type = "url"
 url = "https://download.pytorch.org/whl/cpu/torchaudio-2.0.2-cp310-cp310-macosx_11_0_arm64.whl"
+
 [[package]]
 name = "torchaudio"
 version = "2.0.2+cu118"
@@ -2749,6 +2755,7 @@ torch = "2.0.1"
 [package.source]
 type = "url"
 url = "https://download.pytorch.org/whl/cu118/torchaudio-2.0.2%2Bcu118-cp310-cp310-linux_x86_64.whl"
+
 [[package]]
 name = "torchaudio"
 version = "2.0.2+cu118"
@@ -2766,6 +2773,7 @@ torch = "2.0.1"
 [package.source]
 type = "url"
 url = "https://download.pytorch.org/whl/cu118/torchaudio-2.0.2%2Bcu118-cp310-cp310-win_amd64.whl"
+
 [[package]]
 name = "tqdm"
 version = "4.65.0"
@@ -2887,6 +2895,7 @@ pydantic = ">=1.9.2,<2"
 [package.source]
 type = "url"
 url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cpu-cp38-abi3-linux_x86_64.whl"
+
 [[package]]
 name = "voicevox_core"
 version = "0.14.3+cpu"
@@ -2905,6 +2914,7 @@ pydantic = ">=1.9.2,<2"
 [package.source]
 type = "url"
 url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cpu-cp38-abi3-macosx_10_7_x86_64.whl"
+
 [[package]]
 name = "voicevox_core"
 version = "0.14.3+cpu"
@@ -2923,6 +2933,7 @@ pydantic = ">=1.9.2,<2"
 [package.source]
 type = "url"
 url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cpu-cp38-abi3-macosx_11_0_arm64.whl"
+
 [[package]]
 name = "voicevox_core"
 version = "0.14.3+cuda"
@@ -2941,6 +2952,7 @@ pydantic = ">=1.9.2,<2"
 [package.source]
 type = "url"
 url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cuda-cp38-abi3-win_amd64.whl"
+
 [[package]]
 name = "vstreamer-protos"
 version = "0.1.0"
@@ -2949,7 +2961,7 @@ category = "main"
 optional = false
 python-versions = ">=3.10,<4.0"
 files = [
-    {file = "vstreamer_protos-0.1.0-py3-none-any.whl", hash = "sha256:aa26fe9bdc6bc74b4146d6e61ad6eaa707768bcc98ae42fda60baaec3b7b2d55"},
+    {file = "vstreamer_protos-0.1.0-py3-none-any.whl", hash = "sha256:a40f8b733247dc122c04c739e1bd39fbdd43a393e83226440ac4d934c134c593"},
 ]
 
 [package.dependencies]
@@ -2958,7 +2970,7 @@ protobuf = ">=4.22.3,<5.0.0"
 
 [package.source]
 type = "url"
-url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-19718583/vstreamer_protos-0.1.0-py3-none-any.whl"
+url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-39b8523d/vstreamer_protos-0.1.0-py3-none-any.whl"
 [extras]
 audio = ["PyAudio"]
 gui = ["pillow", "ttkbootstrap"]
@@ -2971,4 +2983,4 @@ whisper = ["openai-whisper", "torch", "torch", "torch", "torch"]
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.10,<3.12"
-content-hash = "2be2b16f6e46a258e7e44e901d24b1b16e912e24790a965070572cc9b4e1daf0"
+content-hash = "a546f12385a90e4372ea5ecafc01f65aa2adef3aeb61924eb9c326276be29c10"

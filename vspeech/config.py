@@ -295,6 +295,7 @@ class RvcConfig(BaseModel):
     quality: RvcQuality = Field(default=RvcQuality.zero)
     gpu_id: int = Field(default=0)
     f0_extractor_type: F0ExtractorType = Field(default=F0ExtractorType.harvest)
+    input_boost: float = Field(default=1.0)
 
 
 class CustomTomlEncoder(TomlArraySeparatorEncoder):  # type: ignore

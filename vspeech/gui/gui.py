@@ -815,6 +815,13 @@ class VspeechGUI(Frame):
             candidates=f0_types,
             config_name=f"{prefix}.f0_extractor_type",
         ).grid(column=1, row=current_row, sticky=EW)
+        self.draw_sb(
+            frame=tab_frame,
+            config_name=f"{prefix}.input_boost",
+            from_=0,
+            to=5,
+            increment=0.1,
+        ).grid(column=2, row=current_row, sticky=EW)
         notebook.add(tab_frame, text="rvc")
 
     def draw_vr2_tab(self, notebook: Notebook):

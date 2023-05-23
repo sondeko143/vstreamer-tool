@@ -3,12 +3,14 @@ from asyncio import AbstractEventLoop
 from asyncio import CancelledError
 from asyncio import Queue
 from asyncio import to_thread
+from audioop import mul
 from functools import partial
 from typing import Any
 
 from vspeech.config import EventType
 from vspeech.config import RvcConfig
 from vspeech.config import SampleFormat
+from vspeech.config import get_sample_size
 from vspeech.logger import logger
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import SoundOutput
@@ -45,7 +47,11 @@ async def rvc_worker(
             logger.debug("voice changing...")
             audio = await to_thread(
                 change_voice,
-                voice_frames=speech.sound.data,
+                voice_frames=mul(
+                    speech.sound.data,
+                    get_sample_size(speech.sound.format),
+                    rvc_config.input_boost,
+                ),
                 voice_sample_rate=speech.sound.rate,
                 rvc_config=rvc_config,
                 half_available=half_available,

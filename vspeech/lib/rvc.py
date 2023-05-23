@@ -225,7 +225,8 @@ def change_voice(
 ) -> NDArray[np.int16]:
     sound_data = np.frombuffer(voice_frames, dtype="int16")
     audio = sound_data.astype(np.float32) / 32768.0
-    audio = cast(NDArray[np.float32], resample(audio, voice_sample_rate, 16000))
+    if voice_sample_rate != 16000:
+        audio = cast(NDArray[np.float32], resample(audio, voice_sample_rate, 16000))
 
     repeat = 3 if half_available else 1
     repeat *= rvc_config.quality.value
