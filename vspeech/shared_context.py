@@ -9,6 +9,8 @@ from typing import Dict
 from typing import Iterable
 from typing import TypeAlias
 from typing import cast
+from urllib.parse import ParseResult
+from urllib.parse import parse_qs
 from urllib.parse import urlparse
 from urllib.parse import urlunparse
 from uuid import UUID
@@ -29,9 +31,11 @@ from vstreamer_protos.commander.commander_pb2 import TRANSLATE
 from vstreamer_protos.commander.commander_pb2 import TTS
 from vstreamer_protos.commander.commander_pb2 import VC
 from vstreamer_protos.commander.commander_pb2 import Command
+from vstreamer_protos.commander.commander_pb2 import Operand
 from vstreamer_protos.commander.commander_pb2 import Operation
 from vstreamer_protos.commander.commander_pb2 import OperationChain
 from vstreamer_protos.commander.commander_pb2 import OperationRoute
+from vstreamer_protos.commander.commander_pb2 import Queries
 from vstreamer_protos.commander.commander_pb2 import Sound
 
 from vspeech.config import Config
@@ -117,38 +121,103 @@ def operation_to_event(operation: Operation) -> EventType:
 
 
 @dataclass
+class Params:
+    target_language_code: str = ""
+    source_language_code: str = ""
+
+    def to_pb(self):
+        return Queries(
+            target_language_code=self.target_language_code,
+            source_language_code=self.source_language_code,
+        )
+
+    @classmethod
+    def from_qs(cls, url: ParseResult):
+        queries: defaultdict[str, list[str]] = defaultdict(list)
+        queries.update(parse_qs(url.query))
+        return cls(
+            target_language_code=Params.get_param_from_qs(
+                queries, set(("target_language_code", "t"))
+            ),
+            source_language_code=Params.get_param_from_qs(
+                queries, set(("source_language_code", "s"))
+            ),
+        )
+
+    @classmethod
+    def from_pb(cls, queries: Queries):
+        return cls(
+            target_language_code=queries.target_language_code,
+            source_language_code=queries.source_language_code,
+        )
+
+    @staticmethod
+    def get_param_from_qs(queries: defaultdict[str, list[str]], keys: set[str]):
+        return "".join(next(iter(queries[q]), "") for q in keys)
+
+    def __hash__(self) -> int:
+        return hash(self.target_language_code) + hash(self.source_language_code)
+
+    def __eq__(self, __value: object) -> bool:
+        if not isinstance(__value, Params):
+            return False
+        return (
+            self.target_language_code == __value.target_language_code
+            and self.source_language_code == __value.source_language_code
+        )
+
+    def __bool__(self) -> bool:
+        return bool(self.target_language_code) and bool(self.source_language_code)
+
+
+@dataclass
 class EventAddress:
     event: EventType
     remote: str = ""
+    params: Params = field(default_factory=Params)
 
     @classmethod
     def from_string(cls, destination: str):
-        """<endpoint_uri>/<event_name>"""
+        """<endpoint_uri>/<event_name>?<queries>"""
         url = urlparse(destination)
         target_name = url.path.strip("/")
         address = (
             urlunparse((url.scheme, url.netloc, "", "", "", "")) if url.netloc else ""
         )
-        return cls(event=EventType.from_string(target_name), remote=address)
+        return cls(
+            event=EventType.from_string(target_name),
+            remote=address,
+            params=Params.from_qs(url),
+        )
 
     def to_pb(self) -> OperationRoute:
         return OperationRoute(
-            operation=event_to_operation(self.event), remote=self.remote
+            operation=event_to_operation(self.event),
+            remote=self.remote,
+            queries=self.params.to_pb(),
         )
 
     def __hash__(self) -> int:
         return hash(self.event) + hash(self.remote)
 
     def __eq__(self, __value: object) -> bool:
-        if not self.remote and isinstance(__value, EventType):
+        if not self.remote and not self.params and isinstance(__value, EventType):
             return self.event == __value
         if not isinstance(__value, EventAddress):
             return False
-        return self.event == __value.event and self.remote == __value.remote
+        return (
+            self.event == __value.event
+            and self.remote == __value.remote
+            and self.params == __value.params
+        )
 
     @classmethod
     def from_pb(cls, op_route: OperationRoute) -> "EventAddress":
-        return cls(event=operation_to_event(op_route.operation), remote=op_route.remote)
+        return cls(
+            event=operation_to_event(op_route.operation),
+            remote=op_route.remote,
+            params=Params.from_pb(op_route.queries),
+        )
 
 
 FollowingEvents: TypeAlias = list[list[EventAddress]]
@@ -211,8 +280,10 @@ class WorkerOutput:
             chains=[
                 OperationChain(operations=[f.to_pb() for f in fs]) for fs in events
             ],
-            text=self.text,
-            sound=self.sound.to_pb() if self.sound else None,
+            operand=Operand(
+                text=self.text,
+                sound=self.sound.to_pb() if self.sound else None,
+            ),
         )
 
     @classmethod
@@ -258,7 +329,7 @@ class SoundInput(BaseModel):
 
 class WorkerInput(BaseModel):
     input_id: UUID
-    current_event: EventType
+    current_event: EventAddress
     following_events: FollowingEvents
     text: str
     sound: SoundInput
@@ -282,7 +353,7 @@ class WorkerInput(BaseModel):
         return [
             WorkerInput(
                 input_id=output.input_id,
-                current_event=first_event.event,
+                current_event=first_event,
                 following_events=following_events,
                 text=output.text or "",
                 sound=SoundInput.from_orm(output.sound)
@@ -302,12 +373,12 @@ class WorkerInput(BaseModel):
         return [
             WorkerInput(
                 input_id=input_id,
-                current_event=first_event.event,
+                current_event=first_event,
                 following_events=following_events,
-                text=command.text,
-                sound=SoundInput.from_orm(command.sound),
-                file_path=command.file_path,
-                filters=command.filters,
+                text=command.operand.text,
+                sound=SoundInput.from_orm(command.operand.sound),
+                file_path=command.operand.file_path,
+                filters=command.operand.filters,
             )
             for first_event, following_events in first_event_maps.items()
         ]

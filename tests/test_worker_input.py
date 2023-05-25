@@ -9,6 +9,7 @@ from vstreamer_protos.commander.commander_pb2 import SUBTITLE
 from vstreamer_protos.commander.commander_pb2 import TRANSCRIBE
 from vstreamer_protos.commander.commander_pb2 import TTS
 from vstreamer_protos.commander.commander_pb2 import Command
+from vstreamer_protos.commander.commander_pb2 import Operand
 from vstreamer_protos.commander.commander_pb2 import Operation
 from vstreamer_protos.commander.commander_pb2 import OperationChain
 from vstreamer_protos.commander.commander_pb2 import OperationRoute
@@ -37,10 +38,12 @@ def create_command(
             OperationChain(operations=[OperationRoute(operation=op)])
             for op in operations
         ],
-        sound=sound,
-        text=text,
-        file_path=file_path,
-        filters=filters,
+        operand=Operand(
+            sound=sound,
+            text=text,
+            file_path=file_path,
+            filters=filters,
+        ),
     )
 
 

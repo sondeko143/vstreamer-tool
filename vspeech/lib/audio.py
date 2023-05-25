@@ -51,6 +51,10 @@ def get_device_name(p: PyAudio, index: int):
     return DeviceInfo.parse_obj(p.get_device_info_by_index(index)).name
 
 
+def get_device_info(p: PyAudio, index: int):
+    return DeviceInfo.parse_obj(p.get_device_info_by_index(index))
+
+
 def search_host_api_by_type(p: PyAudio, name: str):
     for i in range(p.get_host_api_count()):
         host_api = HostAPIInfo.parse_obj(p.get_host_api_info_by_index(i))

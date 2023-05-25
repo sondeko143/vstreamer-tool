@@ -4,7 +4,9 @@ from asyncio import CancelledError
 from asyncio import Queue
 from asyncio import Task
 from asyncio import to_thread
+from dataclasses import InitVar
 from dataclasses import dataclass
+from dataclasses import field
 from typing import NoReturn
 
 from pyaudio import PyAudio
@@ -13,9 +15,11 @@ from pyaudio import Stream as PaStream
 from vspeech.config import PlaybackConfig
 from vspeech.config import SampleFormat
 from vspeech.config import get_sample_size
-from vspeech.lib.audio import get_device_name
+from vspeech.lib.audio import DeviceInfo
+from vspeech.lib.audio import get_device_info
 from vspeech.lib.audio import get_pa_format
 from vspeech.lib.audio import search_device
+from vspeech.lib.audio import search_device_by_name
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
@@ -24,41 +28,62 @@ from vspeech.shared_context import WorkerInput
 
 @dataclass
 class OutputStream:
-    device_index: int = 0
+    config: InitVar[PlaybackConfig]
     rate: int = 0
     format: SampleFormat = SampleFormat.INVALID
     channels: int = 0
     stream: PaStream | None = None
+    audio: PyAudio = field(init=False)
+    device: DeviceInfo = field(init=False)
+
+    def __post_init__(self, config: PlaybackConfig):
+        self.audio = PyAudio()
+        self.device = get_output_device(audio=self.audio, config=config)
+        logger.info("setting device %s: %s", self.device.index, self.device.name)
 
     def update_stream_if_changed(
         self,
-        audio: PyAudio,
-        device_index: int,
         rate: int,
         format: SampleFormat,
         channels: int,
     ):
+        output_device = get_device_info(self.audio, self.device.index)
         if (
-            self.device_index == device_index
+            self.stream
             and self.rate == rate
             and self.format == format
             and self.channels == channels
+            and output_device.name == self.device.name
         ):
+            logger.debug("stream is reused.")
             return
-        self.close()
-        output_device_name = get_device_name(audio, device_index)
-        logger.info("use output device %s: %s", device_index, output_device_name)
-        self.device_index = device_index
+
+        self.audio.terminate()
+        del self.audio
+        self.audio = PyAudio()
+        self.device = self.search_appropriate_device()
+        logger.info("use device %s: %s", self.device.index, self.device.name)
         self.rate = rate
         self.format = format
         self.channels = channels
-        self.stream = audio.open(
+        self.stream = self.audio.open(
             format=get_pa_format(format),
             channels=channels,
             rate=rate,
             output=True,
-            output_device_index=device_index,
+            output_device_index=self.device.index,
         )
+
+    def search_appropriate_device(self):
+        output_device = search_device_by_name(
+            self.audio,
+            host_api_index=self.device.host_api,
+            name=self.device.name,
+            output=True,
+        )
+        if not output_device:
+            raise TypeError(f"not found output device {self.device.name}")
+        return output_device
 
     async def playback(self, volume: int, data: bytes):
         if not self.stream:
@@ -69,12 +94,8 @@ class OutputStream:
             _data = data
         await to_thread(self.stream.write, _data)
 
-    def close(self):
-        if self.stream:
-            self.stream.close()
 
-
-def get_output_device_index(audio: PyAudio, config: PlaybackConfig):
+def get_output_device(audio: PyAudio, config: PlaybackConfig):
     output_device_index = config.output_device_index
     if output_device_index is None:
         output_device = search_device(
@@ -86,24 +107,20 @@ def get_output_device_index(audio: PyAudio, config: PlaybackConfig):
         if not output_device:
             raise TypeError("not found output device")
         output_device_index = output_device.index
-    return output_device_index
+    return get_device_info(audio, output_device_index)
 
 
 async def pyaudio_playback_worker(
     config: PlaybackConfig,
     in_queue: Queue[WorkerInput],
 ):
-    audio = PyAudio()
-    device = get_output_device_index(audio=audio, config=config)
-    output_stream = OutputStream()
+    output_stream = OutputStream(config)
     try:
         logger.info("playback worker started.")
         while True:
             speech = await in_queue.get()
             try:
                 output_stream.update_stream_if_changed(
-                    audio=audio,
-                    device_index=device,
                     rate=speech.sound.rate,
                     format=speech.sound.format,
                     channels=speech.sound.channels,
@@ -118,8 +135,8 @@ async def pyaudio_playback_worker(
             except Exception as e:
                 logger.warning("%s", e)
     finally:
-        output_stream.close()
-        audio.terminate()
+        output_stream.audio.terminate()
+        del output_stream.audio
 
 
 async def playback_worker(context: SharedContext, in_queue: Queue[WorkerInput]):

@@ -14,7 +14,6 @@ class Voicevox:
             open_jtalk_dict_dir=open_jtalk_dict_dir.expanduser(),
         )
 
-    # ラッパー関数
     def load_model(self, speaker_id: int):
         self.core.load_model(speaker_id)
 

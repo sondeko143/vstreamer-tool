@@ -67,8 +67,8 @@ async def send_command(
             logger.info(
                 "send: o(%s), s(%s), t(%s), to %s",
                 command.chains,
-                len(command.sound.data),
-                command.text,
+                len(command.operand.sound.data),
+                command.operand.text,
                 address,
             )
             res = cast(Response, await stub.process_command(command))

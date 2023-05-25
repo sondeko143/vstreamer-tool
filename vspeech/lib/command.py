@@ -25,7 +25,7 @@ def text_filter(filters: List[ReplaceFilter], text: Optional[str]):
 
 
 def transform_content(command: WorkerInput, filters: List[ReplaceFilter]):
-    if is_text_event(command.current_event):
+    if is_text_event(command.current_event.event):
         command.text = text_filter(filters=filters, text=command.text)
 
 
@@ -39,7 +39,7 @@ def put_queue(input_queues: InputQueues, dest_event: EventType, request: WorkerI
 
 def process_command(context: SharedContext, request: WorkerInput):
     transform_content(filters=context.config.filters, command=request)
-    current = request.current_event
+    current = request.current_event.event
     if EventType.transcription == current:
         put_queue(
             input_queues=context.input_queues,

@@ -1,3 +1,4 @@
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import pytest
@@ -7,11 +8,13 @@ from vstreamer_protos.commander.commander_pb2 import TRANSLATE
 from vstreamer_protos.commander.commander_pb2 import TTS
 from vstreamer_protos.commander.commander_pb2 import OperationChain
 from vstreamer_protos.commander.commander_pb2 import OperationRoute
+from vstreamer_protos.commander.commander_pb2 import Queries
 
 from vspeech.config import EventType
 from vspeech.config import SampleFormat
 from vspeech.shared_context import EventAddress
 from vspeech.shared_context import FollowingEvents
+from vspeech.shared_context import Params
 from vspeech.shared_context import SoundOutput
 from vspeech.shared_context import WorkerInput
 from vspeech.shared_context import WorkerOutput
@@ -121,12 +124,51 @@ def test_worker_output_to_command(followings: FollowingEvents):
     assert command.chains == [
         OperationChain(
             operations=[
-                OperationRoute(operation=TRANSCRIBE, remote="remote"),
-                OperationRoute(operation=TRANSLATE, remote=""),
-                OperationRoute(operation=TTS, remote=""),
+                OperationRoute(
+                    operation=TRANSCRIBE, remote="remote", queries=Queries()
+                ),
+                OperationRoute(operation=TRANSLATE, remote="", queries=Queries()),
+                OperationRoute(operation=TTS, remote="", queries=Queries()),
             ],
         ),
         OperationChain(
-            operations=[OperationRoute(operation=PLAYBACK, remote="remote")]
+            operations=[
+                OperationRoute(operation=PLAYBACK, remote="remote", queries=Queries())
+            ]
         ),
     ]
+
+
+def test_parse_event_long_one():
+    url = urlparse("//localhost:8080/event?target_language_code=ja")
+    p = Params.from_qs(url)
+    assert "ja" == "".join(p.target_language_code)
+
+
+def test_parse_event_short_one():
+    url = urlparse("//localhost:8080/event?t=ja")
+    p = Params.from_qs(url)
+    assert "ja" == "".join(p.target_language_code)
+
+
+def test_parse_event_long_all():
+    url = urlparse(
+        "//localhost:8080/event?target_language_code=ja&source_language_code=en"
+    )
+    p = Params.from_qs(url)
+    assert "ja" == "".join(p.target_language_code)
+    assert "en" == "".join(p.source_language_code)
+
+
+def test_parse_event_short_all():
+    url = urlparse("//localhost:8080/event?t=ja&s=en")
+    p = Params.from_qs(url)
+    assert "ja" == "".join(p.target_language_code)
+    assert "en" == "".join(p.source_language_code)
+
+
+def test_parse_event_duplicate():
+    url = urlparse("//localhost:8080/event?t=ja&t=kr&s=en&s=sp")
+    p = Params.from_qs(url)
+    assert "ja" == "".join(p.target_language_code)
+    assert "en" == "".join(p.source_language_code)

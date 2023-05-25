@@ -57,6 +57,7 @@ from vstreamer_protos.commander.commander_pb2 import RELOAD
 from vstreamer_protos.commander.commander_pb2 import RESUME
 from vstreamer_protos.commander.commander_pb2 import SET_FILTERS
 from vstreamer_protos.commander.commander_pb2 import Command
+from vstreamer_protos.commander.commander_pb2 import Operand
 from vstreamer_protos.commander.commander_pb2 import OperationChain
 from vstreamer_protos.commander.commander_pb2 import OperationRoute
 from vstreamer_protos.commander.commander_pb2 import Response
@@ -212,10 +213,6 @@ class VspeechGUI(Frame):
     templates: Variable
     filters: Variable
     routes_list: Variable
-
-    @staticmethod
-    def get_operation_from_str(ope_str: str):
-        return getattr(vstreamer_protos.commander.commander_pb2, ope_str.upper())
 
     @staticmethod
     def is_file_json(file_path: Union[str, Path]):
@@ -382,7 +379,9 @@ class VspeechGUI(Frame):
         add_bt = Button(
             tab_frame,
             text="reload devices",
-            command=partial(self.update_completion_list, cb, True, False),
+            command=partial(
+                self.update_completion_list, cb=cb, input=True, output=False
+            ),
         )
         add_bt.grid(padx=5, pady=5, column=0, row=current_row, sticky=W)
         current_row += 1
@@ -508,7 +507,9 @@ class VspeechGUI(Frame):
         add_bt = Button(
             tab_frame,
             text="reload devices",
-            command=partial(self.update_completion_list, cb, False, True),
+            command=partial(
+                self.update_completion_list, cb=cb, input=False, output=True
+            ),
         )
         add_bt.grid(padx=5, pady=5, column=0, row=current_row, sticky=W)
         current_row += 1
@@ -672,13 +673,6 @@ class VspeechGUI(Frame):
         current_row = 0
         self.draw_checkbutton(frame=tab_frame, config_name=f"{prefix}.enable").grid(
             column=0, row=current_row, columnspan=max_columns, sticky=W
-        )
-        current_row += 1
-        self.draw_tb(tab_frame, config_name=f"{prefix}.source_language_code").grid(
-            column=0, row=current_row, sticky=EW
-        )
-        self.draw_tb(tab_frame, config_name=f"{prefix}.target_language_code").grid(
-            column=1, row=current_row, sticky=EW
         )
         current_row += 1
         notebook.add(tab_frame, text="transl")
@@ -984,11 +978,7 @@ class VspeechGUI(Frame):
     def operations_for_send_text(self) -> list[OperationChain]:
         return [
             OperationChain(
-                operations=[
-                    OperationRoute(operation=VspeechGUI.get_operation_from_str(o))
-                    for o in os
-                    if o
-                ]
+                operations=[EventAddress.from_string(o).to_pb() for o in os if o]
             )
             for os in self.config.text_send_operations
             if os
@@ -1001,7 +991,9 @@ class VspeechGUI(Frame):
             self.send_message(
                 Command(
                     chains=self.operations_for_send_text(),
-                    text=text.strip(),
+                    operand=Operand(
+                        text=text.strip(),
+                    ),
                 )
             )
 
@@ -1048,7 +1040,9 @@ class VspeechGUI(Frame):
                 chains=[
                     OperationChain(operations=[OperationRoute(operation=SET_FILTERS)])
                 ],
-                filters=filters,
+                operand=Operand(
+                    filters=filters,
+                ),
             )
         )
         self.master.title(f"vspeech: {self.config_file_path}*")
@@ -1068,7 +1062,9 @@ class VspeechGUI(Frame):
                 chains=[
                     OperationChain(operations=[OperationRoute(operation=SET_FILTERS)])
                 ],
-                filters=filters,
+                operand=Operand(
+                    filters=filters,
+                ),
             )
         )
         self.master.title(f"vspeech: {self.config_file_path}*")
@@ -1278,7 +1274,9 @@ class VspeechGUI(Frame):
                 self.send_message(
                     Command(
                         chains=self.operations_for_send_text(),
-                        text=line.strip(),
+                        operand=Operand(
+                            text=line.strip(),
+                        ),
                     )
                 )
 
@@ -1350,7 +1348,9 @@ class VspeechGUI(Frame):
                     chains=[
                         OperationChain(operations=[OperationRoute(operation=RELOAD)])
                     ],
-                    file_path=str(temp_config_file_path.resolve()),
+                    operand=Operand(
+                        file_path=str(temp_config_file_path.resolve()),
+                    ),
                 )
             )
         finally:

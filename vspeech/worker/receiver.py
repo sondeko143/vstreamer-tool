@@ -26,10 +26,24 @@ class Commander(CommanderServicer):
         logger.info(
             "receive: o(%s), t(%s), sound(%s), %s, %s from %s",
             request.chains,
-            request.text,
-            len(request.sound.data),
-            request.file_path,
-            request.filters,
+            request.operand.text,
+            len(request.operand.sound.data),
+            request.operand.file_path,
+            request.operand.filters,
+            cast(str, context.peer()),
+        )
+        for worker_input in WorkerInput.from_command(request):
+            process_command(self.context, worker_input)
+        return Response(result=True)
+
+    async def sync_process_command(self, request: Command, context: ServicerContext):
+        logger.info(
+            "receive: o(%s), t(%s), sound(%s), %s, %s from %s",
+            request.chains,
+            request.operand.text,
+            len(request.operand.sound.data),
+            request.operand.file_path,
+            request.operand.filters,
             cast(str, context.peer()),
         )
         for worker_input in WorkerInput.from_command(request):

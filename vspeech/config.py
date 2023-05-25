@@ -218,8 +218,6 @@ class SubtitleConfig(BaseModel):
 
 class TranslationConfig(BaseModel):
     enable: bool = True
-    source_language_code: Optional[str] = "ja"
-    target_language_code: str = "en"
 
 
 class VcConfig(BaseModel):

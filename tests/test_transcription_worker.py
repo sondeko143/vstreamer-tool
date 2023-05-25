@@ -8,6 +8,7 @@ from vspeech.config import AmiConfig
 from vspeech.config import EventType
 from vspeech.config import SampleFormat
 from vspeech.config import TranscriptionConfig
+from vspeech.shared_context import EventAddress
 from vspeech.shared_context import SoundInput
 from vspeech.shared_context import WorkerInput
 from vspeech.worker.transcription import transcript_worker_ami
@@ -17,7 +18,7 @@ async def put_queue(queue: Queue[WorkerInput]):
     await queue.put(
         WorkerInput(
             input_id=uuid4(),
-            current_event=EventType.transcription,
+            current_event=EventAddress(EventType.transcription),
             following_events=[],
             text="",
             sound=SoundInput(

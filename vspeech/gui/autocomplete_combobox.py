@@ -46,7 +46,7 @@ class AutocompleteCombobox(ttk.Combobox, Generic[T]):
         self.position = 0
         self.bind("<KeyRelease>", self.handle_keyrelease)
         self["values"] = self._completion_list  # Setup our popup menu
-        self._label_value_map = label_value_map
+        self._label_value_map = label_value_map.copy()
 
     def autocomplete(self, delta: int = 0):
         """autocomplete the Combobox, delta may be 0/1/-1 to cycle through possible hits"""

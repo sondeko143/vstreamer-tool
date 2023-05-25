@@ -11,7 +11,6 @@ from google.cloud.translate_v3 import TranslateTextRequest
 from google.cloud.translate_v3 import TranslationServiceAsyncClient
 
 from vspeech.config import GcpConfig
-from vspeech.config import TranslationConfig
 from vspeech.lib.gcp import get_credentials
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
@@ -40,7 +39,7 @@ async def translate_request(
 
 
 async def translation_worker_google(
-    config: TranslationConfig, gcp_config: GcpConfig, in_queue: Queue[WorkerInput]
+    gcp_config: GcpConfig, in_queue: Queue[WorkerInput]
 ) -> AsyncGenerator[WorkerOutput, None]:
     credentials = get_credentials(gcp_config)
     client = TranslationServiceAsyncClient(credentials=credentials)
@@ -49,8 +48,8 @@ async def translation_worker_google(
         transcribed = await in_queue.get()
         request = TranslateTextRequest(
             contents=[transcribed.text],
-            source_language_code=config.source_language_code,
-            target_language_code=config.target_language_code,
+            source_language_code=transcribed.current_event.params.source_language_code,
+            target_language_code=transcribed.current_event.params.target_language_code,
             parent=f"projects/{credentials.project_id}",  # type: ignore
         )
         try:
@@ -89,9 +88,7 @@ async def translation_worker(
             generator = partial(
                 translation_worker_google, gcp_config=context.config.gcp
             )
-            async for translated in generator(
-                config=context.config.translation, in_queue=in_queue
-            ):
+            async for translated in generator(in_queue=in_queue):
                 out_queue.put_nowait(translated)
                 if context.need_reload:
                     break
