@@ -38,8 +38,8 @@ faiss-cpu = [
     { version = "^1.7.2", platform = "win32", optional = true },
     { version = "^1.7.2", platform = "darwin", optional = true },
 ]
-onnxruntime-gpu = { version = "^1.14.1", optional = true, platform = "win32" }
-onnxruntime = { version = "^1.14.1", optional = true, platform = "darwin" }
+onnxruntime-gpu = { version = "1.14.1", optional = true, platform = "win32" }
+onnxruntime = { version = "1.14.1", optional = true, platform = "darwin" }
 torchaudio = [
     { url = "https://download.pytorch.org/whl/cu118/torchaudio-2.0.2%2Bcu118-cp310-cp310-win_amd64.whl", platform = "win32", optional = true },
     { url = "https://download.pytorch.org/whl/cpu/torchaudio-2.0.2-cp310-cp310-macosx_11_0_arm64.whl", platform = "darwin", markers = "platform_machine == 'arm64'", optional = true },

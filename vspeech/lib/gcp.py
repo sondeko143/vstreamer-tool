@@ -2,7 +2,8 @@ from typing import TypeAlias
 
 from google.auth.compute_engine import Credentials as CeCredentials
 from google.auth.compute_engine import IDTokenCredentials as CeIdTokenCredentials
-from google.auth.transport import Request
+from google.auth.exceptions import TransportError
+from google.auth.transport.requests import Request
 from google.oauth2.service_account import Credentials
 from google.oauth2.service_account import IDTokenCredentials
 
@@ -35,7 +36,7 @@ def get_credentials(config: GcpConfig) -> Credentials | CeCredentials:
 
 def get_id_token_credentials(
     config: GcpConfig,
-) -> GcpIDTokenCredentials:
+) -> GcpIDTokenCredentials | None:
     if config.service_account_file_path:
         file_path = config.service_account_file_path.expanduser()
         return IDTokenCredentials.from_service_account_file(
@@ -47,4 +48,7 @@ def get_id_token_credentials(
             info=decoded, target_audience=""
         )
     else:
-        return CeIdTokenCredentials(request=Request(), target_audience="")
+        try:
+            return CeIdTokenCredentials(request=Request(), target_audience="")
+        except TransportError:
+            return None

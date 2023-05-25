@@ -246,8 +246,9 @@ ServiceAccountInfo: TypeAlias = dict[str, SecretStr]
 
 
 class GcpConfig(BaseModel):
-    service_account_file_path: Path = Field(
-        default="", description="Google Cloud Platform API credentials file (key.json)"
+    service_account_file_path: Path | None = Field(
+        default=None,
+        description="Google Cloud Platform API credentials file (key.json)",
     )
     service_account_info: ServiceAccountInfo = Field(
         default_factory=dict,

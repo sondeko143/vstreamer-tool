@@ -41,9 +41,10 @@ def async_secure_authorized_channel(
     return secure_channel(target, composite_credentials)
 
 
-def get_channel(address: str, credentials: GcpIDTokenCredentials):
+def get_channel(address: str, credentials: GcpIDTokenCredentials | None):
     url = urlparse(address)
-    if url.scheme == "https" or url.port == 443:
+    secure_port = url.scheme == "https" or url.port == 443
+    if secure_port and credentials:
         request = Request()
         id_token_cred: GcpIDTokenCredentials = credentials.with_target_audience(
             f"https://{url.hostname}/"
@@ -53,11 +54,15 @@ def get_channel(address: str, credentials: GcpIDTokenCredentials):
             credentials=id_token_cred, request=request, target=address.strip("/")
         )
     else:
+        if secure_port:
+            logger.warning(
+                "Could not obtain credentials, so transport with insecure channel."
+            )
         return insecure_channel(address.strip("/"))
 
 
 async def send_command(
-    credentials: GcpIDTokenCredentials,
+    credentials: GcpIDTokenCredentials | None,
     address: str,
     command: Command,
 ):
