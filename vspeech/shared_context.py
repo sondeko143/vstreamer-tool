@@ -5,10 +5,13 @@ from collections import defaultdict
 from dataclasses import dataclass
 from dataclasses import field
 from typing import Any
+from typing import ClassVar
 from typing import Dict
 from typing import Iterable
+from typing import MutableMapping
 from typing import TypeAlias
 from typing import cast
+from typing import get_type_hints
 from urllib.parse import ParseResult
 from urllib.parse import parse_qs
 from urllib.parse import urlparse
@@ -25,7 +28,6 @@ from vstreamer_protos.commander.commander_pb2 import RELOAD
 from vstreamer_protos.commander.commander_pb2 import RESUME
 from vstreamer_protos.commander.commander_pb2 import SET_FILTERS
 from vstreamer_protos.commander.commander_pb2 import SUBTITLE
-from vstreamer_protos.commander.commander_pb2 import SUBTITLE_TRANSLATED
 from vstreamer_protos.commander.commander_pb2 import TRANSCRIBE
 from vstreamer_protos.commander.commander_pb2 import TRANSLATE
 from vstreamer_protos.commander.commander_pb2 import TTS
@@ -35,7 +37,6 @@ from vstreamer_protos.commander.commander_pb2 import Operand
 from vstreamer_protos.commander.commander_pb2 import Operation
 from vstreamer_protos.commander.commander_pb2 import OperationChain
 from vstreamer_protos.commander.commander_pb2 import OperationRoute
-from vstreamer_protos.commander.commander_pb2 import Queries
 from vstreamer_protos.commander.commander_pb2 import Sound
 
 from vspeech.config import Config
@@ -52,8 +53,6 @@ def event_to_operation(event: EventType) -> Operation:
         return TRANSLATE
     if event == EventType.subtitle:
         return SUBTITLE
-    if event == EventType.subtitle_translated:
-        return SUBTITLE_TRANSLATED
     if event == EventType.tts:
         return TTS
     if event == EventType.vc:
@@ -85,7 +84,6 @@ def is_text_event(event: EventType) -> bool:
     if event in (
         EventType.translation,
         EventType.subtitle,
-        EventType.subtitle_translated,
         EventType.tts,
     ):
         return True
@@ -99,8 +97,6 @@ def operation_to_event(operation: Operation) -> EventType:
         return EventType.translation
     if operation == SUBTITLE:
         return EventType.subtitle
-    if operation == SUBTITLE_TRANSLATED:
-        return EventType.subtitle_translated
     if operation == TTS:
         return EventType.tts
     if operation == VC:
@@ -120,16 +116,34 @@ def operation_to_event(operation: Operation) -> EventType:
     raise EventToOperationConvertError(f"Unsupported operation {operation}")
 
 
+def type_var_is_class_var(typevar: Any):
+    try:
+        origin = typevar.__origin__
+        return origin is ClassVar
+    except AttributeError:
+        return False
+
+
 @dataclass
 class Params:
     target_language_code: str = ""
     source_language_code: str = ""
+    position: str = ""
+    PARAMETER_KEYS: ClassVar[defaultdict[str, list[str]]] = defaultdict(
+        list,
+        {
+            "target_language_code": ["target_language_code", "t"],
+            "source_language_code": ["source_language_code", "s"],
+            "position": ["position", "p"],
+        },
+    )
 
     def to_pb(self):
-        return Queries(
-            target_language_code=self.target_language_code,
-            source_language_code=self.source_language_code,
-        )
+        return {
+            type_key: getattr(self, type_key)
+            for type_key, type_var in get_type_hints(self).items()
+            if not type_var_is_class_var(type_var) and getattr(self, type_key)
+        }
 
     @classmethod
     def from_qs(cls, url: ParseResult):
@@ -145,11 +159,20 @@ class Params:
         )
 
     @classmethod
-    def from_pb(cls, queries: Queries):
-        return cls(
-            target_language_code=queries.target_language_code,
-            source_language_code=queries.source_language_code,
-        )
+    def from_pb(cls, queries: MutableMapping[str, str]):
+        p = {
+            type_key: next(
+                iter(
+                    queries.get(k)
+                    for k in cls.PARAMETER_KEYS[type_key]
+                    if queries.get(k)
+                ),
+                "",
+            )
+            for type_key, type_var in get_type_hints(cls).items()
+            if not type_var_is_class_var(type_var)
+        }
+        return cls(**p)
 
     @staticmethod
     def get_param_from_qs(queries: defaultdict[str, list[str]], keys: set[str]):

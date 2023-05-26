@@ -17,6 +17,7 @@ from vstreamer_protos.commander.commander_pb2 import Sound
 
 from vspeech.config import Config
 from vspeech.config import EventType
+from vspeech.shared_context import Params
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import WorkerInput
 
@@ -197,3 +198,18 @@ def test_from_command_set_pause_resume_valid():
         create_command(operations=[RESUME], filters=None)
     )
     assert worker_input[0].current_event == EventType.resume
+
+
+def test_parse_queries_from_pb():
+    p = Params.from_pb({"t": "ja", "s": "en", "p": "n"})
+    assert p.position == "n"
+    assert p.target_language_code == "ja"
+    assert p.source_language_code == "en"
+
+
+def test_parse_queries_to_pb():
+    p = Params(target_language_code="ja", source_language_code="en", position="n")
+    q = p.to_pb()
+    assert q["position"] == "n"
+    assert q["target_language_code"] == "ja"
+    assert q["source_language_code"] == "en"

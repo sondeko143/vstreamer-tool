@@ -36,7 +36,6 @@ from typing import get_type_hints
 
 import click
 import grpc
-import vstreamer_protos.commander.commander_pb2
 from humps import pascalize
 from pydantic import SecretStr
 from ttkbootstrap import Button

@@ -8,7 +8,6 @@ from vstreamer_protos.commander.commander_pb2 import TRANSLATE
 from vstreamer_protos.commander.commander_pb2 import TTS
 from vstreamer_protos.commander.commander_pb2 import OperationChain
 from vstreamer_protos.commander.commander_pb2 import OperationRoute
-from vstreamer_protos.commander.commander_pb2 import Queries
 
 from vspeech.config import EventType
 from vspeech.config import SampleFormat
@@ -49,7 +48,6 @@ def followings() -> FollowingEvents:
         [
             EventAddress(event=EventType.transcription),
             EventAddress(event=EventType.translation),
-            EventAddress(event=EventType.subtitle_translated),
         ],
         [
             EventAddress(event=EventType.transcription, remote="remote"),
@@ -59,7 +57,6 @@ def followings() -> FollowingEvents:
         [
             EventAddress(event=EventType.transcription),
             EventAddress(event=EventType.translation),
-            EventAddress(event=EventType.subtitle_translated),
         ],
         [
             EventAddress(event=EventType.playback),
@@ -100,11 +97,9 @@ def test_worker_output_to_inputs(followings: FollowingEvents):
             [EventType.subtitle],
             [
                 EventType.translation,
-                EventType.subtitle_translated,
             ],
             [
                 EventType.translation,
-                EventType.subtitle_translated,
             ],
         ],
         EventType.playback: [[]],
@@ -124,17 +119,13 @@ def test_worker_output_to_command(followings: FollowingEvents):
     assert command.chains == [
         OperationChain(
             operations=[
-                OperationRoute(
-                    operation=TRANSCRIBE, remote="remote", queries=Queries()
-                ),
-                OperationRoute(operation=TRANSLATE, remote="", queries=Queries()),
-                OperationRoute(operation=TTS, remote="", queries=Queries()),
+                OperationRoute(operation=TRANSCRIBE, remote="remote", queries={}),
+                OperationRoute(operation=TRANSLATE, remote="", queries={}),
+                OperationRoute(operation=TTS, remote="", queries={}),
             ],
         ),
         OperationChain(
-            operations=[
-                OperationRoute(operation=PLAYBACK, remote="remote", queries=Queries())
-            ]
+            operations=[OperationRoute(operation=PLAYBACK, remote="remote", queries={})]
         ),
     ]
 

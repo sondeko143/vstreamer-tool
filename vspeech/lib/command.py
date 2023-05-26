@@ -58,12 +58,6 @@ def process_command(context: SharedContext, request: WorkerInput):
             dest_event=EventType.subtitle,
             request=request,
         )
-    if EventType.subtitle_translated == current:
-        put_queue(
-            input_queues=context.input_queues,
-            dest_event=EventType.subtitle_translated,
-            request=request,
-        )
     if EventType.tts == current:
         put_queue(
             input_queues=context.input_queues,

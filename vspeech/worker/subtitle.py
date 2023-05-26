@@ -4,6 +4,7 @@ from asyncio import Queue
 from asyncio import QueueEmpty
 from asyncio import Task
 from asyncio import sleep
+from dataclasses import dataclass
 from functools import partial
 from sys import platform
 from tkinter import Canvas
@@ -95,11 +96,18 @@ def set_bg_color(canvas: Canvas, bg_color: str):
         canvas.configure(bg=bg_color)
 
 
+@dataclass
+class Text:
+    tag: str
+    anchor: Anchor
+    value: str = ""
+    display_remain_sec: float = 0
+
+
 async def subtitle_worker(
     context: SharedContext,
     tk_root: Tk,
     in_queue: Queue[WorkerInput],
-    translation_in_queue: Queue[WorkerInput],
 ):
     try:
         initial_width = context.config.subtitle.window_width
@@ -121,78 +129,51 @@ async def subtitle_worker(
         else:
             tk_root.configure(bg=context.config.subtitle.bg_color)
         set_bg_color(canvas, bg_color=context.config.subtitle.bg_color)
-        texts = ""
-        translations = ""
-        text_display_remain_sec = 0
-        translation_display_remain_sec = 0
-        text_tag = "text"
-        translation_tag = "translation"
+        texts = {
+            "n": Text(tag="text", anchor="s"),
+            "s": Text(tag="translated", anchor="n"),
+        }
         interval_sec = 1.0 / 30.0
         while True:
             config = context.config.subtitle
             set_bg_color(canvas, bg_color=context.config.subtitle.bg_color)
-            text_display_remain_sec = max(text_display_remain_sec - interval_sec, 0)
-            if text_display_remain_sec <= 0:
-                canvas.delete(text_tag)
-                texts = ""
-            translation_display_remain_sec = max(
-                translation_display_remain_sec - interval_sec, 0
-            )
-            if translation_display_remain_sec <= 0:
-                canvas.delete(translation_tag)
-                translations = ""
+            for p in texts:
+                t = texts[p]
+                t.display_remain_sec = max(t.display_remain_sec - interval_sec, 0)
+                if t.display_remain_sec <= 0:
+                    canvas.delete(t.tag)
+                    t.value = ""
             text_coord_x = tk_root.winfo_width() / 2
             text_coord_y = tk_root.winfo_height() / 2
             tk_root.update()
             await sleep(interval_sec)
             try:
                 unprocessed_text = in_queue.get_nowait()
-                text_display_remain_sec = update_display_sec(
-                    current_sec=text_display_remain_sec,
-                    current_text=texts,
+                p = unprocessed_text.current_event.params.position
+                if p in texts:
+                    t = texts[p]
+                else:
+                    t = texts["n"]
+                t.display_remain_sec = update_display_sec(
+                    current_sec=t.display_remain_sec,
+                    current_text=t.value,
                     add_text=unprocessed_text.text,
                     config=config.text,
                 )
-                texts = update_text(
-                    current_text=texts,
+                t.value = update_text(
+                    current_text=t.value,
                     add_text=unprocessed_text.text,
                     max_text_len=config.text.max_text_len,
                 )
-                canvas.delete(text_tag)
+                canvas.delete(t.tag)
                 draw_text_with_outline(
                     canvas=canvas,
-                    texts=texts,
+                    texts=t.value,
                     text_coord_x=text_coord_x,
                     text_coord_y=text_coord_y,
-                    text_tag=text_tag,
-                    anchor="s",
+                    text_tag=t.tag,
+                    anchor=t.anchor,
                     config=config.text,
-                )
-                canvas.pack()
-            except QueueEmpty:
-                pass
-            try:
-                unprocessed_translation = translation_in_queue.get_nowait()
-                translation_display_remain_sec = update_display_sec(
-                    current_sec=text_display_remain_sec,
-                    current_text=translations,
-                    add_text=unprocessed_translation.text,
-                    config=config.translated,
-                )
-                translations = update_text(
-                    current_text=translations,
-                    add_text=unprocessed_translation.text,
-                    max_text_len=config.translated.max_text_len,
-                )
-                canvas.delete(translation_tag)
-                draw_text_with_outline(
-                    canvas=canvas,
-                    texts=translations,
-                    text_coord_x=text_coord_x,
-                    text_coord_y=text_coord_y,
-                    text_tag=translation_tag,
-                    anchor="n",
-                    config=config.translated,
                 )
                 canvas.pack()
             except QueueEmpty:
@@ -221,15 +202,11 @@ def create_subtitle_task(
     in_queue = Queue[WorkerInput]()
     event = EventType.subtitle
     context.input_queues[event] = in_queue
-    translated_event = EventType.subtitle_translated
-    translated_in_queue = Queue[WorkerInput]()
-    context.input_queues[translated_event] = translated_in_queue
     gui_task = loop.create_task(
         subtitle_worker(
             context,
             tk_root,
             in_queue=in_queue,
-            translation_in_queue=translated_in_queue,
         ),
         name=event.name,
     )

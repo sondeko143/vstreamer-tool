@@ -47,7 +47,6 @@ class EventType(Enum):
     tts = "tts"
     vc = "vc"
     subtitle = "subtitle"
-    subtitle_translated = "subtitle_translated"
     transcription = "transcription"
     translation = "translation"
     recording = "recording"
@@ -65,8 +64,6 @@ class EventType(Enum):
         except ValueError as e:
             if name in ["sub"]:
                 return EventType.subtitle
-            if name in ["sub_t"]:
-                return EventType.subtitle_translated
             if name in ["transc"]:
                 return EventType.transcription
             if name in ["transl"]:
@@ -142,7 +139,7 @@ class RecordingConfig(BaseModel):
     rate: int = Field(default=16000, description="recording rate")
     chunk: int = Field(default=1024, description="recording block size")
     interval_sec: float = Field(
-        default=0.5, cli=("-s", "--interval_sec"), description="recording interval sec."
+        default=0.1, cli=("-s", "--interval_sec"), description="recording interval sec."
     )
     silence_threshold: int = Field(
         default=-40,

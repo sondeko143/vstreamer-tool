@@ -2962,7 +2962,7 @@ category = "main"
 optional = false
 python-versions = ">=3.10,<4.0"
 files = [
-    {file = "vstreamer_protos-0.1.0-py3-none-any.whl", hash = "sha256:4ea3bc8131be4f1dd239822fabb3f911c712e618a90f325f8233894b874c441c"},
+    {file = "vstreamer_protos-0.1.0-py3-none-any.whl", hash = "sha256:843557978713f228461e26ae53b959d5f5e31454c02538ef52493853f5b4e819"},
 ]
 
 [package.dependencies]
@@ -2971,8 +2971,7 @@ protobuf = ">=4.22.3,<5.0.0"
 
 [package.source]
 type = "url"
-url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-ccf1a76d/vstreamer_protos-0.1.0-py3-none-any.whl"
-
+url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-bf5243c5/vstreamer_protos-0.1.0-py3-none-any.whl"
 [extras]
 audio = ["PyAudio"]
 gui = ["pillow", "ttkbootstrap"]
@@ -2985,4 +2984,4 @@ whisper = ["openai-whisper", "torch", "torch", "torch", "torch"]
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.10,<3.12"
-content-hash = "35491e22dcc2ef1e45a92b5a93f6737c4396418b1584890da9c2cf95cd81a30c"
+content-hash = "6fcfaab2dfbf3e60f871a2117bda80a675b99750b72c8c9d1a9da74d88afa413"
