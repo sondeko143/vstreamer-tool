@@ -100,6 +100,7 @@ def set_bg_color(canvas: Canvas, bg_color: str):
 class Text:
     tag: str
     anchor: Anchor
+    config: SubtitleTextConfig
     value: str = ""
     display_remain_sec: float = 0
 
@@ -130,12 +131,13 @@ async def subtitle_worker(
             tk_root.configure(bg=context.config.subtitle.bg_color)
         set_bg_color(canvas, bg_color=context.config.subtitle.bg_color)
         texts = {
-            "n": Text(tag="text", anchor="s"),
-            "s": Text(tag="translated", anchor="n"),
+            "n": Text(tag="text", anchor="s", config=context.config.subtitle.text),
+            "s": Text(
+                tag="translated", anchor="n", config=context.config.subtitle.translated
+            ),
         }
         interval_sec = 1.0 / 30.0
         while True:
-            config = context.config.subtitle
             set_bg_color(canvas, bg_color=context.config.subtitle.bg_color)
             for p in texts:
                 t = texts[p]
@@ -143,6 +145,10 @@ async def subtitle_worker(
                 if t.display_remain_sec <= 0:
                     canvas.delete(t.tag)
                     t.value = ""
+                if p == "n":
+                    t.config = context.config.subtitle.text
+                elif p == "s":
+                    t.config = context.config.subtitle.translated
             text_coord_x = tk_root.winfo_width() / 2
             text_coord_y = tk_root.winfo_height() / 2
             tk_root.update()
@@ -158,12 +164,12 @@ async def subtitle_worker(
                     current_sec=t.display_remain_sec,
                     current_text=t.value,
                     add_text=unprocessed_text.text,
-                    config=config.text,
+                    config=t.config,
                 )
                 t.value = update_text(
                     current_text=t.value,
                     add_text=unprocessed_text.text,
-                    max_text_len=config.text.max_text_len,
+                    max_text_len=t.config.max_text_len,
                 )
                 canvas.delete(t.tag)
                 draw_text_with_outline(
@@ -173,7 +179,7 @@ async def subtitle_worker(
                     text_coord_y=text_coord_y,
                     text_tag=t.tag,
                     anchor=t.anchor,
-                    config=config.text,
+                    config=t.config,
                 )
                 canvas.pack()
             except QueueEmpty:
