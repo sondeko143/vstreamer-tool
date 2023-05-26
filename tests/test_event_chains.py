@@ -144,22 +144,25 @@ def test_parse_event_short_one():
 
 def test_parse_event_long_all():
     url = urlparse(
-        "//localhost:8080/event?target_language_code=ja&source_language_code=en"
+        "//localhost:8080/event?target_language_code=ja&source_language_code=en&position=s"
     )
     p = Params.from_qs(url)
     assert "ja" == "".join(p.target_language_code)
     assert "en" == "".join(p.source_language_code)
+    assert "s" == "".join(p.position)
 
 
 def test_parse_event_short_all():
-    url = urlparse("//localhost:8080/event?t=ja&s=en")
+    url = urlparse("//localhost:8080/event?t=ja&s=en&p=n")
     p = Params.from_qs(url)
     assert "ja" == "".join(p.target_language_code)
     assert "en" == "".join(p.source_language_code)
+    assert "n" == "".join(p.position)
 
 
 def test_parse_event_duplicate():
-    url = urlparse("//localhost:8080/event?t=ja&t=kr&s=en&s=sp")
+    url = urlparse("//localhost:8080/event?t=ja&t=kr&s=en&s=sp&p=s&p=n")
     p = Params.from_qs(url)
     assert "ja" == "".join(p.target_language_code)
     assert "en" == "".join(p.source_language_code)
+    assert "s" == "".join(p.position)

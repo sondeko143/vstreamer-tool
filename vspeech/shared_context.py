@@ -150,12 +150,13 @@ class Params:
         queries: defaultdict[str, list[str]] = defaultdict(list)
         queries.update(parse_qs(url.query))
         return cls(
-            target_language_code=Params.get_param_from_qs(
-                queries, set(("target_language_code", "t"))
-            ),
-            source_language_code=Params.get_param_from_qs(
-                queries, set(("source_language_code", "s"))
-            ),
+            **{
+                type_key: Params.get_param_from_qs(
+                    queries, set(cls.PARAMETER_KEYS[type_key])
+                )
+                for type_key, type_var in get_type_hints(cls).items()
+                if not type_var_is_class_var(type_var)
+            }
         )
 
     @classmethod
