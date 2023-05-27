@@ -142,6 +142,8 @@ async def transcript_worker_whisper(
                     )
         except WavError as e:
             logger.warning("%s", e)
+        except ValueError as e:
+            logger.warning("%s", e)
 
 
 async def transcript_worker_google(
@@ -196,6 +198,8 @@ async def transcript_worker_google(
             logger.warning("transcription request error: %s", e)
         except WavError as e:
             logger.warning("%s", e)
+        except ValueError as e:
+            logger.warning("%s", e)
 
 
 async def transcript_worker_ami(
@@ -246,6 +250,8 @@ async def transcript_worker_ami(
                 logger.warning("transcription request error: %s", e)
                 logger.exception(e)
             except WavError as e:
+                logger.warning("%s", e)
+            except ValueError as e:
                 logger.warning("%s", e)
 
 
