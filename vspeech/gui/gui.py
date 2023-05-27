@@ -65,6 +65,7 @@ from vstreamer_protos.commander.commander_pb2_grpc import CommanderStub
 from vspeech.config import Config
 from vspeech.config import F0ExtractorType
 from vspeech.config import ReplaceFilter
+from vspeech.config import RoutesList
 from vspeech.config import TranscriptionWorkerType
 from vspeech.config import TtsWorkerType
 from vspeech.config import VoicevoxParam
@@ -211,7 +212,8 @@ class VspeechGUI(Frame):
     stop_bt: Button
     templates: Variable
     filters: Variable
-    routes_list: Variable
+    rec_routes_list: Variable
+    text_routes_list: Variable
 
     @staticmethod
     def is_file_json(file_path: Union[str, Path]):
@@ -437,16 +439,21 @@ class VspeechGUI(Frame):
             padx=5, pady=5, column=0, row=current_row, columnspan=max_columns, sticky=EW
         )
         current_row += 1
+        routes_list = self.config.recording.routes_list
+        self.rec_routes_list = Variable(value=[",".join(r) for r in routes_list])
         add_bt = Button(
             tab_frame,
             text="add",
-            command=partial(self.add_route, route_candidate),
+            command=partial(
+                self.add_route,
+                entry=route_candidate,
+                routes_list_var=self.rec_routes_list,
+                routes_list_conf=self.config.recording.routes_list,
+            ),
         )
         add_bt.grid(padx=5, pady=5, column=0, row=current_row, sticky=W)
         current_row += 1
-        routes_list = self.config.recording.routes_list
-        self.routes_list = Variable(value=[",".join(r) for r in routes_list])
-        routes_lb = Listbox(tab_frame, listvariable=self.routes_list, height=6)
+        routes_lb = Listbox(tab_frame, listvariable=self.rec_routes_list, height=6)
         routes_lb.grid(
             padx=5, pady=5, column=0, row=current_row, columnspan=max_columns, sticky=EW
         )
@@ -454,7 +461,12 @@ class VspeechGUI(Frame):
         del_bt = Button(
             tab_frame,
             text="del",
-            command=partial(self.del_route, routes_lb),
+            command=partial(
+                self.del_route,
+                listbox=routes_lb,
+                routes_list_var=self.rec_routes_list,
+                routes_list_conf=self.config.recording.routes_list,
+            ),
         )
         del_bt.grid(column=0, row=current_row, padx=5, pady=5, sticky=W)
         notebook.add(tab_frame, text="rec")
@@ -934,6 +946,46 @@ class VspeechGUI(Frame):
             frame=tab_frame, config_name="listen_port", from_=0, to=65535, increment=1
         ).grid(column=1, row=current_row, sticky=EW)
         current_row += 1
+        text = "Routes:"
+        label = Label(tab_frame, text=text)
+        label.grid(padx=5, pady=5, column=0, row=current_row, sticky=W)
+        current_row += 1
+        route_candidate = Entry(tab_frame)
+        route_candidate.grid(
+            padx=5, pady=5, column=0, row=current_row, columnspan=max_columns, sticky=EW
+        )
+        current_row += 1
+        routes_list = self.config.text_send_operations
+        self.text_routes_list = Variable(value=[",".join(r) for r in routes_list])
+        add_bt = Button(
+            tab_frame,
+            text="add",
+            command=partial(
+                self.add_route,
+                entry=route_candidate,
+                routes_list_var=self.text_routes_list,
+                routes_list_conf=self.config.text_send_operations,
+            ),
+        )
+        add_bt.grid(padx=5, pady=5, column=0, row=current_row, sticky=W)
+        current_row += 1
+        routes_lb = Listbox(tab_frame, listvariable=self.text_routes_list, height=6)
+        routes_lb.grid(
+            padx=5, pady=5, column=0, row=current_row, columnspan=max_columns, sticky=EW
+        )
+        current_row += 1
+        del_bt = Button(
+            tab_frame,
+            text="del",
+            command=partial(
+                self.del_route,
+                listbox=routes_lb,
+                routes_list_var=self.text_routes_list,
+                routes_list_conf=self.config.text_send_operations,
+            ),
+        )
+        del_bt.grid(column=0, row=current_row, padx=5, pady=5, sticky=W)
+
         notebook.add(tab_frame, text="templ")
 
     def draw_filter_tab(self, notebook: Notebook):
@@ -1068,8 +1120,10 @@ class VspeechGUI(Frame):
         )
         self.master.title(f"vspeech: {self.config_file_path}*")
 
-    def add_route(self, text: Entry):
-        new_routes_value = text.get()
+    def add_route(
+        self, entry: Entry, routes_list_var: Variable, routes_list_conf: RoutesList
+    ):
+        new_routes_value = entry.get()
         try:
             [EventAddress.from_string(v.strip()) for v in new_routes_value.split(",")]
         except ValueError as e:
@@ -1079,26 +1133,28 @@ class VspeechGUI(Frame):
             )
             logger.warning("無効な値です: %s", e)
             return
-        routes_list: list[str] = list(self.routes_list.get())  # type: ignore
-        routes_list.append(new_routes_value)
-        self.routes_list.set(routes_list)
-        self.config.recording.routes_list.clear()
-        for routes in routes_list:
+        new_routes_list: list[str] = list(routes_list_var.get())  # type: ignore
+        new_routes_list.append(new_routes_value)
+        routes_list_var.set(new_routes_list)
+        routes_list_conf.clear()
+        for routes in new_routes_list:
             new_routes = [r.strip() for r in routes.split(",") if r]
-            self.config.recording.routes_list.append(new_routes)
+            routes_list_conf.append(new_routes)
         self.master.title(f"vspeech: {self.config_file_path}*")
 
-    def del_route(self, listbox: Listbox):
+    def del_route(
+        self, listbox: Listbox, routes_list_var: Variable, routes_list_conf: RoutesList
+    ):
         selected_indices = cast(Iterable[int], listbox.curselection())
-        routes_list: list[str] = list(self.routes_list.get())  # type: ignore
+        new_routes_list: list[str] = list(routes_list_var.get())  # type: ignore
         for i in selected_indices:
             text = listbox.get(i)
-            routes_list = [routes for routes in routes_list if routes != text]
-        self.routes_list.set(routes_list)
-        self.config.recording.routes_list.clear()
-        for routes in routes_list:
+            new_routes_list = [routes for routes in new_routes_list if routes != text]
+        routes_list_var.set(new_routes_list)
+        routes_list_conf.clear()
+        for routes in new_routes_list:
             new_routes = [r.strip() for r in routes.split(",")]
-            self.config.recording.routes_list.append(new_routes)
+            routes_list_conf.append(new_routes)
         self.master.title(f"vspeech: {self.config_file_path}*")
 
     def update_completion_list(

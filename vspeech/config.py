@@ -321,7 +321,7 @@ class Config(BaseSettings):
     listen_address: str = "[::]"
     listen_port: int = Field(default=8080, env="PORT")
     template_texts: list[str] = Field(default_factory=lambda: [""])
-    text_send_operations: list[list[str]] = Field(
+    text_send_operations: RoutesList = Field(
         default_factory=lambda: [["tts", "playback"]]
     )
     filters: list[ReplaceFilter] = []
