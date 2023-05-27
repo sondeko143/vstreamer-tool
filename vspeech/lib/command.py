@@ -10,6 +10,7 @@ from vspeech.shared_context import EventType
 from vspeech.shared_context import InputQueues
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import WorkerInput
+from vspeech.shared_context import WorkerOutput
 from vspeech.shared_context import is_text_event
 
 
@@ -105,3 +106,9 @@ def process_command(context: SharedContext, request: WorkerInput):
                 logger.warning("ignore invalid filter string %s", filter)
     if EventType.ping == current:
         logger.info("ping.")
+    if EventType.forward == current:
+        logger.info("forward.")
+        worker_output = WorkerOutput.from_input(request)
+        worker_output.text = request.text
+        if worker_output.followings:
+            context.sender_queue.put_nowait(worker_output)

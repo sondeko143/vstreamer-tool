@@ -133,36 +133,42 @@ def test_worker_output_to_command(followings: FollowingEvents):
 def test_parse_event_long_one():
     url = urlparse("//localhost:8080/event?target_language_code=ja")
     p = Params.from_qs(url)
-    assert "ja" == "".join(p.target_language_code)
+    assert "ja" == p.target_language_code
 
 
 def test_parse_event_short_one():
     url = urlparse("//localhost:8080/event?t=ja")
     p = Params.from_qs(url)
-    assert "ja" == "".join(p.target_language_code)
+    assert "ja" == p.target_language_code
 
 
 def test_parse_event_long_all():
     url = urlparse(
-        "//localhost:8080/event?target_language_code=ja&source_language_code=en&position=s"
+        "//localhost:8080/event?target_language_code=ja&source_language_code=en&position=s&speaker_id=1&speed=1.1&pitch=-0.05"
     )
     p = Params.from_qs(url)
-    assert "ja" == "".join(p.target_language_code)
-    assert "en" == "".join(p.source_language_code)
-    assert "s" == "".join(p.position)
+    assert "ja" == p.target_language_code
+    assert "en" == p.source_language_code
+    assert "s" == p.position
+    assert 1 == p.speaker_id
+    assert 1.1 == p.speed
+    assert -0.05 == p.pitch
 
 
 def test_parse_event_short_all():
-    url = urlparse("//localhost:8080/event?t=ja&s=en&p=n")
+    url = urlparse("//localhost:8080/event?t=ja&s=en&p=n&i=1&spd=1.1&pit=-0.05")
     p = Params.from_qs(url)
-    assert "ja" == "".join(p.target_language_code)
-    assert "en" == "".join(p.source_language_code)
-    assert "n" == "".join(p.position)
+    assert "ja" == p.target_language_code
+    assert "en" == p.source_language_code
+    assert "n" == p.position
+    assert 1 == p.speaker_id
+    assert 1.1 == p.speed
+    assert -0.05 == p.pitch
 
 
 def test_parse_event_duplicate():
     url = urlparse("//localhost:8080/event?t=ja&t=kr&s=en&s=sp&p=s&p=n")
     p = Params.from_qs(url)
-    assert "ja" == "".join(p.target_language_code)
-    assert "en" == "".join(p.source_language_code)
-    assert "s" == "".join(p.position)
+    assert "ja" == p.target_language_code
+    assert "en" == p.source_language_code
+    assert "s" == p.position

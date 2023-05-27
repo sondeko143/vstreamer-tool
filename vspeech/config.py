@@ -56,6 +56,7 @@ class EventType(Enum):
     reload = "reload"
     set_filters = "set_filters"
     ping = "ping"
+    forward = "forward"
 
     @classmethod
     def from_string(cls, name: str):
@@ -72,6 +73,8 @@ class EventType(Enum):
                 return EventType.recording
             if name in ["play"]:
                 return EventType.playback
+            if name in ["fwd"]:
+                return EventType.forward
             else:
                 raise e
 

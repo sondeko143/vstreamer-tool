@@ -5,13 +5,12 @@ from collections import defaultdict
 from dataclasses import dataclass
 from dataclasses import field
 from typing import Any
-from typing import ClassVar
 from typing import Dict
 from typing import Iterable
+from typing import Literal
 from typing import MutableMapping
 from typing import TypeAlias
 from typing import cast
-from typing import get_type_hints
 from urllib.parse import ParseResult
 from urllib.parse import parse_qs
 from urllib.parse import urlparse
@@ -20,7 +19,9 @@ from uuid import UUID
 from uuid import uuid4
 
 from pydantic import BaseModel
+from pydantic import Field
 from pydantic import root_validator
+from vstreamer_protos.commander.commander_pb2 import FORWARD
 from vstreamer_protos.commander.commander_pb2 import PAUSE
 from vstreamer_protos.commander.commander_pb2 import PING
 from vstreamer_protos.commander.commander_pb2 import PLAYBACK
@@ -67,6 +68,10 @@ def event_to_operation(event: EventType) -> Operation:
         return RELOAD
     if event == EventType.set_filters:
         return SET_FILTERS
+    if event == EventType.ping:
+        return PING
+    if event == EventType.forward:
+        return FORWARD
     raise EventToOperationConvertError(f"Unsupported event type {event}")
 
 
@@ -113,85 +118,37 @@ def operation_to_event(operation: Operation) -> EventType:
         return EventType.set_filters
     if operation == PING:
         return EventType.ping
+    if operation == FORWARD:
+        return EventType.forward
     raise EventToOperationConvertError(f"Unsupported operation {operation}")
 
 
-def type_var_is_class_var(typevar: Any):
-    try:
-        origin = typevar.__origin__
-        return origin is ClassVar
-    except AttributeError:
-        return False
+class Params(BaseModel):
+    target_language_code: str | None = Field(default=None, alias="t")
+    source_language_code: str | None = Field(default=None, alias="s")
+    position: Literal["s", "n"] | None = Field(default=None, alias="p")
+    speaker_id: int | None = Field(default=None, alias="i")
+    volume: int | None = Field(default=None, alias="v")
+    speed: float | None = Field(default=None, alias="spd")
+    pitch: float | None = Field(default=None, alias="pit")
 
-
-@dataclass
-class Params:
-    target_language_code: str = ""
-    source_language_code: str = ""
-    position: str = ""
-    PARAMETER_KEYS: ClassVar[defaultdict[str, list[str]]] = defaultdict(
-        list,
-        {
-            "target_language_code": ["target_language_code", "t"],
-            "source_language_code": ["source_language_code", "s"],
-            "position": ["position", "p"],
-        },
-    )
+    class Config:
+        allow_population_by_field_name = True
 
     def to_pb(self):
-        return {
-            type_key: getattr(self, type_key)
-            for type_key, type_var in get_type_hints(self).items()
-            if not type_var_is_class_var(type_var) and getattr(self, type_key)
-        }
+        return self.dict(exclude_none=True)
 
     @classmethod
     def from_qs(cls, url: ParseResult):
-        queries: defaultdict[str, list[str]] = defaultdict(list)
-        queries.update(parse_qs(url.query))
-        return cls(
-            **{
-                type_key: Params.get_param_from_qs(
-                    queries, set(cls.PARAMETER_KEYS[type_key])
-                )
-                for type_key, type_var in get_type_hints(cls).items()
-                if not type_var_is_class_var(type_var)
-            }
-        )
+        queries = parse_qs(url.query)
+        return cls(**{key: next(iter(values), None) for key, values in queries.items()})
 
     @classmethod
     def from_pb(cls, queries: MutableMapping[str, str]):
-        p = {
-            type_key: next(
-                iter(
-                    queries.get(k)
-                    for k in cls.PARAMETER_KEYS[type_key]
-                    if queries.get(k)
-                ),
-                "",
-            )
-            for type_key, type_var in get_type_hints(cls).items()
-            if not type_var_is_class_var(type_var)
-        }
-        return cls(**p)
+        return cls(**queries)
 
-    @staticmethod
-    def get_param_from_qs(queries: defaultdict[str, list[str]], keys: set[str]):
-        return "".join(next(iter(queries[q]), "") for q in keys)
-
-    def __hash__(self) -> int:
-        return hash(self.target_language_code) + hash(self.source_language_code)
-
-    def __eq__(self, __value: object) -> bool:
-        if not isinstance(__value, Params):
-            return False
-        return (
-            self.target_language_code == __value.target_language_code
-            and self.source_language_code == __value.source_language_code
-        )
-
-    def __bool__(self) -> bool:
-        return bool(self.target_language_code) and bool(self.source_language_code)
+    def __bool__(self):
+        return any(value for _, value in self)
 
 
 @dataclass

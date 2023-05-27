@@ -8,6 +8,7 @@ from typing import List
 from vspeech.config import SampleFormat
 from vspeech.config import TtsWorkerType
 from vspeech.config import VoicevoxConfig
+from vspeech.config import VoicevoxParam
 from vspeech.config import Vr2Config
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
@@ -61,17 +62,30 @@ async def voicevox_worker(vvox_config: VoicevoxConfig, in_queue: Queue[WorkerInp
     from vspeech.lib.voicevox import Voicevox
 
     vvox = Voicevox(vvox_config.openjtalk_dir)
-    vvox.load_model(vvox_config.speaker_id)
+    loaded_models: list[int] = []
     logger.info("tts worker [voicevox] started")
     while True:
         transcribed = await in_queue.get()
         logger.debug("voice generating...")
         try:
+            speaker_id = (
+                transcribed.current_event.params.speaker_id or vvox_config.speaker_id
+            )
+            if speaker_id not in loaded_models:
+                vvox.load_model(speaker_id)
+                loaded_models.append(speaker_id)
+            audio_query = VoicevoxParam(
+                **vvox_config.params.dict(exclude={"speed_scale", "pitch_scale"}),
+                speed_scale=transcribed.current_event.params.speed
+                or vvox_config.params.speed_scale,
+                pitch_scale=transcribed.current_event.params.pitch
+                or vvox_config.params.pitch_scale,
+            )
             speech = await to_thread(
                 vvox.voicevox_tts,
                 text=transcribed.text,
-                speaker_id=vvox_config.speaker_id,
-                params=vvox_config.params,
+                speaker_id=speaker_id,
+                params=audio_query,
             )
             logger.debug("voice generated")
             worker_output = WorkerOutput.from_input(transcribed)
@@ -80,6 +94,8 @@ async def voicevox_worker(vvox_config: VoicevoxConfig, in_queue: Queue[WorkerInp
             )
             yield worker_output
         except UnicodeEncodeError as e:
+            logger.warning("%s", e)
+        except ValueError as e:
             logger.warning("%s", e)
 
 

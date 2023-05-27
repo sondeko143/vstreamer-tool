@@ -15,7 +15,10 @@ class Voicevox:
         )
 
     def load_model(self, speaker_id: int):
-        self.core.load_model(speaker_id)
+        try:
+            self.core.load_model(speaker_id)
+        except Exception as e:
+            raise ValueError(e)
 
     def is_model_loaded(self, speaker_id: int) -> bool:
         return self.core.is_model_loaded(speaker_id)
