@@ -201,15 +201,42 @@ def test_from_command_set_pause_resume_valid():
 
 
 def test_parse_queries_from_pb():
-    p = Params.from_pb({"t": "ja", "s": "en", "p": "n"})
+    p = Params.from_pb(
+        {
+            "t": "ja",
+            "s": "en",
+            "p": "n",
+            "i": "1",
+            "v": "100",
+            "spd": "1.1",
+            "pit": "-0.05",
+        }
+    )
     assert p.position == "n"
     assert p.target_language_code == "ja"
     assert p.source_language_code == "en"
+    assert p.speaker_id == 1
+    assert p.volume == 100
+    assert p.speed == 1.1
+    assert p.pitch == -0.05
 
 
 def test_parse_queries_to_pb():
-    p = Params(target_language_code="ja", source_language_code="en", position="n")
+    p = Params(
+        t="ja",
+        s="en",
+        p="n",
+        i=1,
+        v=100,
+        spd=1.1,
+        pit=-0.05,
+    )
     q = p.to_pb()
-    assert q["position"] == "n"
-    assert q["target_language_code"] == "ja"
-    assert q["source_language_code"] == "en"
+    o = OperationRoute(queries=q)
+    assert o.queries["position"] == "n"
+    assert o.queries["target_language_code"] == "ja"
+    assert o.queries["source_language_code"] == "en"
+    assert o.queries["speaker_id"] == "1"
+    assert o.queries["volume"] == "100"
+    assert o.queries["speed"] == "1.1"
+    assert o.queries["speed"] == "1.1"

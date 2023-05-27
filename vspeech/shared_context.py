@@ -136,7 +136,7 @@ class Params(BaseModel):
         allow_population_by_field_name = True
 
     def to_pb(self):
-        return self.dict(exclude_none=True)
+        return {key: str(value) for key, value in self if value}
 
     @classmethod
     def from_qs(cls, url: ParseResult):
