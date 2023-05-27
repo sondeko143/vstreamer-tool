@@ -136,7 +136,7 @@ class Params(BaseModel):
         allow_population_by_field_name = True
 
     def to_pb(self):
-        return {key: str(value) for key, value in self if value}
+        return {key: str(value) for key, value in self if value is not None}
 
     @classmethod
     def from_qs(cls, url: ParseResult):
@@ -148,7 +148,7 @@ class Params(BaseModel):
         return cls(**queries)
 
     def __bool__(self):
-        return any(value for _, value in self)
+        return any(value is not None for _, value in self)
 
 
 @dataclass

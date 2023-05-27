@@ -125,10 +125,10 @@ async def pyaudio_playback_worker(
                     format=speech.sound.format,
                     channels=speech.sound.channels,
                 )
-
+                given_volume = speech.current_event.params.volume
                 logger.debug("playback...")
                 yield await output_stream.playback(
-                    volume=speech.current_event.params.volume or config.volume,
+                    volume=given_volume if given_volume is not None else config.volume,
                     data=speech.sound.data,
                 )
                 logger.debug("playback end")

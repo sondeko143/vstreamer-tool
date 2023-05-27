@@ -68,18 +68,25 @@ async def voicevox_worker(vvox_config: VoicevoxConfig, in_queue: Queue[WorkerInp
         transcribed = await in_queue.get()
         logger.debug("voice generating...")
         try:
+            given_speaker_id = transcribed.current_event.params.speaker_id
             speaker_id = (
-                transcribed.current_event.params.speaker_id or vvox_config.speaker_id
+                given_speaker_id
+                if given_speaker_id is not None
+                else vvox_config.speaker_id
             )
             if speaker_id not in loaded_models:
                 vvox.load_model(speaker_id)
                 loaded_models.append(speaker_id)
+            given_speed = transcribed.current_event.params.speed
+            given_pitch = transcribed.current_event.params.pitch
             audio_query = VoicevoxParam(
                 **vvox_config.params.dict(exclude={"speed_scale", "pitch_scale"}),
-                speed_scale=transcribed.current_event.params.speed
-                or vvox_config.params.speed_scale,
-                pitch_scale=transcribed.current_event.params.pitch
-                or vvox_config.params.pitch_scale,
+                speed_scale=given_speed
+                if given_speed is not None
+                else vvox_config.params.speed_scale,
+                pitch_scale=given_pitch
+                if given_pitch is not None
+                else vvox_config.params.pitch_scale,
             )
             speech = await to_thread(
                 vvox.voicevox_tts,
