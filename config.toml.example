@@ -81,7 +81,6 @@ request_timeout = 30.0
 extra_parameters = "keepFillerToken=0"
 
 [gcp]
-project_id = ""
 service_account_file_path = ""
 request_timeout = 3.0
 max_retry_count = 5

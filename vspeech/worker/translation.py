@@ -6,6 +6,7 @@ from functools import partial
 from html import unescape
 from typing import AsyncGenerator
 
+from google.api_core.exceptions import BadRequest
 from google.cloud.exceptions import GoogleCloudError
 from google.cloud.translate_v3 import TranslateTextRequest
 from google.cloud.translate_v3 import TranslationServiceAsyncClient
@@ -30,6 +31,8 @@ async def translate_request(
     while True:
         try:
             return await client.translate_text(request=request, timeout=timeout)
+        except BadRequest:
+            raise
         except GoogleCloudError as e:
             logger.exception(e)
             if max_retry_count <= num_retries:

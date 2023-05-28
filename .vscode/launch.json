@@ -31,44 +31,28 @@
                         "value": ""
                     },
                     {
-                        "name": "vspeech_recording__enable",
-                        "value": "false"
-                    },
-                    {
                         "name": "vspeech_transcription__enable",
                         "value": "true"
                     },
                     {
-                        "name": "vspeech_transcription__transcription_worker_type",
-                        "value": "ACP"
-                    },
-                    {
-                        "name": "vspeech_speech__enable",
+                        "name": "vspeech_tts__enable",
                         "value": "true"
-                    },
-                    {
-                        "name": "vspeech_speech__speech_worker_type",
-                        "value": "VOICEVOX"
-                    },
-                    {
-                        "name": "vspeech_playback__enable",
-                        "value": "false"
                     },
                     {
                         "name": "vspeech_translation__enable",
                         "value": "true"
                     },
                     {
-                        "name": "vspeech_subtitle__enable",
-                        "value": "false"
+                        "name": "vspeech_transcription__worker_type",
+                        "value": "GCP"
                     },
                     {
-                        "name": "vspeech_gcp__gcp_project_id",
-                        "value": ""
+                        "name": "vspeech_tts__worker_type",
+                        "value": "VOICEVOX"
                     },
                     {
                         "name": "vspeech_gcp__service_account_info__type",
-                        "value": ""
+                        "value": "service_account"
                     },
                     {
                         "name": "vspeech_gcp__service_account_info__project_id",
@@ -92,40 +76,24 @@
                     },
                     {
                         "name": "vspeech_gcp__service_account_info__auth_uri",
-                        "value": ""
+                        "value": "https://accounts.google.com/o/oauth2/auth"
                     },
                     {
                         "name": "vspeech_gcp__service_account_info__token_uri",
-                        "value": ""
+                        "value": "https://oauth2.googleapis.com/token"
                     },
                     {
                         "name": "vspeech_gcp__service_account_info__auth_provider_x509_cert_url",
-                        "value": ""
+                        "value": "https://www.googleapis.com/oauth2/v1/certs"
                     },
                     {
                         "name": "vspeech_gcp__service_account_info__client_x509_cert_url",
                         "value": ""
                     },
-                    {
-                        "name": "vspeech_ami__ami_appkey",
-                        "value": ""
-                    },
-                    {
-                        "name": "vspeech_ami__ami_engine_name",
-                        "value": ""
-                    },
-                    {
-                        "name": "vspeech_ami__ami_engine_uri",
-                        "value": ""
-                    },
-                    {
-                        "name": "vspeech_ami__ami_service_id",
-                        "value": ""
-                    }
                 ],
                 "resources": {
                     "limits": {
-                        "memory": "2Gi"
+                        "memory": "4Gi"
                     }
                 }
             },
@@ -160,6 +128,10 @@
             "type": "python",
             "request": "launch",
             "module": "vspeech.gui",
+            "args": [
+                "--config",
+                "config_test.toml"
+            ],
             "justMyCode": true
         }
     ]

@@ -62,6 +62,7 @@ from vstreamer_protos.commander.commander_pb2 import OperationRoute
 from vstreamer_protos.commander.commander_pb2 import Response
 from vstreamer_protos.commander.commander_pb2_grpc import CommanderStub
 
+from gui.autocomplete_combobox import AutocompleteCombobox
 from vspeech.config import Config
 from vspeech.config import F0ExtractorType
 from vspeech.config import ReplaceFilter
@@ -70,7 +71,6 @@ from vspeech.config import TranscriptionWorkerType
 from vspeech.config import TtsWorkerType
 from vspeech.config import VoicevoxParam
 from vspeech.config import VR2Param
-from vspeech.gui.autocomplete_combobox import AutocompleteCombobox
 from vspeech.lib.audio import list_all_devices
 from vspeech.logger import logger
 from vspeech.shared_context import EventAddress
@@ -78,7 +78,7 @@ from vspeech.shared_context import EventAddress
 try:
     from pyvcroid2 import VcRoid2
 
-    from vspeech.gui.dummy_param import create_dummy_param
+    from gui.dummy_param import create_dummy_param
 
     use_vroid2 = True
 except ModuleNotFoundError:

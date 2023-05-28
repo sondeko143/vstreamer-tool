@@ -1,4 +1,4 @@
-from vspeech.gui.gui import gui
+from gui.gui import gui
 
 if __name__ == "__main__":
     gui()

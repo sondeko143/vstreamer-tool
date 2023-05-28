@@ -133,7 +133,7 @@ RoutesList: TypeAlias = list[list[str]]
 
 
 class RecordingConfig(BaseModel):
-    enable: bool = True
+    enable: bool = False
     routes_list: RoutesList = Field(default_factory=lambda: [["transcription"]])
     format: SampleFormat = SampleFormat.INT16
     channels: int = Field(
@@ -167,20 +167,20 @@ class RecordingConfig(BaseModel):
 
 
 class TranscriptionConfig(BaseModel):
-    enable: bool = True
-    worker_type: TranscriptionWorkerType = TranscriptionWorkerType.ACP
+    enable: bool = False
+    worker_type: TranscriptionWorkerType = TranscriptionWorkerType.GCP
     transliterate_with_mozc: bool = False
     recording_log: bool = False
     recording_log_dir: Path = Path("./rec")
 
 
 class TtsConfig(BaseModel):
-    enable: bool = True
+    enable: bool = False
     worker_type: TtsWorkerType = TtsWorkerType.VR2
 
 
 class PlaybackConfig(BaseModel):
-    enable: bool = True
+    enable: bool = False
     volume: int = 100
     output_host_api_name: Optional[str] = Field(
         default=None,
@@ -208,7 +208,7 @@ class SubtitleTextConfig(BaseModel):
 
 
 class SubtitleConfig(BaseModel):
-    enable: bool = True
+    enable: bool = False
     window_width: int = 1600
     window_height: int = 120
     bg_color: str = "#00ff00"
@@ -217,11 +217,11 @@ class SubtitleConfig(BaseModel):
 
 
 class TranslationConfig(BaseModel):
-    enable: bool = True
+    enable: bool = False
 
 
 class VcConfig(BaseModel):
-    enable: bool = True
+    enable: bool = False
 
 
 class AmiConfig(BaseModel):
