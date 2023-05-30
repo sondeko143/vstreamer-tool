@@ -9,7 +9,7 @@ repository = "https://github.com/sondeko143/vstreamer-tool"
 
 [tool.poetry.dependencies]
 google-cloud-translate = "^3.11.1"
-python = ">=3.10,<3.12"
+python = ">=3.11,<3.12"
 httpx = ">=0.24.0,<0.25.0"
 pydantic = "^1.10.7"
 aiofiles = "^23.1.0"
@@ -26,10 +26,10 @@ voicevox-core = [
 ]
 openai-whisper = { git = "https://github.com/openai/whisper", optional = true }
 torch = [
-    { url = "https://download.pytorch.org/whl/cu118/torch-2.0.1%2Bcu118-cp310-cp310-win_amd64.whl", platform = "win32", optional = true },
-    { url = "https://download.pytorch.org/whl/cpu/torch-2.0.1-cp310-none-macosx_11_0_arm64.whl", platform = "darwin", markers = "platform_machine == 'arm64'", optional = true },
-    { url = "https://download.pytorch.org/whl/cpu/torch-2.0.1-cp310-none-macosx_10_9_x86_64.whl", platform = "darwin", markers = "platform_machine == 'x86_64'", optional = true },
-    { url = "https://download.pytorch.org/whl/cu118/torch-2.0.1%2Bcu118-cp310-cp310-linux_x86_64.whl", platform = "linux", optional = true },
+    { url = "https://download.pytorch.org/whl/cu118/torch-2.0.1%2Bcu118-cp311-cp311-win_amd64.whl", platform = "win32", optional = true },
+    { url = "https://download.pytorch.org/whl/cpu/torch-2.0.1-cp311-none-macosx_11_0_arm64.whl", platform = "darwin", markers = "platform_machine == 'arm64'", optional = true },
+    { url = "https://download.pytorch.org/whl/cpu/torch-2.0.1-cp311-none-macosx_10_9_x86_64.whl", platform = "darwin", markers = "platform_machine == 'x86_64'", optional = true },
+    { url = "https://download.pytorch.org/whl/cu118/torch-2.0.1%2Bcu118-cp311-cp311-linux_x86_64.whl", platform = "linux", optional = true },
 ]
 fairseq = { version = "^0.12.2", optional = true }
 pyworld = { version = "^0.3.3", optional = true }
@@ -38,13 +38,13 @@ faiss-cpu = [
     { version = "^1.7.2", platform = "win32", optional = true },
     { version = "^1.7.2", platform = "darwin", optional = true },
 ]
-onnxruntime-gpu = { version = "1.14.1", optional = true, platform = "win32" }
-onnxruntime = { version = "1.14.1", optional = true, platform = "darwin" }
+onnxruntime-gpu = { version = "^1.14.1", optional = true, platform = "win32" }
+onnxruntime = { version = "^1.14.1", optional = true, platform = "darwin" }
 torchaudio = [
-    { url = "https://download.pytorch.org/whl/cu118/torchaudio-2.0.2%2Bcu118-cp310-cp310-win_amd64.whl", platform = "win32", optional = true },
-    { url = "https://download.pytorch.org/whl/cpu/torchaudio-2.0.2-cp310-cp310-macosx_11_0_arm64.whl", platform = "darwin", markers = "platform_machine == 'arm64'", optional = true },
-    { url = "https://download.pytorch.org/whl/cpu/torchaudio-2.0.2-cp310-cp310-macosx_10_9_x86_64.whl", platform = "darwin", markers = "platform_machine == 'x86_64'", optional = true },
-    { url = "https://download.pytorch.org/whl/cu118/torchaudio-2.0.2%2Bcu118-cp310-cp310-linux_x86_64.whl", platform = "linux", optional = true },
+    { url = "https://download.pytorch.org/whl/cu118/torchaudio-2.0.2%2Bcu118-cp311-cp311-win_amd64.whl", platform = "win32", optional = true },
+    { url = "https://download.pytorch.org/whl/cpu/torchaudio-2.0.2-cp311-cp311-macosx_11_0_arm64.whl", platform = "darwin", markers = "platform_machine == 'arm64'", optional = true },
+    { url = "https://download.pytorch.org/whl/cpu/torchaudio-2.0.2-cp311-cp311-macosx_10_9_x86_64.whl", platform = "darwin", markers = "platform_machine == 'x86_64'", optional = true },
+    { url = "https://download.pytorch.org/whl/cu118/torchaudio-2.0.2%2Bcu118-cp311-cp311-linux_x86_64.whl", platform = "linux", optional = true },
 ]
 numpy = { version = ">=1.18,<1.24", optional = true }
 scipy = { version = "^1.10.1", optional = true }

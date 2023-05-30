@@ -1,9 +1,8 @@
-from asyncio import FIRST_COMPLETED
-from asyncio import AbstractEventLoop
 from asyncio import CancelledError
 from asyncio import Task
+from asyncio import TaskGroup
 from asyncio import get_event_loop
-from asyncio import wait
+from traceback import format_exception
 from typing import IO
 from typing import Any
 from typing import List
@@ -12,6 +11,7 @@ from typing import Optional
 import click
 
 from vspeech.config import Config
+from vspeech.exceptions import WorkerShutdown
 from vspeech.logger import configure_logger
 from vspeech.logger import logger
 from vspeech.shared_context import SharedContext
@@ -32,49 +32,44 @@ async def cancel_tasks(tasks: List[Task[Any]]):
                 logger.info("cancelled %s", task.get_name())
 
 
-async def vspeech_coro(loop: AbstractEventLoop, config: Config):
+async def vspeech_coro(config: Config):
     context = SharedContext(config=config)
-    tasks = [
-        create_sender_task(loop=loop, context=context),
-        create_receiver_task(loop=loop, context=context),
-    ]
-    if config.recording.enable:
-        from vspeech.worker.recording import create_recording_task
-
-        tasks.append(create_recording_task(loop=loop, context=context))
-    if config.tts.enable:
-        from vspeech.worker.tts import create_tts_task
-
-        tasks.append(create_tts_task(loop=loop, context=context))
-    if config.transcription.enable:
-        from vspeech.worker.transcription import create_transcription_task
-
-        tasks.append(create_transcription_task(loop=loop, context=context))
-    if config.subtitle.enable:
-        from vspeech.worker.subtitle import create_subtitle_task
-
-        tasks.append(create_subtitle_task(loop=loop, context=context))
-    if config.translation.enable:
-        from vspeech.worker.translation import create_translation_task
-
-        tasks.append(create_translation_task(loop=loop, context=context))
-    if config.playback.enable:
-        from vspeech.worker.playback import create_playback_task
-
-        tasks.append(create_playback_task(loop=loop, context=context))
-    if config.vc.enable:
-        from vspeech.worker.vc import create_vc_task
-
-        tasks.append(create_vc_task(loop=loop, context=context))
-    tasks = [task for task in tasks if task]
     try:
-        await wait(tasks, return_when=FIRST_COMPLETED)
-    except CancelledError:
-        logger.info("task cancelled")
-    except Exception as e:
-        logger.exception(e)
-    finally:
-        await cancel_tasks(tasks)
+        async with TaskGroup() as tg:
+            create_sender_task(tg=tg, context=context)
+            create_receiver_task(tg=tg, context=context)
+            if config.recording.enable:
+                from vspeech.worker.recording import create_recording_task
+
+                create_recording_task(tg=tg, context=context)
+            if config.tts.enable:
+                from vspeech.worker.tts import create_tts_task
+
+                create_tts_task(tg=tg, context=context)
+            if config.transcription.enable:
+                from vspeech.worker.transcription import create_transcription_task
+
+                create_transcription_task(tg=tg, context=context)
+            if config.subtitle.enable:
+                from vspeech.worker.subtitle import create_subtitle_task
+
+                create_subtitle_task(tg=tg, context=context)
+            if config.translation.enable:
+                from vspeech.worker.translation import create_translation_task
+
+                create_translation_task(tg=tg, context=context)
+            if config.playback.enable:
+                from vspeech.worker.playback import create_playback_task
+
+                create_playback_task(tg=tg, context=context)
+            if config.vc.enable:
+                from vspeech.worker.vc import create_vc_task
+
+                create_vc_task(tg=tg, context=context)
+    except* WorkerShutdown as eg:
+        for e in eg.exceptions:
+            logger.warning("workers shutdown: %s", e.args)
+            logger.debug("".join(format_exception(e)))
 
 
 @click.command()
@@ -84,7 +79,7 @@ async def vspeech_coro(loop: AbstractEventLoop, config: Config):
     "config_file",
     type=click.File("rb"),
 )
-def cmd(config_file: Optional[IO[bytes]]) -> int:
+def cmd(config_file: Optional[IO[bytes]]):
     if config_file:
         config = Config.read_config_from_file(config_file)
         config_file.close()
@@ -94,8 +89,7 @@ def cmd(config_file: Optional[IO[bytes]]) -> int:
     configure_logger(config)
     loop = get_event_loop()
     try:
-        loop.run_until_complete(vspeech_coro(loop=loop, config=config))
-        logger.debug("coro ended.")
+        loop.run_until_complete(vspeech_coro(config=config))
         loop.stop()
         loop.close()
         exit(1)
@@ -108,5 +102,3 @@ def cmd(config_file: Optional[IO[bytes]]) -> int:
     except Exception as e:
         logger.exception(e)
         exit(1)
-    finally:
-        logger.debug("main loop finally")

@@ -1,8 +1,8 @@
 import audioop
-from asyncio import AbstractEventLoop
 from asyncio import CancelledError
 from asyncio import Queue
 from asyncio import Task
+from asyncio import TaskGroup
 from asyncio import to_thread
 from math import log
 from typing import Any
@@ -15,6 +15,7 @@ from pyaudio import PyAudio
 
 from vspeech.config import RecordingConfig
 from vspeech.config import get_sample_size
+from vspeech.exceptions import shutdown_worker
 from vspeech.lib.audio import get_device_name
 from vspeech.lib.audio import get_pa_format
 from vspeech.lib.audio import search_device
@@ -151,15 +152,12 @@ async def recording_worker(context: SharedContext, out_queue: Queue[WorkerOutput
                     break
             if not context.running.is_set():
                 await context.running.wait()
-    except CancelledError:
-        logger.info("recording worker cancelled")
-        raise
+    except CancelledError as e:
+        raise shutdown_worker(e)
 
 
-def create_recording_task(
-    loop: AbstractEventLoop, context: SharedContext
-) -> Task[NoReturn]:
-    task = loop.create_task(
+def create_recording_task(tg: TaskGroup, context: SharedContext) -> Task[NoReturn]:
+    task = tg.create_task(
         recording_worker(context, out_queue=context.sender_queue), name="recording"
     )
     context.worker_need_reload[task.get_name()] = False

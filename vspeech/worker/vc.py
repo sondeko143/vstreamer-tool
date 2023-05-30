@@ -1,7 +1,7 @@
 import json
-from asyncio import AbstractEventLoop
 from asyncio import CancelledError
 from asyncio import Queue
+from asyncio import TaskGroup
 from asyncio import to_thread
 from audioop import mul
 from functools import partial
@@ -11,6 +11,7 @@ from vspeech.config import EventType
 from vspeech.config import RvcConfig
 from vspeech.config import SampleFormat
 from vspeech.config import get_sample_size
+from vspeech.exceptions import shutdown_worker
 from vspeech.logger import logger
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import SoundOutput
@@ -88,19 +89,18 @@ async def vc_worker(
                     break
             if not context.running.is_set():
                 await context.running.wait()
-    except CancelledError:
-        logger.debug("vc worker cancelled")
-        raise
+    except CancelledError as e:
+        raise shutdown_worker(e)
 
 
 def create_vc_task(
-    loop: AbstractEventLoop,
+    tg: TaskGroup,
     context: SharedContext,
 ):
     in_queue = Queue[WorkerInput]()
     event = EventType.vc
     context.input_queues[event] = in_queue
-    task = loop.create_task(
+    task = tg.create_task(
         vc_worker(context, in_queue=in_queue, out_queue=context.sender_queue),
         name=event.name,
     )
