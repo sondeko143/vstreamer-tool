@@ -1,6 +1,6 @@
+from asyncio import AbstractEventLoop
 from asyncio import CancelledError
 from asyncio import Queue
-from asyncio import TaskGroup
 from asyncio import sleep
 from functools import partial
 from html import unescape
@@ -12,7 +12,6 @@ from google.cloud.translate_v3 import TranslateTextRequest
 from google.cloud.translate_v3 import TranslationServiceAsyncClient
 
 from vspeech.config import GcpConfig
-from vspeech.exceptions import shutdown_worker
 from vspeech.lib.gcp import get_credentials
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
@@ -98,18 +97,19 @@ async def translation_worker(
                     break
             if not context.running.is_set():
                 await context.running.wait()
-    except CancelledError as e:
-        raise shutdown_worker(e)
+    except CancelledError:
+        logger.debug("transcription worker cancelled")
+        raise
 
 
 def create_translation_task(
-    tg: TaskGroup,
+    loop: AbstractEventLoop,
     context: SharedContext,
 ):
     in_queue = Queue[WorkerInput]()
     event = EventType.translation
     context.input_queues[event] = in_queue
-    task = tg.create_task(
+    task = loop.create_task(
         translation_worker(context, in_queue=in_queue, out_queue=context.sender_queue),
         name=event.name,
     )

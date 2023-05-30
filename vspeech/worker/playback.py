@@ -1,8 +1,8 @@
 import audioop
+from asyncio import AbstractEventLoop
 from asyncio import CancelledError
 from asyncio import Queue
 from asyncio import Task
-from asyncio import TaskGroup
 from asyncio import to_thread
 from dataclasses import InitVar
 from dataclasses import dataclass
@@ -15,7 +15,6 @@ from pyaudio import Stream as PaStream
 from vspeech.config import PlaybackConfig
 from vspeech.config import SampleFormat
 from vspeech.config import get_sample_size
-from vspeech.exceptions import shutdown_worker
 from vspeech.lib.audio import DeviceInfo
 from vspeech.lib.audio import get_device_info
 from vspeech.lib.audio import get_pa_format
@@ -151,18 +150,19 @@ async def playback_worker(context: SharedContext, in_queue: Queue[WorkerInput]):
                     break
             if not context.running.is_set():
                 await context.running.wait()
-    except CancelledError as e:
-        raise shutdown_worker(e)
+    except CancelledError:
+        logger.info("playback worker cancelled")
+        raise
 
 
 def create_playback_task(
-    tg: TaskGroup,
+    loop: AbstractEventLoop,
     context: SharedContext,
 ) -> Task[NoReturn]:
     in_queue = Queue[WorkerInput]()
     event = EventType.playback
     context.input_queues[event] = in_queue
-    task = tg.create_task(
+    task = loop.create_task(
         playback_worker(context, in_queue=in_queue),
         name=event.name,
     )

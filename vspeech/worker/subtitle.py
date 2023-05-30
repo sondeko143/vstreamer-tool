@@ -1,8 +1,8 @@
+from asyncio import AbstractEventLoop
 from asyncio import CancelledError
 from asyncio import Queue
 from asyncio import QueueEmpty
 from asyncio import Task
-from asyncio import TaskGroup
 from asyncio import sleep
 from dataclasses import dataclass
 from functools import partial
@@ -15,7 +15,6 @@ from typing import Tuple
 from typing import TypeAlias
 
 from vspeech.config import SubtitleTextConfig
-from vspeech.exceptions import shutdown_worker
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
@@ -188,10 +187,10 @@ async def subtitle_worker(
     except Exception as e:
         logger.exception(e)
         raise e
-    except CancelledError as e:
-        logger.info("subtitle worker cancelled")
+    except CancelledError:
+        logger.info("gui worker cancelled")
         tk_root.destroy()
-        raise shutdown_worker(e)
+        raise
 
 
 def on_closing(gui_task: Task[Any]):
@@ -200,7 +199,7 @@ def on_closing(gui_task: Task[Any]):
 
 
 def create_subtitle_task(
-    tg: TaskGroup,
+    loop: AbstractEventLoop,
     context: SharedContext,
 ):
     tk_root = Tk()
@@ -209,7 +208,7 @@ def create_subtitle_task(
     in_queue = Queue[WorkerInput]()
     event = EventType.subtitle
     context.input_queues[event] = in_queue
-    gui_task = tg.create_task(
+    gui_task = loop.create_task(
         subtitle_worker(
             context,
             tk_root,

@@ -1,6 +1,6 @@
+from asyncio import AbstractEventLoop
 from asyncio import CancelledError
 from asyncio import Queue
-from asyncio import TaskGroup
 from typing import cast
 from urllib.parse import urlparse
 
@@ -19,7 +19,6 @@ from vstreamer_protos.commander.commander_pb2 import Response
 from vstreamer_protos.commander.commander_pb2_grpc import CommanderStub
 
 from vspeech.exceptions import EventDestinationNotFoundError
-from vspeech.exceptions import shutdown_worker
 from vspeech.lib.command import process_command
 from vspeech.lib.gcp import GcpIDTokenCredentials
 from vspeech.lib.gcp import get_id_token_credentials
@@ -110,11 +109,12 @@ async def sender(
                             )
             except EventDestinationNotFoundError as e:
                 logger.warning("unsupported event: %s", e)
-    except CancelledError as e:
-        raise shutdown_worker(e)
+    except CancelledError:
+        logger.info("sender worker cancelled")
+        raise
 
 
-def create_sender_task(tg: TaskGroup, context: SharedContext):
-    return tg.create_task(
+def create_sender_task(loop: AbstractEventLoop, context: SharedContext):
+    return loop.create_task(
         sender(context=context, in_queue=context.sender_queue), name="sender"
     )
