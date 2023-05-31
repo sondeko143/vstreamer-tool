@@ -24,8 +24,11 @@ class Voicevox:
         return self.core.is_model_loaded(speaker_id)
 
     def voicevox_tts(self, text: str, speaker_id: int, params: VoicevoxParam) -> bytes:
-        audio_query = self.core.audio_query(text, speaker_id=speaker_id)
-        for key, value in params:
-            setattr(audio_query, key, value)
-        wav = self.core.synthesis(audio_query, speaker_id=speaker_id)
-        return wav
+        try:
+            audio_query = self.core.audio_query(text, speaker_id=speaker_id)
+            for key, value in params:
+                setattr(audio_query, key, value)
+            wav = self.core.synthesis(audio_query, speaker_id=speaker_id)
+            return wav
+        except Exception as e:
+            raise ValueError(e)
