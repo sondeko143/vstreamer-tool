@@ -18,6 +18,7 @@ from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import SoundOutput
 from vspeech.shared_context import WorkerInput
+from vspeech.shared_context import WorkerMeta
 from vspeech.shared_context import WorkerOutput
 
 
@@ -143,12 +144,11 @@ def create_tts_task(
     tg: TaskGroup,
     context: SharedContext,
 ):
-    in_queue = Queue[WorkerInput]()
-    event = EventType.tts
-    context.input_queues[event] = in_queue
-    task = tg.create_task(
-        tts_worker(context, in_queue=in_queue, out_queue=context.sender_queue),
-        name=event.name,
+    worker = context.add_worker(
+        event=EventType.tts, configs_depends_on=["tts", "vr2", "voicevox"]
     )
-    context.worker_need_reload[task.get_name()] = False
+    task = tg.create_task(
+        tts_worker(context, in_queue=worker.in_queue, out_queue=context.sender_queue),
+        name=worker.event.name,
+    )
     return task

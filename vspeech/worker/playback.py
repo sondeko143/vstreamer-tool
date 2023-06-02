@@ -25,6 +25,7 @@ from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import WorkerInput
+from vspeech.shared_context import WorkerMeta
 
 
 @dataclass
@@ -159,12 +160,12 @@ def create_playback_task(
     tg: TaskGroup,
     context: SharedContext,
 ) -> Task[NoReturn]:
-    in_queue = Queue[WorkerInput]()
-    event = EventType.playback
-    context.input_queues[event] = in_queue
-    task = tg.create_task(
-        playback_worker(context, in_queue=in_queue),
-        name=event.name,
+    worker = context.add_worker(
+        event=EventType.playback,
+        configs_depends_on=["playback"],
     )
-    context.worker_need_reload[task.get_name()] = False
+    task = tg.create_task(
+        playback_worker(context, in_queue=worker.in_queue),
+        name=worker.event.name,
+    )
     return task

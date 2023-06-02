@@ -1272,7 +1272,7 @@ class VspeechGUI(Frame):
         try:
             if not self.thread:
                 return
-            self.thread.wait(0.005)
+            self.thread.wait(1 / 60)
             polling = self.thread.poll()
             if polling:
                 if self.thread.returncode > 0:
@@ -1447,7 +1447,7 @@ class VspeechGUI(Frame):
 def gui(config: str, theme: str):
     root = Window(themename=theme)
     root.title("vspeech")
-    root.geometry("550x700")
+    root.geometry("550x760")
     root.resizable(width=True, height=True)
     app = VspeechGUI(root, config)
     root.protocol("WM_DELETE_WINDOW", app.on_close)

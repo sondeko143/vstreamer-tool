@@ -20,6 +20,7 @@ from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import WorkerInput
+from vspeech.shared_context import WorkerMeta
 
 
 def update_text(current_text: str, add_text: str, max_text_len: int) -> str:
@@ -206,16 +207,16 @@ def create_subtitle_task(
     tk_root = Tk()
     address = f"{context.config.listen_address}:{context.config.listen_port}"
     tk_root.title(f"vspeech:subtitle {address}")
-    in_queue = Queue[WorkerInput]()
-    event = EventType.subtitle
-    context.input_queues[event] = in_queue
+    worker = context.add_worker(
+        event=EventType.subtitle, configs_depends_on=["subtitle"]
+    )
     gui_task = tg.create_task(
         subtitle_worker(
             context,
             tk_root,
-            in_queue=in_queue,
+            in_queue=worker.in_queue,
         ),
-        name=event.name,
+        name=worker.event.name,
     )
     tk_root.protocol("WM_DELETE_WINDOW", partial(on_closing, gui_task))
     return gui_task

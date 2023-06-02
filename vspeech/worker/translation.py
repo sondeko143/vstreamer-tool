@@ -18,6 +18,7 @@ from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import WorkerInput
+from vspeech.shared_context import WorkerMeta
 from vspeech.shared_context import WorkerOutput
 
 
@@ -106,12 +107,13 @@ def create_translation_task(
     tg: TaskGroup,
     context: SharedContext,
 ):
-    in_queue = Queue[WorkerInput]()
-    event = EventType.translation
-    context.input_queues[event] = in_queue
-    task = tg.create_task(
-        translation_worker(context, in_queue=in_queue, out_queue=context.sender_queue),
-        name=event.name,
+    worker = context.add_worker(
+        event=EventType.translation, configs_depends_on=["translation", "gcp"]
     )
-    context.worker_need_reload[task.get_name()] = False
+    task = tg.create_task(
+        translation_worker(
+            context, in_queue=worker.in_queue, out_queue=context.sender_queue
+        ),
+        name=worker.event.name,
+    )
     return task

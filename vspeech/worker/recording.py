@@ -13,6 +13,7 @@ from typing import Tuple
 
 from pyaudio import PyAudio
 
+from vspeech.config import EventType
 from vspeech.config import RecordingConfig
 from vspeech.config import get_sample_size
 from vspeech.exceptions import shutdown_worker
@@ -22,6 +23,7 @@ from vspeech.lib.audio import search_device
 from vspeech.logger import logger
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import SoundOutput
+from vspeech.shared_context import WorkerMeta
 from vspeech.shared_context import WorkerOutput
 
 
@@ -157,8 +159,12 @@ async def recording_worker(context: SharedContext, out_queue: Queue[WorkerOutput
 
 
 def create_recording_task(tg: TaskGroup, context: SharedContext) -> Task[NoReturn]:
-    task = tg.create_task(
-        recording_worker(context, out_queue=context.sender_queue), name="recording"
+    worker = context.add_worker(
+        event=EventType.recording,
+        configs_depends_on=["recording"],
     )
-    context.worker_need_reload[task.get_name()] = False
+    task = tg.create_task(
+        recording_worker(context, out_queue=context.sender_queue),
+        name=worker.event.name,
+    )
     return task

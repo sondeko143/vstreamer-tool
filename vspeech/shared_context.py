@@ -45,6 +45,7 @@ from vspeech.config import EventType
 from vspeech.config import RoutesList
 from vspeech.config import SampleFormat
 from vspeech.exceptions import EventToOperationConvertError
+from vspeech.logger import logger
 
 
 def event_to_operation(event: EventType) -> Operation:
@@ -369,12 +370,19 @@ InputQueues = Dict[EventType, Queue[WorkerInput]]
 
 
 @dataclass
+class WorkerMeta:
+    event: EventType
+    configs_depends_on: list[str]
+    need_reload: bool = False
+    in_queue: Queue[WorkerInput] = field(default_factory=Queue[WorkerInput])
+
+
+@dataclass
 class SharedContext:
     config: Config
-    input_queues: InputQueues = field(default_factory=dict)
     running: Event = field(default_factory=Event)
     sender_queue: Queue[WorkerOutput] = field(default_factory=Queue)
-    worker_need_reload: dict[str, bool] = field(default_factory=dict)
+    workers: dict[str, WorkerMeta] = field(default_factory=dict)
 
     def __post_init__(self):
         self.running.set()
@@ -384,10 +392,27 @@ class SharedContext:
         task = current_task()
         if not task:
             return False
-        return self.worker_need_reload.get(task.get_name(), False)
+        worker = self.workers.get(task.get_name())
+        worker.need_reload if worker else False
 
     def reset_need_reload(self):
         task = current_task()
         if not task:
             return
-        self.worker_need_reload[task.get_name()] = False
+        worker = self.workers.get(task.get_name())
+        if worker:
+            worker.need_reload = False
+
+    def put_queue(self, dest_event: EventType, request: WorkerInput):
+        try:
+            queue = self.workers[dest_event.name]
+            queue.in_queue.put_nowait(request)
+        except KeyError:
+            logger.warn("worker %s not activated", dest_event)
+
+    def add_worker(self, event: EventType, configs_depends_on: list[str]):
+        self.workers[event.name] = WorkerMeta(
+            event=event,
+            configs_depends_on=configs_depends_on,
+        )
+        return self.workers[event.name]

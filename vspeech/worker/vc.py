@@ -16,6 +16,7 @@ from vspeech.logger import logger
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import SoundOutput
 from vspeech.shared_context import WorkerInput
+from vspeech.shared_context import WorkerMeta
 from vspeech.shared_context import WorkerOutput
 
 
@@ -97,12 +98,9 @@ def create_vc_task(
     tg: TaskGroup,
     context: SharedContext,
 ):
-    in_queue = Queue[WorkerInput]()
-    event = EventType.vc
-    context.input_queues[event] = in_queue
+    worker = context.add_worker(event=EventType.vc, configs_depends_on=["vc", "rvc"])
     task = tg.create_task(
-        vc_worker(context, in_queue=in_queue, out_queue=context.sender_queue),
-        name=event.name,
+        vc_worker(context, in_queue=worker.in_queue, out_queue=context.sender_queue),
+        name=worker.event.name,
     )
-    context.worker_need_reload[task.get_name()] = False
     return task
