@@ -102,6 +102,7 @@ pythonpath = "."
 asyncio_mode = "auto"
 
 [tool.pyright]
+typeCheckingMode = "strict"
 reportUnknownMemberType = "warning"
 reportMissingTypeStubs = "warning"
 reportUnknownVariableType = "warning"

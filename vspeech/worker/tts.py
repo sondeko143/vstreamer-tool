@@ -18,7 +18,6 @@ from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import SoundOutput
 from vspeech.shared_context import WorkerInput
-from vspeech.shared_context import WorkerMeta
 from vspeech.shared_context import WorkerOutput
 
 

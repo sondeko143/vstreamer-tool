@@ -23,7 +23,6 @@ from vspeech.lib.audio import search_device
 from vspeech.logger import logger
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import SoundOutput
-from vspeech.shared_context import WorkerMeta
 from vspeech.shared_context import WorkerOutput
 
 

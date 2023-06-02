@@ -20,7 +20,6 @@ from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import WorkerInput
-from vspeech.shared_context import WorkerMeta
 
 
 def update_text(current_text: str, add_text: str, max_text_len: int) -> str:

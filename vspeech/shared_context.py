@@ -392,23 +392,31 @@ class SharedContext:
         task = current_task()
         if not task:
             return False
-        worker = self.workers.get(task.get_name())
-        worker.need_reload if worker else False
+        task_name = task.get_name()
+        try:
+            worker = self.workers[task_name]
+            return worker.need_reload
+        except KeyError:
+            logger.warning("worker %s not activated", task_name)
+            return False
 
     def reset_need_reload(self):
         task = current_task()
         if not task:
             return
-        worker = self.workers.get(task.get_name())
-        if worker:
+        task_name = task.get_name()
+        try:
+            worker = self.workers[task_name]
             worker.need_reload = False
+        except KeyError:
+            logger.warning("worker %s not activated", task_name)
 
     def put_queue(self, dest_event: EventType, request: WorkerInput):
         try:
             queue = self.workers[dest_event.name]
             queue.in_queue.put_nowait(request)
         except KeyError:
-            logger.warn("worker %s not activated", dest_event)
+            logger.warning("worker %s not activated", dest_event)
 
     def add_worker(self, event: EventType, configs_depends_on: list[str]):
         self.workers[event.name] = WorkerMeta(
