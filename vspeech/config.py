@@ -222,6 +222,7 @@ class TranslationConfig(BaseModel):
 
 class VcConfig(BaseModel):
     enable: bool = False
+    adjust_output_vol_to_input_voice: bool = True
 
 
 class AmiConfig(BaseModel):
