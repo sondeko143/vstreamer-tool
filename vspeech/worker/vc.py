@@ -6,6 +6,7 @@ from asyncio import TaskGroup
 from asyncio import to_thread
 from audioop import mul
 from functools import partial
+from math import sqrt
 from typing import Any
 
 from vspeech.config import EventType
@@ -52,13 +53,13 @@ async def rvc_worker(
             input_sample_width = get_sample_size(speech.sound.format)
             if vc_config.adjust_output_vol_to_input_voice:
                 max_possible_val = (2 ** (input_sample_width * 8)) / 2
-                input_vol = (
+                input_vol = sqrt(
                     audioop.rms(speech.sound.data, input_sample_width)
                     / max_possible_val
                 )
                 logger.debug("input_vol: %s", input_vol)
             else:
-                input_vol = 100
+                input_vol = 1.0
             audio = await to_thread(
                 change_voice,
                 voice_frames=mul(
