@@ -3,12 +3,15 @@ from asyncio.tasks import current_task
 from datetime import datetime
 from sys import stdout
 
+import colorlog
+from colorlog.formatter import ColoredFormatter
+
 from vspeech.config import Config
 
-logger = logging.getLogger()
+logger = colorlog.getLogger()
 
 
-class TaskStreamHandler(logging.StreamHandler):  # type: ignore
+class TaskStreamHandler(colorlog.StreamHandler):  # type: ignore
     def emit(self, record: logging.LogRecord) -> None:
         try:
             task = current_task()
@@ -35,16 +38,21 @@ class TaskFileHandler(logging.FileHandler):
 
 
 def configure_logger(config: Config):
-    log_format = logging.Formatter("%(asctime)s %(thread)s[%(task)s] : %(message)s")
+    log_file_format = logging.Formatter(
+        "%(asctime)s %(thread)s[%(task)s] %(levelname)s : %(message)s"
+    )
+    log_sout_format = ColoredFormatter(
+        "%(asctime)s %(log_color)s%(levelname).4s%(reset)s %(thread)s[%(task)s]  : %(message)s"
+    )
     now = datetime.now()
     filename = now.strftime(config.log_file.replace("%%", "%"))
     if filename:
         file_handler = TaskFileHandler(filename, encoding="utf-8")
-        file_handler.setFormatter(log_format)
+        file_handler.setFormatter(log_file_format)
         file_handler.setLevel(config.log_level)
         logger.addHandler(file_handler)
     stdout_handler = TaskStreamHandler(stdout)
     stdout_handler.setLevel(config.log_level)
-    stdout_handler.setFormatter(log_format)
+    stdout_handler.setFormatter(log_sout_format)
     logger.addHandler(stdout_handler)
     logger.setLevel(config.log_level)

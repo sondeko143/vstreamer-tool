@@ -10,9 +10,9 @@ from fairseq import checkpoint_utils
 from fairseq.models.hubert import HubertModel
 from numpy.typing import NDArray
 from onnxruntime import InferenceSession
-from resampy import resample
 from scipy import signal
 from torch.nn import functional
+from torchaudio.functional import resample
 
 from vspeech.config import F0ExtractorType
 from vspeech.config import RvcConfig
@@ -133,24 +133,19 @@ def extract_features(
     model: HubertModel,
     feats: torch.Tensor,
     dev: torch.device,
-    emb_channels: int = 256,
+    emb_output_layer: int = 9,
+    use_final_proj: bool = True,
 ) -> torch.Tensor:
     padding_mask = torch.BoolTensor(feats.shape).to(dev).fill_(False)
-    if emb_channels == 256:
-        inputs = {
-            "source": feats.to(dev),
-            "padding_mask": padding_mask,
-            "output_layer": 9,  # layer 9
-        }
-    else:
-        inputs = {
-            "source": feats.to(dev),
-            "padding_mask": padding_mask,
-        }
+    inputs = {
+        "source": feats.to(dev),
+        "padding_mask": padding_mask,
+        "output_layer": emb_output_layer,
+    }
 
     with torch.no_grad():
-        logits = model.extract_features(**inputs)
-        if emb_channels == 256:
+        logits = model.extract_features(**inputs)  # type: ignore
+        if use_final_proj:
             feats = model.final_proj(logits[0])  # type: ignore
         else:
             feats = logits[0]
@@ -218,28 +213,38 @@ def change_voice(
     voice_sample_rate: int,
     target_sample_rate: int,
     device: torch.device,
-    emb_channels: int,
+    emb_output_layer: int,
+    use_final_proj: bool,
     hubert_model: HubertModel,
     session: InferenceSession,
     f0_enabled: bool,
 ) -> NDArray[np.int16]:
-    sound_data = np.frombuffer(voice_frames, dtype="int16")
-    audio = sound_data.astype(np.float32) / 32768.0
-    if voice_sample_rate != 16000:
-        audio = cast(NDArray[np.float32], resample(audio, voice_sample_rate, 16000))
+    input_sound = np.frombuffer(voice_frames, dtype="int16")
+    input_size = input_sound.shape[0]
+    if input_size % 128 != 0:
+        input_size = input_size + (128 - (input_size % 128))
+
+    audio = input_sound.astype(np.float32) / 32768.0
+    if audio.shape[0] < input_size:
+        audio = np.concatenate([np.zeros([input_size]), audio])
+    audio = torch.from_numpy(audio).to(device=device, dtype=torch.float32)
+
+    audio = resample(audio, voice_sample_rate, 16000, rolloff=0.99)
 
     repeat = 3 if half_available else 1
     repeat *= rvc_config.quality.value
     t_pad = voice_sample_rate * repeat
     t_pad_tgt = target_sample_rate * repeat
 
-    audio_pad = np.pad(audio, (t_pad, t_pad), mode="reflect")
+    audio_pad = functional.pad(
+        audio.unsqueeze(0), (t_pad, t_pad), mode="reflect"
+    ).squeeze(0)
     sid = 0
     sid = torch.tensor(sid, device=device).unsqueeze(0).long()
 
     f0_up_key = rvc_config.f0_up_key
 
-    feats: torch.Tensor = torch.from_numpy(audio_pad)
+    feats = audio_pad
     if half_available:
         feats = feats.half()
     else:
@@ -251,7 +256,11 @@ def change_voice(
 
     padding_mask = torch.BoolTensor(feats.shape).to(device).fill_(False)
     feats = extract_features(
-        model=hubert_model, feats=feats, emb_channels=emb_channels, dev=device
+        model=hubert_model,
+        feats=feats,
+        dev=device,
+        emb_output_layer=emb_output_layer,
+        use_final_proj=use_final_proj,
     )
 
     feats = cast(
@@ -265,7 +274,7 @@ def change_voice(
         p_len = feats.shape[1]
     if f0_enabled:
         pitch, pitchf = pitch_extract(
-            audio_pad,
+            audio_pad.detach().cpu().numpy(),
             f0_up_key,
             voice_sample_rate,
             rvc_config.window,
@@ -290,7 +299,7 @@ def change_voice(
     # 推論実行
     with torch.no_grad():
         audio1 = (
-            (
+            torch.clip(
                 infer(
                     session=session,
                     is_half=is_model_half,
@@ -299,14 +308,13 @@ def change_voice(
                     pitch=pitch,
                     pitchf=pitchf,
                     sid=sid,
-                )[0][0, 0]
-                * 32768
+                )[0][0, 0].to(dtype=torch.float32),
+                -1.0,
+                1.0,
             )
-            .data.cpu()
-            .float()
-            .numpy()
-            .astype(np.int16)
-        )
+            * 32767.5
+            - 0.5
+        ).data.to(dtype=torch.int16)
 
     del feats, p_len_tensor, padding_mask
     torch.cuda.empty_cache()
@@ -318,4 +326,4 @@ def change_voice(
 
     del pitch, pitchf, sid
     torch.cuda.empty_cache()
-    return audio1
+    return audio1.detach().cpu().numpy()

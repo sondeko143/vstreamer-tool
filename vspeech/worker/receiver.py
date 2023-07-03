@@ -1,5 +1,5 @@
-from asyncio import AbstractEventLoop
 from asyncio import CancelledError
+from asyncio import TaskGroup
 from dataclasses import dataclass
 from typing import cast
 
@@ -12,6 +12,7 @@ from vstreamer_protos.commander.commander_pb2_grpc import (
     add_CommanderServicer_to_server,
 )
 
+from vspeech.exceptions import shutdown_worker
 from vspeech.lib.command import process_command
 from vspeech.logger import logger
 from vspeech.shared_context import SharedContext
@@ -60,16 +61,15 @@ async def receiver_worker(context: SharedContext):
     try:
         await server.start()
         await server.wait_for_termination()
-    except CancelledError:
-        logger.info("receiver worker cancelled")
-        raise
+    except CancelledError as e:
+        raise shutdown_worker(e)
 
 
 def create_receiver_task(
-    loop: AbstractEventLoop,
+    tg: TaskGroup,
     context: SharedContext,
 ):
-    return loop.create_task(
+    return tg.create_task(
         receiver_worker(context=context),
         name="receiver",
     )

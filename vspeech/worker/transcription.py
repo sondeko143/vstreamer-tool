@@ -1,6 +1,6 @@
-from asyncio import AbstractEventLoop
 from asyncio import CancelledError
 from asyncio import Queue
+from asyncio import TaskGroup
 from asyncio import sleep
 from asyncio import to_thread
 from datetime import datetime
@@ -28,6 +28,7 @@ from vspeech.config import TranscriptionConfig
 from vspeech.config import TranscriptionWorkerType
 from vspeech.config import WhisperConfig
 from vspeech.config import get_sample_size
+from vspeech.exceptions import shutdown_worker
 from vspeech.lib.ami import parse_response
 from vspeech.lib.gcp import get_credentials
 from vspeech.logger import logger
@@ -286,23 +287,22 @@ async def transcription_worker(
                     break
             if not context.running.is_set():
                 await context.running.wait()
-    except CancelledError:
-        logger.info("transcription worker cancelled")
-        raise
+    except CancelledError as e:
+        raise shutdown_worker(e)
 
 
 def create_transcription_task(
-    loop: AbstractEventLoop,
+    tg: TaskGroup,
     context: SharedContext,
 ):
-    in_queue = Queue[WorkerInput]()
-    event = EventType.transcription
-    context.input_queues[event] = in_queue
-    task = loop.create_task(
-        transcription_worker(
-            context, in_queue=in_queue, out_queue=context.sender_queue
-        ),
-        name=event.name,
+    worker = context.add_worker(
+        event=EventType.transcription,
+        configs_depends_on=["transcription", "ami", "gcp", "whisper"],
     )
-    context.worker_need_reload[task.get_name()] = False
+    task = tg.create_task(
+        transcription_worker(
+            context, in_queue=worker.in_queue, out_queue=context.sender_queue
+        ),
+        name=worker.event.name,
+    )
     return task

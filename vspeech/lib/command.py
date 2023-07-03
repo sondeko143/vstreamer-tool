@@ -7,7 +7,6 @@ from vspeech.config import ReplaceFilter
 from vspeech.exceptions import ReplaceFilterParseError
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
-from vspeech.shared_context import InputQueues
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import WorkerInput
 from vspeech.shared_context import WorkerOutput
@@ -30,53 +29,21 @@ def transform_content(command: WorkerInput, filters: List[ReplaceFilter]):
         command.text = text_filter(filters=filters, text=command.text)
 
 
-def put_queue(input_queues: InputQueues, dest_event: EventType, request: WorkerInput):
-    try:
-        queue = input_queues[dest_event]
-        queue.put_nowait(request)
-    except KeyError:
-        logger.warn("worker %s not activated", dest_event)
-
-
 def process_command(context: SharedContext, request: WorkerInput):
     transform_content(filters=context.config.filters, command=request)
     current = request.current_event.event
     if EventType.transcription == current:
-        put_queue(
-            input_queues=context.input_queues,
-            dest_event=EventType.transcription,
-            request=request,
-        )
+        context.put_queue(dest_event=EventType.transcription, request=request)
     if EventType.translation == current:
-        put_queue(
-            input_queues=context.input_queues,
-            dest_event=EventType.translation,
-            request=request,
-        )
+        context.put_queue(dest_event=EventType.translation, request=request)
     if EventType.subtitle == current:
-        put_queue(
-            input_queues=context.input_queues,
-            dest_event=EventType.subtitle,
-            request=request,
-        )
+        context.put_queue(dest_event=EventType.subtitle, request=request)
     if EventType.tts == current:
-        put_queue(
-            input_queues=context.input_queues,
-            dest_event=EventType.tts,
-            request=request,
-        )
+        context.put_queue(dest_event=EventType.tts, request=request)
     if EventType.vc == current:
-        put_queue(
-            input_queues=context.input_queues,
-            dest_event=EventType.vc,
-            request=request,
-        )
+        context.put_queue(dest_event=EventType.vc, request=request)
     if EventType.playback == current:
-        put_queue(
-            input_queues=context.input_queues,
-            dest_event=EventType.playback,
-            request=request,
-        )
+        context.put_queue(dest_event=EventType.playback, request=request)
     if EventType.pause == current:
         logger.debug("pause")
         context.running.clear()
@@ -89,9 +56,25 @@ def process_command(context: SharedContext, request: WorkerInput):
         file_path = request.file_path
         logger.debug("reload: %s", file_path)
         with open(file_path, "rb") as f:
-            context.config = Config.read_config_from_file(f)
-        for worker_name in context.worker_need_reload.keys():
-            context.worker_need_reload[worker_name] = True
+            new_config = Config.read_config_from_file(f)
+        workers = context.workers.values()
+        logger.debug("workers: %s", workers)
+        for worker in workers:
+            worker.need_reload = False
+            for config_name in worker.configs_depends_on:
+                new_config_value = new_config.get_nested_value(config_name)
+                old_config_value = context.config.get_nested_value(config_name)
+                logger.debug(
+                    "worker[%s] old [%s], new[%s].",
+                    worker.event.name,
+                    old_config_value,
+                    new_config_value,
+                )
+                if new_config_value != old_config_value:
+                    logger.info("worker[%s] will be reloaded.", worker.event.name)
+                    worker.need_reload = True
+                    break
+        context.config = new_config
         if not already_stopped:
             context.running.set()
     if EventType.set_filters == current:

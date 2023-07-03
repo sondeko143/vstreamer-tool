@@ -222,6 +222,7 @@ class TranslationConfig(BaseModel):
 
 class VcConfig(BaseModel):
     enable: bool = False
+    adjust_output_vol_to_input_voice: bool = True
 
 
 class AmiConfig(BaseModel):
@@ -371,3 +372,10 @@ class Config(BaseSettings):
             },
         }
         return toml.dumps(conf_dict, encoder=CustomTomlEncoder(dict, separator="\n"))
+
+    def get_nested_value(self, name: str):
+        *attributes, child = name.split(".")
+        nest = self
+        for attribute in attributes:
+            nest = getattr(nest, attribute)
+        return getattr(nest, child)

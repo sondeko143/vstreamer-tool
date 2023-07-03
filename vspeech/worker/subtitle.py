@@ -1,8 +1,8 @@
-from asyncio import AbstractEventLoop
 from asyncio import CancelledError
 from asyncio import Queue
 from asyncio import QueueEmpty
 from asyncio import Task
+from asyncio import TaskGroup
 from asyncio import sleep
 from dataclasses import dataclass
 from functools import partial
@@ -15,6 +15,7 @@ from typing import Tuple
 from typing import TypeAlias
 
 from vspeech.config import SubtitleTextConfig
+from vspeech.exceptions import shutdown_worker
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
@@ -187,10 +188,10 @@ async def subtitle_worker(
     except Exception as e:
         logger.exception(e)
         raise e
-    except CancelledError:
-        logger.info("gui worker cancelled")
+    except CancelledError as e:
+        logger.info("subtitle worker cancelled")
         tk_root.destroy()
-        raise
+        raise shutdown_worker(e)
 
 
 def on_closing(gui_task: Task[Any]):
@@ -199,22 +200,22 @@ def on_closing(gui_task: Task[Any]):
 
 
 def create_subtitle_task(
-    loop: AbstractEventLoop,
+    tg: TaskGroup,
     context: SharedContext,
 ):
     tk_root = Tk()
     address = f"{context.config.listen_address}:{context.config.listen_port}"
     tk_root.title(f"vspeech:subtitle {address}")
-    in_queue = Queue[WorkerInput]()
-    event = EventType.subtitle
-    context.input_queues[event] = in_queue
-    gui_task = loop.create_task(
+    worker = context.add_worker(
+        event=EventType.subtitle, configs_depends_on=["subtitle"]
+    )
+    gui_task = tg.create_task(
         subtitle_worker(
             context,
             tk_root,
-            in_queue=in_queue,
+            in_queue=worker.in_queue,
         ),
-        name=event.name,
+        name=worker.event.name,
     )
     tk_root.protocol("WM_DELETE_WINDOW", partial(on_closing, gui_task))
     return gui_task

@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from dataclasses import field
 from typing import Optional
-from typing import Set
 from typing import get_type_hints
 
 from humps import camelize
@@ -13,8 +12,8 @@ from vspeech.logger import logger
 
 @dataclass
 class VR2:
-    vc_roid2: VcRoid2 = field(default=VcRoid2())
-    loaded_voices: Set[str] = field(default_factory=set)
+    vc_roid2: VcRoid2 = field(default_factory=VcRoid2)
+    loaded_voices: set[str] = field(default_factory=set)
 
     def load_voice(self, voice_name: str, vr2_params: VR2Param):
         if voice_name not in self.loaded_voices:
