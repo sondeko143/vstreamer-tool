@@ -7,6 +7,8 @@ from typing import Any
 from typing import List
 from typing import cast
 
+from emoji import demojize
+
 from vspeech.config import SampleFormat
 from vspeech.config import TtsWorkerType
 from vspeech.config import VoicevoxConfig
@@ -30,7 +32,8 @@ async def vroid2_worker(vr2_: Any, vr2_config: Vr2Config, in_queue: Queue[Worker
         transcribed = await in_queue.get()
         logger.debug("voice generating...")
         try:
-            speech, _ = await to_thread(vr2.text_to_speech, transcribed.text, raw=True)
+            demojized = demojize(transcribed.text)
+            speech, _ = await to_thread(vr2.text_to_speech, demojized, raw=True)
             logger.debug("voice generated")
             worker_output = WorkerOutput.from_input(transcribed)
             worker_output.sound = SoundOutput(
@@ -71,9 +74,10 @@ async def voicevox_worker(vvox_config: VoicevoxConfig, in_queue: Queue[WorkerInp
                 if given_pitch is not None
                 else vvox_config.params.pitch_scale,
             )
+            demojized = demojize(transcribed.text)
             speech = await to_thread(
                 vvox.voicevox_tts,
-                text=transcribed.text,
+                text=demojized,
                 speaker_id=speaker_id,
                 params=audio_query,
             )

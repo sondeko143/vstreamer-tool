@@ -611,6 +611,19 @@ files = [
 ]
 
 [[package]]
+name = "emoji"
+version = "2.6.0"
+description = "Emoji for Python"
+optional = false
+python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*"
+files = [
+    {file = "emoji-2.6.0.tar.gz", hash = "sha256:39ad95c9ba270cdfbd141d20c2ebcfc4e295d010b605de66908a098a3ba63a3c"},
+]
+
+[package.extras]
+dev = ["coverage", "coveralls", "pytest"]
+
+[[package]]
 name = "fairseq"
 version = "0.12.2.post1"
 description = "Facebook AI Research Sequence-to-Sequence Toolkit"
@@ -2966,7 +2979,7 @@ audio = ["PyAudio"]
 gui = ["pillow", "ttkbootstrap"]
 mozc = ["mozcpy"]
 onnxexport = ["onnx", "onnxsim"]
-rvc = ["fairseq", "faiss-cpu", "faiss-cpu", "faiss-gpu", "numpy", "onnxruntime", "onnxruntime-gpu", "pyworld", "resampy", "scipy", "torch", "torch", "torch", "torch", "torchaudio", "torchaudio", "torchaudio", "torchaudio"]
+rvc = ["fairseq", "faiss-cpu", "faiss-cpu", "faiss-gpu", "numpy", "onnxruntime", "onnxruntime-gpu", "pyworld", "scipy", "torch", "torch", "torch", "torch", "torchaudio", "torchaudio", "torchaudio", "torchaudio"]
 voicevox = ["voicevox-core", "voicevox-core", "voicevox-core", "voicevox-core"]
 vroid2 = ["pyvcroid2"]
 whisper = ["openai-whisper", "torch", "torch", "torch", "torch"]
@@ -2974,4 +2987,4 @@ whisper = ["openai-whisper", "torch", "torch", "torch", "torch"]
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.11,<3.12"
-content-hash = "6ec93650141460dece0b3760bc2c24e0f3b48cf0dfdd769c8c711ec1e4920f6f"
+content-hash = "74ea26833638834c092299aa06ef5f09f7a98b3cc20a93fa898d8e7e205f816c"
