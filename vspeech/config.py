@@ -223,6 +223,7 @@ class TranslationConfig(BaseModel):
 class VcConfig(BaseModel):
     enable: bool = False
     adjust_output_vol_to_input_voice: bool = True
+    min_volume: float = 0.1
 
 
 class AmiConfig(BaseModel):

@@ -61,7 +61,10 @@ async def rvc_worker(
             if vc_config.adjust_output_vol_to_input_voice:
                 max_possible_val = (2 ** (input_sample_width * 8)) / 2
                 input_vols = [
-                    sqrt(audioop.rms(chunk, input_sample_width) / max_possible_val)
+                    max(
+                        sqrt(audioop.rms(chunk, input_sample_width) / max_possible_val),
+                        vc_config.min_volume,
+                    )
                     for chunk in chunks(
                         speech.sound.data, chunk_size=floor(speech.sound.rate / 10)
                     )
