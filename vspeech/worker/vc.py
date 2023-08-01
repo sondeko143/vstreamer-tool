@@ -6,8 +6,10 @@ from asyncio import TaskGroup
 from asyncio import to_thread
 from audioop import mul
 from functools import partial
+from math import floor
 from math import sqrt
 from typing import Any
+from typing import Generator
 
 from vspeech.config import EventType
 from vspeech.config import RvcConfig
@@ -20,6 +22,11 @@ from vspeech.shared_context import SharedContext
 from vspeech.shared_context import SoundOutput
 from vspeech.shared_context import WorkerInput
 from vspeech.shared_context import WorkerOutput
+
+
+def chunks(data: bytes, chunk_size: int) -> Generator[bytes, bytes, None]:
+    for i in range(0, len(data), chunk_size):
+        yield data[i : i + chunk_size]
 
 
 async def rvc_worker(
@@ -53,13 +60,14 @@ async def rvc_worker(
             input_sample_width = get_sample_size(speech.sound.format)
             if vc_config.adjust_output_vol_to_input_voice:
                 max_possible_val = (2 ** (input_sample_width * 8)) / 2
-                input_vol = sqrt(
-                    audioop.rms(speech.sound.data, input_sample_width)
-                    / max_possible_val
-                )
-                logger.debug("input_vol: %s", input_vol)
+                input_vols = [
+                    sqrt(audioop.rms(chunk, input_sample_width) / max_possible_val)
+                    for chunk in chunks(
+                        speech.sound.data, chunk_size=floor(speech.sound.rate / 10)
+                    )
+                ]
             else:
-                input_vol = 1.0
+                input_vols = []
             audio = await to_thread(
                 change_voice,
                 voice_frames=mul(
@@ -80,12 +88,27 @@ async def rvc_worker(
             )
             logger.debug("voice changed")
             worker_output = WorkerOutput.from_input(speech)
+            if vc_config.adjust_output_vol_to_input_voice and input_vols:
+                raw_frames = audio.tobytes()
+                output_data = b""
+                chunk_size = floor(len(raw_frames) / len(input_vols))
+                if chunk_size % 2 == 1:
+                    chunk_size -= 1
+                output_sample_size = get_sample_size(SampleFormat.INT16)
+                for idx, chunk in enumerate(chunks(raw_frames, chunk_size=chunk_size)):
+                    volume = (
+                        input_vols[idx] if idx < len(input_vols) else input_vols[-1]
+                    )
+                    logger.debug("chunk size: %s x %s", len(chunk), volume)
+                    output_data += audioop.mul(
+                        chunk,
+                        output_sample_size,
+                        volume,
+                    )
+            else:
+                output_data = audio.tobytes()
             worker_output.sound = SoundOutput(
-                data=audioop.mul(
-                    audio.tobytes(),
-                    get_sample_size(SampleFormat.INT16),
-                    input_vol,
-                ),
+                data=output_data,
                 rate=target_sample_rate,
                 channels=1,
                 format=SampleFormat.INT16,
