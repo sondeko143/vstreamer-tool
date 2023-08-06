@@ -205,6 +205,7 @@ class SubtitleTextConfig(BaseModel):
     font_style: str = "bold"
     font_color: str = "#ffffff"
     outline_color: str = "#000000"
+    max_histories: int = 10
 
 
 class SubtitleConfig(BaseModel):

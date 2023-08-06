@@ -4,7 +4,9 @@ from asyncio import QueueEmpty
 from asyncio import Task
 from asyncio import TaskGroup
 from asyncio import sleep
+from collections import deque
 from dataclasses import dataclass
+from dataclasses import field
 from functools import partial
 from sys import platform
 from tkinter import Canvas
@@ -20,12 +22,6 @@ from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import WorkerInput
-
-
-def update_text(current_text: str, add_text: str, max_text_len: int) -> str:
-    if len(current_text) + len(add_text) > max_text_len:
-        return add_text
-    return current_text + " " + add_text
 
 
 def update_display_sec(
@@ -99,11 +95,29 @@ def set_bg_color(canvas: Canvas, bg_color: str):
 
 @dataclass
 class Text:
+    value: str = ""
+    display_remain_sec: float = 0
+
+
+@dataclass
+class Texts:
     tag: str
     anchor: Anchor
     config: SubtitleTextConfig
-    value: str = ""
     display_remain_sec: float = 0
+    values: deque[Text] = field(init=False)
+
+    def __post_init__(self):
+        self.values = deque([], maxlen=self.config.max_histories)
+
+
+def how_many_should_we_pop(texts: deque[Text], max_length: int):
+    total_length = 0
+    for idx, text in enumerate(reversed(texts)):
+        total_length += len(text.value)
+        if total_length > max_length:
+            return len(texts) - (idx + 1)
+    return 0
 
 
 async def subtitle_worker(
@@ -132,55 +146,72 @@ async def subtitle_worker(
             tk_root.configure(bg=context.config.subtitle.bg_color)
         set_bg_color(canvas, bg_color=context.config.subtitle.bg_color)
         texts = {
-            "n": Text(tag="text", anchor="s", config=context.config.subtitle.text),
-            "s": Text(
-                tag="translated", anchor="n", config=context.config.subtitle.translated
+            "n": Texts(tag="text", anchor="s", config=context.config.subtitle.text),
+            "s": Texts(
+                tag="translated",
+                anchor="n",
+                config=context.config.subtitle.translated,
             ),
         }
         interval_sec = 1.0 / 30.0
         while True:
             set_bg_color(canvas, bg_color=context.config.subtitle.bg_color)
-            for p in texts:
-                t = texts[p]
-                t.display_remain_sec = max(t.display_remain_sec - interval_sec, 0)
-                if t.display_remain_sec <= 0:
-                    canvas.delete(t.tag)
-                    t.value = ""
-                if p == "n":
-                    t.config = context.config.subtitle.text
-                elif p == "s":
-                    t.config = context.config.subtitle.translated
             text_coord_x = tk_root.winfo_width() / 2
             text_coord_y = tk_root.winfo_height() / 2
+            for p in texts:
+                if p == "n":
+                    texts[p].config = context.config.subtitle.text
+                elif p == "s":
+                    texts[p].config = context.config.subtitle.translated
+                if not texts[p].values:
+                    continue
+                t = texts[p].values[0]
+                t.display_remain_sec = max(t.display_remain_sec - interval_sec, 0)
+                if t.display_remain_sec <= 0:
+                    texts[p].values.popleft()
+                    canvas.delete(texts[p].tag)
+                    draw_text_with_outline(
+                        canvas=canvas,
+                        texts=" ".join(t.value for t in texts[p].values),
+                        text_coord_x=text_coord_x,
+                        text_coord_y=text_coord_y,
+                        text_tag=texts[p].tag,
+                        anchor=texts[p].anchor,
+                        config=texts[p].config,
+                    )
+                    canvas.pack()
             tk_root.update()
             await sleep(interval_sec)
             try:
                 unprocessed_text = in_queue.get_nowait()
                 p = unprocessed_text.current_event.params.position
                 if p in texts:
-                    t = texts[p]
+                    ts = texts[p]
                 else:
-                    t = texts["n"]
+                    ts = texts["n"]
+                t = Text()
                 t.display_remain_sec = update_display_sec(
                     current_sec=t.display_remain_sec,
                     current_text=t.value,
                     add_text=unprocessed_text.text,
-                    config=t.config,
+                    config=ts.config,
                 )
-                t.value = update_text(
-                    current_text=t.value,
-                    add_text=unprocessed_text.text,
-                    max_text_len=t.config.max_text_len,
+                t.value = unprocessed_text.text
+                ts.values.append(t)
+                n_pop = how_many_should_we_pop(
+                    ts.values, max_length=ts.config.max_text_len
                 )
-                canvas.delete(t.tag)
+                for _ in range(n_pop):
+                    ts.values.popleft()
+                canvas.delete(ts.tag)
                 draw_text_with_outline(
                     canvas=canvas,
-                    texts=t.value,
+                    texts=" ".join(t.value for t in ts.values),
                     text_coord_x=text_coord_x,
                     text_coord_y=text_coord_y,
-                    text_tag=t.tag,
-                    anchor=t.anchor,
-                    config=t.config,
+                    text_tag=ts.tag,
+                    anchor=ts.anchor,
+                    config=ts.config,
                 )
                 canvas.pack()
             except QueueEmpty:
