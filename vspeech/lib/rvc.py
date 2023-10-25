@@ -19,11 +19,17 @@ from vspeech.config import RvcConfig
 from vspeech.logger import logger
 
 
-def create_session(model_file: Path):
+def create_session(model_file: Path, gpu_id: int):
     providers = ["CPUExecutionProvider"]
+    providers_options: list[dict[str, Any]] = [{}]
     if torch.cuda.is_available():
         providers.insert(0, "CUDAExecutionProvider")
-    return InferenceSession(str(model_file.expanduser()), providers=providers)
+        providers_options.insert(0, {"device_id": gpu_id})
+    return InferenceSession(
+        str(model_file.expanduser()),
+        providers=providers,
+        provider_options=providers_options,
+    )
 
 
 def get_device():
@@ -299,21 +305,16 @@ def change_voice(
     # 推論実行
     with torch.no_grad():
         audio1 = (
-            torch.clip(
-                infer(
-                    session=session,
-                    is_half=is_model_half,
-                    feats=feats,
-                    pitch_length=p_len_tensor,
-                    pitch=pitch,
-                    pitchf=pitchf,
-                    sid=sid,
-                )[0][0, 0].to(dtype=torch.float32),
-                -1.0,
-                1.0,
-            )
+            infer(
+                session=session,
+                is_half=is_model_half,
+                feats=feats,
+                pitch_length=p_len_tensor,
+                pitch=pitch,
+                pitchf=pitchf,
+                sid=sid,
+            )[0]
             * 32767.5
-            - 0.5
         ).data.to(dtype=torch.int16)
 
     del feats, p_len_tensor, padding_mask

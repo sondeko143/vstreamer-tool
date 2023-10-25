@@ -47,7 +47,7 @@ async def rvc_worker(
         device=device,
         is_half=half_available,
     )
-    session = create_session(rvc_config.model_file)
+    session = create_session(rvc_config.model_file, rvc_config.gpu_id)
     modelmeta: Any = session.get_modelmeta()
     metadata: dict[str, Any] = json.loads(modelmeta.custom_metadata_map["metadata"])
     target_sample_rate = metadata["samplingRate"]
