@@ -236,15 +236,13 @@ def change_voice(
     audio = torch.from_numpy(audio).to(device=device, dtype=torch.float32)
 
     audio = resample(audio, voice_sample_rate, 16000, rolloff=0.99)
+    audio = audio.unsqueeze(0)
 
-    repeat = 3 if half_available else 1
-    repeat *= rvc_config.quality.value
-    t_pad = voice_sample_rate * repeat
-    t_pad_tgt = target_sample_rate * repeat
-
-    audio_pad = functional.pad(
-        audio.unsqueeze(0), (t_pad, t_pad), mode="reflect"
-    ).squeeze(0)
+    repeat = rvc_config.quality.value
+    quality_padding_sec = (repeat * (audio.shape[1] - 1)) / voice_sample_rate
+    t_pad = round(voice_sample_rate * quality_padding_sec)
+    t_pad_tgt = round(target_sample_rate * quality_padding_sec)
+    audio_pad = functional.pad(audio, (t_pad, t_pad), mode="reflect").squeeze(0)
     sid = 0
     sid = torch.tensor(sid, device=device).unsqueeze(0).long()
 
@@ -301,6 +299,12 @@ def change_voice(
         is_model_half = False
     else:
         is_model_half = True
+
+    feats_len = feats.shape[1]
+    if pitch is not None and pitchf is not None:
+        pitch = pitch[:, -feats_len:]
+        pitchf = pitchf[:, -feats_len:]
+    p_len_tensor = torch.tensor([feats_len], device=device).long()
 
     # 推論実行
     with torch.no_grad():
