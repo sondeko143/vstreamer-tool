@@ -225,6 +225,8 @@ class VcConfig(BaseModel):
     enable: bool = False
     adjust_output_vol_to_input_voice: bool = True
     min_volume: float = 0.1
+    max_volume: float = 1.0
+    volume_adjust_window: int = 160
 
 
 class AmiConfig(BaseModel):
