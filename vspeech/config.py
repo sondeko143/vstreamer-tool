@@ -5,6 +5,7 @@ from enum import IntEnum
 from pathlib import Path
 from typing import IO
 from typing import Any
+from typing import Literal
 from typing import Optional
 from typing import TypeAlias
 from typing import Union
@@ -17,6 +18,8 @@ from pydantic import SecretStr
 from toml.encoder import TomlArraySeparatorEncoder
 
 from vspeech.exceptions import ReplaceFilterParseError
+
+Anchor: TypeAlias = Literal["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"]
 
 
 class SampleFormat(IntEnum):
@@ -197,6 +200,7 @@ class PlaybackConfig(BaseModel):
 
 
 class SubtitleTextConfig(BaseModel):
+    anchor: Anchor = "center"
     display_sec_per_letter: float = 0.5
     min_display_sec: float = 2.5
     max_text_len: int = 30
@@ -213,8 +217,12 @@ class SubtitleConfig(BaseModel):
     window_width: int = 1600
     window_height: int = 120
     bg_color: str = "#00ff00"
-    text: SubtitleTextConfig = Field(default_factory=SubtitleTextConfig)
-    translated: SubtitleTextConfig = Field(default_factory=SubtitleTextConfig)
+    text: SubtitleTextConfig = Field(
+        default_factory=lambda: SubtitleTextConfig(anchor="s")
+    )
+    translated: SubtitleTextConfig = Field(
+        default_factory=lambda: SubtitleTextConfig(anchor="n")
+    )
 
 
 class TranslationConfig(BaseModel):

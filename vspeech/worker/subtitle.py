@@ -12,10 +12,9 @@ from sys import platform
 from tkinter import Canvas
 from tkinter import Tk
 from typing import Any
-from typing import Literal
 from typing import Tuple
-from typing import TypeAlias
 
+from vspeech.config import Anchor
 from vspeech.config import SubtitleTextConfig
 from vspeech.exceptions import shutdown_worker
 from vspeech.logger import logger
@@ -37,9 +36,6 @@ def update_display_sec(
     if len(current_text) + len(add_text) > max_text_len:
         return add_sec
     return current_sec + add_sec
-
-
-Anchor: TypeAlias = Literal["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"]
 
 
 def draw_text_with_outline(
@@ -146,10 +142,14 @@ async def subtitle_worker(
             tk_root.configure(bg=context.config.subtitle.bg_color)
         set_bg_color(canvas, bg_color=context.config.subtitle.bg_color)
         texts = {
-            "n": Texts(tag="text", anchor="s", config=context.config.subtitle.text),
+            "n": Texts(
+                tag="text",
+                anchor=context.config.subtitle.text.anchor,
+                config=context.config.subtitle.text,
+            ),
             "s": Texts(
                 tag="translated",
-                anchor="n",
+                anchor=context.config.subtitle.translated.anchor,
                 config=context.config.subtitle.translated,
             ),
         }
