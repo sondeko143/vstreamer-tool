@@ -92,10 +92,9 @@ async def transcript_worker_whisper(
     whisper_config: WhisperConfig,
     in_queue: Queue[WorkerInput],
 ) -> AsyncGenerator[WorkerOutput, None]:
-    from whisper import load_model
-    from whisper import transcribe
+    from faster_whisper import WhisperModel
 
-    model = load_model(whisper_config.model)
+    model = WhisperModel(whisper_config.model, device="cuda", compute_type="float16")
     logger.info("transcript worker [whisper] started")
     while True:
         recorded = await in_queue.get()
@@ -106,23 +105,22 @@ async def transcript_worker_whisper(
                     await out.write(wav_file.read())
                     await out.flush()
                 logger.debug("transcribing...")
-                result = await to_thread(
-                    transcribe,
+                segments, _ = await to_thread(
+                    model.transcribe,  # type: ignore
                     audio="./recorded.wav",
-                    model=model,
                     language="ja",
                     no_speech_threshold=whisper_config.no_speech_prob_threshold,
-                    logprob_threshold=whisper_config.logprob_threshold,
+                    log_prob_threshold=whisper_config.logprob_threshold,
                 )
-                logger.info("transcribed: %s", result)
+                logger.info("transcribed: %s", segments)
                 transcribed = "".join(
                     [
-                        segment["text"]
-                        for segment in result["segments"]
-                        if segment["no_speech_prob"]
+                        segment.text
+                        for segment in segments
+                        if segment.no_speech_prob
                         < whisper_config.no_speech_prob_threshold
-                        and segment["avg_logprob"] > whisper_config.logprob_threshold
-                        and segment["temperature"] < 1.0
+                        and segment.avg_logprob > whisper_config.logprob_threshold
+                        and segment.temperature < 1.0
                     ]
                 )
                 if transcribed:

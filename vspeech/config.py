@@ -278,7 +278,7 @@ class Vr2Config(BaseModel):
 
 
 class WhisperConfig(BaseModel):
-    model: str = "base"
+    model: str = "large-v3"
     no_speech_prob_threshold: float = 0.6
     logprob_threshold: float = -1.0
 
