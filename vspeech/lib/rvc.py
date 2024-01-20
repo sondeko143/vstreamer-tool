@@ -32,9 +32,9 @@ def create_session(model_file: Path, gpu_id: int):
     )
 
 
-def get_device():
+def get_device(gpu_id: int):
     if torch.cuda.is_available():
-        return torch.device("cuda")
+        return torch.device("cuda", gpu_id)
     return torch.device("cpu")
 
 

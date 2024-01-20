@@ -40,7 +40,7 @@ async def rvc_worker(
     from vspeech.lib.rvc import half_precision_available
     from vspeech.lib.rvc import load_hubert_model
 
-    device = get_device()
+    device = get_device(rvc_config.gpu_id)
     half_available = half_precision_available(rvc_config.gpu_id)
     hubert_model = load_hubert_model(
         file_name=rvc_config.hubert_model_file,
