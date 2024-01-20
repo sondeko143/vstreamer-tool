@@ -94,7 +94,12 @@ async def transcript_worker_whisper(
 ) -> AsyncGenerator[WorkerOutput, None]:
     from faster_whisper import WhisperModel
 
-    model = WhisperModel(whisper_config.model, device="cuda", compute_type="float16")
+    model = WhisperModel(
+        whisper_config.model,
+        device="cuda",
+        compute_type="float16",
+        device_index=whisper_config.gpu_id,
+    )
     logger.info("transcript worker [whisper] started")
     while True:
         recorded = await in_queue.get()

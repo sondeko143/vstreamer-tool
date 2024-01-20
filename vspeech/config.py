@@ -281,6 +281,7 @@ class WhisperConfig(BaseModel):
     model: str = "large-v3"
     no_speech_prob_threshold: float = 0.6
     logprob_threshold: float = -1.0
+    gpu_id: int = 0
 
 
 class VoicevoxConfig(BaseModel):
