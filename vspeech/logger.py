@@ -1,6 +1,7 @@
 import logging
 from asyncio.tasks import current_task
 from datetime import datetime
+from pathlib import Path
 from sys import stdout
 
 import colorlog
@@ -47,6 +48,7 @@ def configure_logger(config: Config):
     now = datetime.now()
     filename = now.strftime(config.log_file.replace("%%", "%"))
     if filename:
+        Path(filename).parent.mkdir(parents=True, exist_ok=True)
         file_handler = TaskFileHandler(filename, encoding="utf-8")
         file_handler.setFormatter(log_file_format)
         file_handler.setLevel(config.log_level)
@@ -56,3 +58,4 @@ def configure_logger(config: Config):
     stdout_handler.setFormatter(log_sout_format)
     logger.addHandler(stdout_handler)
     logger.setLevel(config.log_level)
+    logging.getLogger("faster_whisper").setLevel(logging.DEBUG)

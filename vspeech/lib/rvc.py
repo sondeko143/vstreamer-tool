@@ -1,21 +1,19 @@
 from pathlib import Path
 from typing import Any
-from typing import Tuple
+from typing import Optional
 from typing import cast
 
 import numpy as np
-import pyworld
 import torch
 from fairseq import checkpoint_utils
 from fairseq.models.hubert import HubertModel
 from numpy.typing import NDArray
 from onnxruntime import InferenceSession
-from scipy import signal
 from torch.nn import functional
 from torchaudio.functional import resample
 
-from vspeech.config import F0ExtractorType
 from vspeech.config import RvcConfig
+from vspeech.lib.pitch_extract import pitch_extract
 from vspeech.logger import logger
 
 
@@ -53,86 +51,6 @@ def half_precision_available(id: int):
         return False
 
     return True
-
-
-def pitch_extract_harvest(
-    audio: NDArray[np.float32],
-    f0_max: int,
-    sr: int,
-) -> NDArray[np.double]:
-    f0_, t = pyworld.harvest(  # type: ignore
-        audio.astype(np.double),
-        fs=sr,
-        f0_ceil=f0_max,
-        frame_period=10,
-    )
-    f0 = cast(
-        NDArray[np.double],
-        pyworld.stonemask(audio.astype(np.double), f0_, t, sr),  # type: ignore
-    )
-    return signal.medfilt(f0, 3)
-
-
-def pitch_extract_dio(
-    audio: NDArray[np.float32],
-    f0_max: int,
-    f0_min: int,
-    sr: int,
-):
-    f0_, t = pyworld.dio(  # type: ignore
-        audio.astype(np.double),
-        sr,
-        f0_floor=f0_min,
-        f0_ceil=f0_max,
-        channels_in_octave=2,
-        frame_period=10,
-    )
-    return cast(
-        NDArray[np.double],
-        pyworld.stonemask(audio.astype(np.double), f0_, t, sr),  # type: ignore
-    )
-
-
-def pitch_extract(
-    audio: NDArray[np.float32],
-    f0_up_key: int,
-    sr: int,
-    window: int,
-    f0_extractor: F0ExtractorType,
-    silence_front: int = 0,
-) -> Tuple[NDArray[Any], NDArray[np.floating[Any]]]:
-    n_frames = int(len(audio) // window) + 1
-    start_frame = int(silence_front * sr / window)
-    real_silence_front = start_frame * window / sr
-
-    silence_front_offset = int(np.round(real_silence_front * sr))
-    audio = audio[silence_front_offset:]
-
-    f0_min = 50
-    f0_max = 1100
-    f0_mel_min = 1127 * np.log(1 + f0_min / 700)
-    f0_mel_max = 1127 * np.log(1 + f0_max / 700)
-
-    if f0_extractor == F0ExtractorType.dio:
-        f0 = pitch_extract_dio(audio=audio, f0_max=f0_max, f0_min=f0_min, sr=sr)
-    elif f0_extractor == F0ExtractorType.harvest:
-        f0 = pitch_extract_harvest(audio=audio, f0_max=f0_max, sr=sr)
-    else:
-        raise ValueError("unknown f0 extractor type")
-
-    f0 = np.pad(f0.astype("float"), (start_frame, n_frames - len(f0) - start_frame))
-
-    f0 *= pow(2, f0_up_key / 12)
-    f0bak = f0.copy()
-    f0_mel = 1127 * np.log(1 + f0 / 700)
-    f0_mel[f0_mel > 0] = (f0_mel[f0_mel > 0] - f0_mel_min) * 254 / (
-        f0_mel_max - f0_mel_min
-    ) + 1
-    f0_mel[f0_mel <= 1] = 1
-    f0_mel[f0_mel > 255] = 255
-    f0_coarse = np.rint(f0_mel).astype(np.int)  # type: ignore
-
-    return f0_coarse, f0bak
 
 
 def extract_features(
@@ -224,6 +142,7 @@ def change_voice(
     hubert_model: HubertModel,
     session: InferenceSession,
     f0_enabled: bool,
+    crepe_session: Optional[InferenceSession],
 ) -> NDArray[np.int16]:
     input_sound = np.frombuffer(voice_frames, dtype="int16")
     input_size = input_sound.shape[0]
@@ -278,11 +197,12 @@ def change_voice(
         p_len = feats.shape[1]
     if f0_enabled:
         pitch, pitchf = pitch_extract(
-            audio_pad.detach().cpu().numpy(),
+            audio_pad,
             f0_up_key,
             voice_sample_rate,
             rvc_config.window,
             f0_extractor=rvc_config.f0_extractor_type,
+            crepe_session=crepe_session,
             silence_front=0,
         )
         pitch = pitch[:p_len]

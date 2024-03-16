@@ -298,6 +298,7 @@ class RvcQuality(IntEnum):
 class F0ExtractorType(Enum):
     dio = "dio"
     harvest = "harvest"
+    crepe = "crepe"
 
 
 class RvcConfig(BaseModel):
@@ -309,6 +310,7 @@ class RvcConfig(BaseModel):
     gpu_id: int = Field(default=0)
     f0_extractor_type: F0ExtractorType = Field(default=F0ExtractorType.harvest)
     input_boost: float = Field(default=1.0)
+    crepe_model_file: Path = Field(default="")
 
 
 class CustomTomlEncoder(TomlArraySeparatorEncoder):  # type: ignore

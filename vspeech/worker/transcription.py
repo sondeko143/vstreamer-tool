@@ -117,7 +117,6 @@ async def transcript_worker_whisper(
                     no_speech_threshold=whisper_config.no_speech_prob_threshold,
                     log_prob_threshold=whisper_config.logprob_threshold,
                 )
-                logger.info("transcribed: %s", segments)
                 transcribed = "".join(
                     [
                         segment.text

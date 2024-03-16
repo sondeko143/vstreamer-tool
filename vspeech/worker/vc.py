@@ -12,6 +12,7 @@ from typing import Any
 from typing import Generator
 
 from vspeech.config import EventType
+from vspeech.config import F0ExtractorType
 from vspeech.config import RvcConfig
 from vspeech.config import SampleFormat
 from vspeech.config import VcConfig
@@ -34,6 +35,7 @@ async def rvc_worker(
     vc_config: VcConfig,
     in_queue: Queue[WorkerInput],
 ):
+    from vspeech.lib.pitch_extract import create_crepe_session
     from vspeech.lib.rvc import change_voice
     from vspeech.lib.rvc import create_session
     from vspeech.lib.rvc import get_device
@@ -48,6 +50,12 @@ async def rvc_worker(
         is_half=half_available,
     )
     session = create_session(rvc_config.model_file, rvc_config.gpu_id)
+    if rvc_config.f0_extractor_type == F0ExtractorType.crepe:
+        crepe_session = create_crepe_session(
+            rvc_config.crepe_model_file, rvc_config.gpu_id
+        )
+    else:
+        crepe_session = None
     modelmeta: Any = session.get_modelmeta()
     metadata: dict[str, Any] = json.loads(modelmeta.custom_metadata_map["metadata"])
     target_sample_rate = metadata["samplingRate"]
@@ -95,6 +103,7 @@ async def rvc_worker(
                 hubert_model=hubert_model,
                 session=session,
                 f0_enabled=f0_enabled,
+                crepe_session=crepe_session,
             )
             logger.debug("voice changed")
             worker_output = WorkerOutput.from_input(speech)
