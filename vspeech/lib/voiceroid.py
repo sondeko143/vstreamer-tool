@@ -1,3 +1,4 @@
+from codecs import encode
 from dataclasses import dataclass
 from dataclasses import field
 from typing import Optional
@@ -37,4 +38,8 @@ class VR2:
     def text_to_speech(
         self, text: str, timeout: Optional[float] = None, raw: bool = False
     ):
-        return self.vc_roid2.textToSpeech(text, timeout=timeout, raw=raw)
+        remove_invalid_shiftjis = encode(text, encoding="shift-jis", errors="ignore")
+        remove_invalid = remove_invalid_shiftjis.decode(
+            encoding="shift-jis", errors="replace"
+        )
+        return self.vc_roid2.textToSpeech(remove_invalid, timeout=timeout, raw=raw)
