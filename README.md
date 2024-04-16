@@ -47,7 +47,7 @@ VOICEVOX を使う場合は指定したディレクトリ (デフォルト: `./v
 
 詳細は [voicevox_core_python_api](https://github.com/VOICEVOX/voicevox_core/tree/0.14.1/crates/voicevox_core_python_api) の環境構築を確認してください。
 
-whisper, RVC は対応するバージョンの cuda (11.8) がインストールされている必要があります。
+whisper, RVC は対応するバージョンの cuda (12.1) がインストールされている必要があります。
 
 ## 実行
 
