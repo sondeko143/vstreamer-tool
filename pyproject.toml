@@ -21,15 +21,13 @@ vstreamer-protos = { url = "https://github.com/sondeko143/vstreamer-protos/relea
 voicevox-core = [
     { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cuda-cp38-abi3-win_amd64.whl", platform = "win32", optional = true },
     { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cpu-cp38-abi3-macosx_11_0_arm64.whl", platform = "darwin", markers = "platform_machine == 'arm64'", optional = true },
-    { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cpu-cp38-abi3-macosx_10_7_x86_64.whl", platform = "darwin", markers = "platform_machine == 'x86_64'", optional = true },
     { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cpu-cp38-abi3-linux_x86_64.whl", platform = "linux", markers = "platform_machine == 'x86_64'", optional = true },
 ]
 faster-whisper = "^0.10.0"
 torch = [
-    { url = "https://download.pytorch.org/whl/cu118/torch-2.0.1%2Bcu118-cp311-cp311-win_amd64.whl", platform = "win32", optional = true },
-    { url = "https://download.pytorch.org/whl/cpu/torch-2.0.1-cp311-none-macosx_11_0_arm64.whl", platform = "darwin", markers = "platform_machine == 'arm64'", optional = true },
-    { url = "https://download.pytorch.org/whl/cpu/torch-2.0.1-cp311-none-macosx_10_9_x86_64.whl", platform = "darwin", markers = "platform_machine == 'x86_64'", optional = true },
-    { url = "https://download.pytorch.org/whl/cu118/torch-2.0.1%2Bcu118-cp311-cp311-linux_x86_64.whl", platform = "linux", optional = true },
+    { url = "https://download.pytorch.org/whl/cu121/torch-2.2.0%2Bcu121-cp311-cp311-win_amd64.whl", platform = "win32", optional = true },
+    { url = "https://download.pytorch.org/whl/cpu/torch-2.2.0-cp311-none-macosx_11_0_arm64.whl", platform = "darwin", markers = "platform_machine == 'arm64'", optional = true },
+    { url = "https://download.pytorch.org/whl/cu121/torch-2.2.0%2Bcu121-cp311-cp311-linux_x86_64.whl", platform = "linux", optional = true },
 ]
 fairseq = { url = "https://github.com/sondeko143/fairseq-311/releases/download/v0.12.2.post1/fairseq-0.12.2.post1-cp311-cp311-win_amd64.whl", optional = true }
 pyworld = { version = "^0.3.3", optional = true }
@@ -38,13 +36,12 @@ faiss-cpu = [
     { version = "^1.7.2", platform = "win32", optional = true },
     { version = "^1.7.2", platform = "darwin", optional = true },
 ]
-onnxruntime-gpu = { version = "^1.16.1", optional = true, platform = "win32" }
-onnxruntime = { version = "^1.16.1", optional = true, platform = "darwin" }
+onnxruntime-gpu = { version = "^1.17.1", optional = true, platform = "win32" }
+onnxruntime = { version = "^1.17.1", optional = true, platform = "darwin" }
 torchaudio = [
-    { url = "https://download.pytorch.org/whl/cu118/torchaudio-2.0.2%2Bcu118-cp311-cp311-win_amd64.whl", platform = "win32", optional = true },
-    { url = "https://download.pytorch.org/whl/cpu/torchaudio-2.0.2-cp311-cp311-macosx_11_0_arm64.whl", platform = "darwin", markers = "platform_machine == 'arm64'", optional = true },
-    { url = "https://download.pytorch.org/whl/cpu/torchaudio-2.0.2-cp311-cp311-macosx_10_9_x86_64.whl", platform = "darwin", markers = "platform_machine == 'x86_64'", optional = true },
-    { url = "https://download.pytorch.org/whl/cu118/torchaudio-2.0.2%2Bcu118-cp311-cp311-linux_x86_64.whl", platform = "linux", optional = true },
+    { url = "https://download.pytorch.org/whl/cu121/torchaudio-2.2.0%2Bcu121-cp311-cp311-win_amd64.whl", platform = "win32", optional = true },
+    { url = "https://download.pytorch.org/whl/cpu/torchaudio-2.2.0-cp311-cp311-macosx_11_0_arm64.whl", platform = "darwin", markers = "platform_machine == 'arm64'", optional = true },
+    { url = "https://download.pytorch.org/whl/cu121/torchaudio-2.2.0%2Bcu121-cp311-cp311-linux_x86_64.whl", platform = "linux", optional = true },
 ]
 numpy = { version = ">=1.18,<1.24", optional = true }
 scipy = { version = "^1.10.1", optional = true }
@@ -60,8 +57,8 @@ emoji = "^2.6.0"
 librosa = { version = "^0.10.1", optional = true }
 
 [tool.poetry.group.dev.dependencies]
-docutils = "^0.19"
 pytest = "^7.3.1"
+docutils = "^0.19"
 pytest-cov = "^4.0.0"
 pytest-grpc = "^0.8.0"
 pytest-asyncio = "^0.21.0"
