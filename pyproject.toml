@@ -25,9 +25,9 @@ voicevox-core = [
 ]
 faster-whisper = "^0.10.0"
 torch = [
-    { url = "https://download.pytorch.org/whl/cu121/torch-2.2.0%2Bcu121-cp311-cp311-win_amd64.whl", platform = "win32", optional = true },
+    { url = "https://download.pytorch.org/whl/cu118/torch-2.2.0%2Bcu118-cp311-cp311-win_amd64.whl", platform = "win32", optional = true },
     { url = "https://download.pytorch.org/whl/cpu/torch-2.2.0-cp311-none-macosx_11_0_arm64.whl", platform = "darwin", markers = "platform_machine == 'arm64'", optional = true },
-    { url = "https://download.pytorch.org/whl/cu121/torch-2.2.0%2Bcu121-cp311-cp311-linux_x86_64.whl", platform = "linux", optional = true },
+    { url = "https://download.pytorch.org/whl/cu118/torch-2.2.0%2Bcu118-cp311-cp311-linux_x86_64.whl", platform = "linux", optional = true },
 ]
 fairseq = { url = "https://github.com/sondeko143/fairseq-311/releases/download/v0.12.2.post1/fairseq-0.12.2.post1-cp311-cp311-win_amd64.whl", optional = true }
 pyworld = { version = "^0.3.3", optional = true }
@@ -39,9 +39,9 @@ faiss-cpu = [
 onnxruntime-gpu = { version = "^1.17.1", optional = true, platform = "win32" }
 onnxruntime = { version = "^1.17.1", optional = true, platform = "darwin" }
 torchaudio = [
-    { url = "https://download.pytorch.org/whl/cu121/torchaudio-2.2.0%2Bcu121-cp311-cp311-win_amd64.whl", platform = "win32", optional = true },
+    { url = "https://download.pytorch.org/whl/cu118/torchaudio-2.2.0%2Bcu118-cp311-cp311-win_amd64.whl", platform = "win32", optional = true },
     { url = "https://download.pytorch.org/whl/cpu/torchaudio-2.2.0-cp311-cp311-macosx_11_0_arm64.whl", platform = "darwin", markers = "platform_machine == 'arm64'", optional = true },
-    { url = "https://download.pytorch.org/whl/cu121/torchaudio-2.2.0%2Bcu121-cp311-cp311-linux_x86_64.whl", platform = "linux", optional = true },
+    { url = "https://download.pytorch.org/whl/cu118/torchaudio-2.2.0%2Bcu118-cp311-cp311-linux_x86_64.whl", platform = "linux", optional = true },
 ]
 numpy = { version = ">=1.18,<1.24", optional = true }
 scipy = { version = "^1.10.1", optional = true }
