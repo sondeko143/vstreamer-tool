@@ -23,7 +23,7 @@ voicevox-core = [
     { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cpu-cp38-abi3-macosx_11_0_arm64.whl", platform = "darwin", markers = "platform_machine == 'arm64'", optional = true },
     { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cpu-cp38-abi3-linux_x86_64.whl", platform = "linux", markers = "platform_machine == 'x86_64'", optional = true },
 ]
-faster-whisper = "^0.10.0"
+faster-whisper = "^1.0.3"
 torch = [
     { url = "https://download.pytorch.org/whl/cu118/torch-2.2.0%2Bcu118-cp311-cp311-win_amd64.whl", platform = "win32", optional = true },
     { url = "https://download.pytorch.org/whl/cpu/torch-2.2.0-cp311-none-macosx_11_0_arm64.whl", platform = "darwin", markers = "platform_machine == 'arm64'", optional = true },
