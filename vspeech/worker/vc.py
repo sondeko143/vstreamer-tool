@@ -1,5 +1,6 @@
 import audioop
 import json
+import time
 from asyncio import CancelledError
 from asyncio import Queue
 from asyncio import TaskGroup
@@ -86,6 +87,7 @@ async def rvc_worker(
                 ]
             else:
                 input_vols = []
+            vc_start_time = time.time()
             audio = await to_thread(
                 change_voice,
                 voice_frames=mul(
@@ -105,7 +107,8 @@ async def rvc_worker(
                 f0_enabled=f0_enabled,
                 crepe_session=crepe_session,
             )
-            logger.debug("voice changed")
+            vc_end_time = time.time()
+            logger.info("rvc elapsed time: %s", vc_end_time - vc_start_time)
             worker_output = WorkerOutput.from_input(speech)
             if vc_config.adjust_output_vol_to_input_voice and input_vols:
                 raw_frames = audio.tobytes()

@@ -71,12 +71,12 @@ async def send_command(
         async with get_channel(address=address, credentials=credentials) as channel:
             stub = CommanderStub(channel)
             logger.info(
-                "send: o(%s), s(%s), t(%s), to %s",
-                command.chains,
+                "send: s(%s), t(%s), to %s",
                 len(command.operand.sound.data),
                 command.operand.text,
                 address,
             )
+            logger.debug("send: chains(%s)", command.chains)
             res = cast(Response, await stub.process_command(command))
             logger.info("success response: %s", str(res))
     except (RefreshError, MutualTLSChannelError, AioRpcError) as e:
