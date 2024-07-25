@@ -132,6 +132,7 @@ async def rvc_worker(
                 channels=1,
                 format=SampleFormat.INT16,
             )
+            worker_output.text = speech.text
             yield worker_output
         except Exception as e:
             logger.exception(e)
