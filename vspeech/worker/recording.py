@@ -77,15 +77,23 @@ async def pyaudio_recording_worker(config: RecordingConfig):
         audio = PyAudio()
         stream = open_input_stream(audio, config)
         sample_width = get_sample_size(config.format)
-        stopping_time = 0
+        n_move_avg_amp = config.gradually_stopping_interval
+        approx_max_amps: list[float] = []
         try:
             while stream.is_active():
                 in_data = await to_thread(stream.read, config.chunk)
                 interval_frame_count += config.chunk
                 interval_frames += in_data
-                approx_max_amp = get_dbfs(interval_frames, sample_width=sample_width)
                 if interval_frame_count >= config.rate * config.interval_sec:
-                    speaking = approx_max_amp > config.silence_threshold
+                    approx_max_amp = get_dbfs(
+                        interval_frames, sample_width=sample_width
+                    )
+                    approx_max_amps.append(approx_max_amp)
+                    if len(approx_max_amps) > n_move_avg_amp:
+                        approx_max_amps.pop(0)
+                    avg_amp = sum(approx_max_amps) / len(approx_max_amps)
+                    speaking = approx_max_amp >= config.silence_threshold
+                    silent = avg_amp < config.silence_threshold
                     if status == "waiting" and speaking:
                         logger.debug("voice recording...")
                         speaking_frames += last_interval_frames + interval_frames
@@ -94,37 +102,16 @@ async def pyaudio_recording_worker(config: RecordingConfig):
                         speaking_frames += interval_frames
                         total_seconds_of_this_recording += config.interval_sec
                         if (
-                            not speaking
+                            silent
                             or config.max_recording_sec
                             < total_seconds_of_this_recording
                         ):
                             logger.debug("voice stopped")
-                            status = "stopped"
-                    elif status == "stopped":
-                        speaking_frames += interval_frames
-                        total_seconds_of_this_recording += config.interval_sec
-                        if (
-                            stopping_time > config.gradually_stopping_interval
-                            or config.max_recording_sec
-                            < total_seconds_of_this_recording
-                        ):
-                            logger.debug(
-                                "voice recorded %s %s",
-                                stopping_time,
-                                total_seconds_of_this_recording,
-                            )
                             yield speaking_frames
                             status = "waiting"
                             speaking_frames = b""
                             interval_frames = b""
-                            stopping_time = 0
                             total_seconds_of_this_recording = 0
-                        elif not speaking:
-                            stopping_time += 1
-                            logger.debug("voice stopping")
-                        elif speaking:
-                            stopping_time = 0
-                            status = "speaking"
                     last_interval_frames = interval_frames
                     interval_frame_count = 0
                     interval_frames = b""

@@ -6,6 +6,7 @@ from asyncio import to_thread
 from datetime import datetime
 from functools import partial
 from io import BytesIO
+from logging import DEBUG
 from pathlib import Path
 from typing import AsyncGenerator
 from wave import Error as WavError
@@ -117,6 +118,7 @@ async def transcript_worker_whisper(
                     no_speech_threshold=whisper_config.no_speech_prob_threshold,
                     log_prob_threshold=whisper_config.logprob_threshold,
                 )
+                segments = list(segments)
                 transcribed = "".join(
                     [
                         segment.text
@@ -127,6 +129,14 @@ async def transcript_worker_whisper(
                         and segment.temperature < 1.0
                     ]
                 )
+                if logger.isEnabledFor(DEBUG):
+                    for segment in segments:
+                        logger.debug(
+                            "segment: %s, log: %s, no_speech: %s",
+                            segment.text,
+                            segment.avg_logprob,
+                            segment.no_speech_prob,
+                        )
                 if transcribed:
                     worker_output = WorkerOutput.from_input(recorded)
                     worker_output.sound = SoundOutput(
