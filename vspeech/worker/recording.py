@@ -88,25 +88,26 @@ async def pyaudio_recording_worker(config: RecordingConfig):
                     approx_max_amp = get_dbfs(
                         interval_frames, sample_width=sample_width
                     )
-                    approx_max_amps.append(approx_max_amp)
-                    if len(approx_max_amps) > n_move_avg_amp:
-                        approx_max_amps.pop(0)
-                    avg_amp = sum(approx_max_amps) / len(approx_max_amps)
                     speaking = approx_max_amp >= config.silence_threshold
-                    silent = avg_amp < config.silence_threshold
                     if status == "waiting" and speaking:
-                        logger.debug("voice recording...")
+                        logger.info("record start ")
                         speaking_frames += last_interval_frames + interval_frames
                         status = "speaking"
+                        approx_max_amps = []
                     elif status == "speaking":
                         speaking_frames += interval_frames
                         total_seconds_of_this_recording += config.interval_sec
+                        approx_max_amps.append(approx_max_amp)
+                        if len(approx_max_amps) > n_move_avg_amp:
+                            approx_max_amps.pop(0)
+                        avg_amp = sum(approx_max_amps) / len(approx_max_amps)
+                        silent = avg_amp < config.silence_threshold
                         if (
                             silent
                             or config.max_recording_sec
                             < total_seconds_of_this_recording
                         ):
-                            logger.debug("voice stopped")
+                            logger.info("record stop %s", avg_amp)
                             yield speaking_frames
                             status = "waiting"
                             speaking_frames = b""
