@@ -2,8 +2,11 @@ from asyncio import CancelledError
 from asyncio import Queue
 from asyncio import TaskGroup
 from asyncio import sleep
+from asyncio import timeout
+from dataclasses import dataclass
 from functools import partial
 from html import unescape
+from time import time_ns
 from typing import AsyncGenerator
 
 from google.api_core.exceptions import BadRequest
@@ -12,6 +15,7 @@ from google.cloud.translate_v3 import TranslateTextRequest
 from google.cloud.translate_v3 import TranslationServiceAsyncClient
 
 from vspeech.config import GcpConfig
+from vspeech.config import TranslationConfig
 from vspeech.exceptions import shutdown_worker
 from vspeech.lib.gcp import get_credentials
 from vspeech.logger import logger
@@ -42,41 +46,99 @@ async def translate_request(
             await sleep(retry_delay_sec)
 
 
+@dataclass
+class TranslationBlock:
+    text: str
+    source_language_code: str | None
+    target_language_code: str | None
+    original: WorkerInput
+
+    @staticmethod
+    def from_transcribed_input(input: WorkerInput):
+        return TranslationBlock(
+            text=input.text,
+            source_language_code=input.current_event.params.source_language_code,
+            target_language_code=input.current_event.params.target_language_code,
+            original=input,
+        )
+
+    def samey(self, other: "TranslationBlock"):
+        return (
+            self.source_language_code == other.source_language_code
+            and self.target_language_code == other.target_language_code
+        )
+
+
 async def translation_worker_google(
-    gcp_config: GcpConfig, in_queue: Queue[WorkerInput]
+    config: TranslationConfig, gcp_config: GcpConfig, in_queue: Queue[WorkerInput]
 ) -> AsyncGenerator[WorkerOutput, None]:
     credentials = get_credentials(gcp_config)
     client = TranslationServiceAsyncClient(credentials=credentials)
     logger.info("translation worker [google] started")
     while True:
         transcribed = await in_queue.get()
-        request = TranslateTextRequest(
-            contents=[transcribed.text],
-            source_language_code=transcribed.current_event.params.source_language_code,
-            target_language_code=transcribed.current_event.params.target_language_code,
-            parent=f"projects/{credentials.project_id}",  # type: ignore
-        )
+        logger.info("Got a chunk %s.", transcribed.input_id)
+        blocks: list[TranslationBlock] = []
+        blocks.append(TranslationBlock.from_transcribed_input(transcribed))
+        total_awaiting_time_sec = 0
+        total_n_chunks = 0
+        while (
+            total_awaiting_time_sec <= config.max_sec_await_total
+            or total_n_chunks <= config.max_n_chunk_await_total
+        ):
+            try:
+                await_start_time_ns = time_ns()
+                async with timeout(config.sec_await_next_text):
+                    next_transc = await in_queue.get()
+                    next_block = TranslationBlock.from_transcribed_input(next_transc)
+                    try:
+                        previous = next(b for b in blocks if b.samey(next_block))
+                        logger.info("Got a next translation chunk.")
+                        previous.text += next_block.text
+                    except StopIteration:
+                        blocks.append(
+                            TranslationBlock.from_transcribed_input(next_transc)
+                        )
+                awaited_time_ns = time_ns()
+                total_awaiting_time_sec += (
+                    awaited_time_ns - await_start_time_ns
+                ) // 1000000000
+                total_n_chunks += 1
+            except TimeoutError:
+                logger.info("Timeout awaiting a next translation chunk.")
+                break
+
+        requests = [
+            TranslateTextRequest(
+                contents=[b.text],
+                source_language_code=b.source_language_code,
+                target_language_code=b.target_language_code,
+                parent=f"projects/{credentials.project_id}",  # type: ignore
+            )
+            for b in blocks
+        ]
         try:
-            logger.debug("translating... %s", transcribed.text)
-            response = await translate_request(
-                client=client,
-                request=request,
-                timeout=gcp_config.request_timeout,
-                max_retry_count=gcp_config.max_retry_count,
-                retry_delay_sec=gcp_config.retry_delay_sec,
-            )
-            translated = unescape(
-                "".join(
-                    [
-                        translation.translated_text
-                        for translation in response.translations
-                    ]
+            for request, block in zip(requests, blocks):
+                logger.debug("translating... %s", block.text)
+                response = await translate_request(
+                    client=client,
+                    request=request,
+                    timeout=gcp_config.request_timeout,
+                    max_retry_count=gcp_config.max_retry_count,
+                    retry_delay_sec=gcp_config.retry_delay_sec,
                 )
-            )
-            logger.info("translatedOutput: %s -> %s", transcribed.text, translated)
-            worker_output = WorkerOutput.from_input(transcribed)
-            worker_output.text = translated
-            yield worker_output
+                translated = unescape(
+                    "".join(
+                        [
+                            translation.translated_text
+                            for translation in response.translations
+                        ]
+                    )
+                )
+                logger.info("translatedOutput: %s -> %s", block.text, translated)
+                worker_output = WorkerOutput.from_input(block.original)
+                worker_output.text = translated
+                yield worker_output
         except GoogleCloudError as e:
             logger.exception(e)
 
@@ -90,7 +152,9 @@ async def translation_worker(
         while True:
             context.reset_need_reload()
             generator = partial(
-                translation_worker_google, gcp_config=context.config.gcp
+                translation_worker_google,
+                config=context.config.translation,
+                gcp_config=context.config.gcp,
             )
             async for translated in generator(in_queue=in_queue):
                 out_queue.put_nowait(translated)

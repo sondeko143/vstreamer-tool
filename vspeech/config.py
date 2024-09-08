@@ -227,6 +227,9 @@ class SubtitleConfig(BaseModel):
 
 class TranslationConfig(BaseModel):
     enable: bool = False
+    sec_await_next_text: int = 5
+    max_sec_await_total: int = 10
+    max_n_chunk_await_total: int = 10
 
 
 class VcConfig(BaseModel):
