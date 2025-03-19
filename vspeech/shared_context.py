@@ -241,6 +241,15 @@ class SoundOutput:
             channels=self.channels,
         )
 
+    @staticmethod
+    def from_input(input: "SoundInput") -> "SoundOutput":
+        return SoundOutput(
+            data=input.data,
+            rate=input.rate,
+            format=SampleFormat(input.format),
+            channels=input.channels,
+        )
+
 
 @dataclass
 class WorkerOutput:
@@ -318,8 +327,8 @@ class WorkerInput(BaseModel):
     file_path: str
     filters: Iterable[str]
 
-    @root_validator(pre=False, skip_on_failure=True)
     @classmethod
+    @root_validator(pre=False, skip_on_failure=True)
     def root_validator(cls, values: dict[str, Any]):
         sound = cast(SoundInput, values.get("sound"))
         event = cast(EventType, values.get("current_event"))

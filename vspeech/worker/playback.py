@@ -24,7 +24,9 @@ from vspeech.lib.audio import search_device_by_name
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
+from vspeech.shared_context import SoundOutput
 from vspeech.shared_context import WorkerInput
+from vspeech.shared_context import WorkerOutput
 
 
 @dataclass
@@ -128,11 +130,15 @@ async def pyaudio_playback_worker(
                 )
                 given_volume = speech.current_event.params.volume
                 logger.debug("playback...")
-                yield await output_stream.playback(
+                await output_stream.playback(
                     volume=given_volume if given_volume is not None else config.volume,
                     data=speech.sound.data,
                 )
                 logger.debug("playback end")
+                worker_output = WorkerOutput.from_input(speech)
+                worker_output.sound = SoundOutput.from_input(speech.sound)
+                worker_output.text = speech.text
+                yield worker_output
             except Exception as e:
                 logger.warning("%s", e)
     finally:
