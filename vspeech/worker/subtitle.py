@@ -11,8 +11,8 @@ from functools import partial
 from sys import platform
 from tkinter import Canvas
 from tkinter import Tk
+from tkinter.font import Font
 from typing import Any
-from typing import Tuple
 
 from vspeech.config import Anchor
 from vspeech.config import SubtitleTextConfig
@@ -49,10 +49,11 @@ def draw_text_with_outline(
 ):
     text_color = config.font_color
     outline_color = config.outline_color
-    font_tuple: Tuple[str, str, str] = (
-        config.font_family,
-        f"{config.font_size}",
-        config.font_style,
+
+    font_tuple = Font(
+        family=config.font_family,
+        size=config.font_size,
+        weight="bold" if config.font_style.lower() == "bold" else "normal",
     )
     offset = 1
     for i in range(0, 4):
@@ -172,7 +173,9 @@ async def subtitle_worker(
                     canvas.delete(texts[p].tag)
                     draw_text_with_outline(
                         canvas=canvas,
-                        texts=" ".join(t.value for t in texts[p].values),
+                        texts=texts[p].config.delimiter.join(
+                            t.value for t in texts[p].values
+                        ),
                         text_coord_x=text_coord_x,
                         text_coord_y=text_coord_y,
                         text_tag=texts[p].tag,
@@ -206,7 +209,7 @@ async def subtitle_worker(
                 canvas.delete(ts.tag)
                 draw_text_with_outline(
                     canvas=canvas,
-                    texts=" ".join(t.value for t in ts.values),
+                    texts=ts.config.delimiter.join(t.value for t in ts.values),
                     text_coord_x=text_coord_x,
                     text_coord_y=text_coord_y,
                     text_tag=ts.tag,
