@@ -86,6 +86,7 @@ async def voicevox_worker(vvox_config: VoicevoxConfig, in_queue: Queue[WorkerInp
             worker_output.sound = SoundOutput(
                 data=speech[44:], rate=24000, format=SampleFormat.INT16, channels=1
             )
+            worker_output.text = transcribed.text
             yield worker_output
         except UnicodeEncodeError as e:
             logger.exception("%s", e)
