@@ -129,7 +129,7 @@ async def pyaudio_playback_worker(
                     channels=speech.sound.channels,
                 )
                 given_volume = speech.current_event.params.volume
-                logger.debug("playback...")
+                logger.debug("playback... %s", speech.text)
                 await output_stream.playback(
                     volume=given_volume if given_volume is not None else config.volume,
                     data=speech.sound.data,
@@ -146,13 +146,16 @@ async def pyaudio_playback_worker(
         del output_stream.audio
 
 
-async def playback_worker(context: SharedContext, in_queue: Queue[WorkerInput]):
+async def playback_worker(
+    context: SharedContext, in_queue: Queue[WorkerInput], out_queue: Queue[WorkerOutput]
+):
     try:
         while True:
             context.reset_need_reload()
-            async for _ in pyaudio_playback_worker(
+            async for output in pyaudio_playback_worker(
                 config=context.config.playback, in_queue=in_queue
             ):
+                out_queue.put_nowait(output)
                 if context.need_reload:
                     break
             if not context.running.is_set():
@@ -170,7 +173,9 @@ def create_playback_task(
         configs_depends_on=["playback"],
     )
     task = tg.create_task(
-        playback_worker(context, in_queue=worker.in_queue),
+        playback_worker(
+            context, in_queue=worker.in_queue, out_queue=context.sender_queue
+        ),
         name=worker.event.name,
     )
     return task
