@@ -51,7 +51,7 @@ PyAudio = { version = "^0.2.13", optional = true }
 ttkbootstrap = { version = "^1.10.1", optional = true }
 pillow = { version = "^10.0.1", optional = true }
 colorlog = "^6.7.0"
-onnx = { version = "^1.14.1", optional = true }
+onnx = { version = "^1.16.2", optional = true }
 onnxsim = { version = "^0.4.30", optional = true }
 emoji = "^2.6.0"
 librosa = { version = "^0.10.1", optional = true }
