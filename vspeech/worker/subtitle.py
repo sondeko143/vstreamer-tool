@@ -101,11 +101,42 @@ class Texts:
     tag: str
     anchor: Anchor
     config: SubtitleTextConfig
+    bb_width: int
+    bb_height: int
     display_remain_sec: float = 0
     values: deque[Text] = field(init=False)
 
     def __post_init__(self):
         self.values = deque([], maxlen=self.config.max_histories)
+
+    @property
+    def coord_x(self):
+        if self.anchor == "center":
+            return self.bb_width // 2
+        elif "e" in self.anchor:
+            return self.bb_width - self.config.margin
+        elif "w" in self.anchor:
+            return self.config.margin
+        else:
+            return self.bb_width // 2
+
+    @property
+    def coord_y(self):
+        if self.anchor == "center":
+            return self.bb_height // 2
+        elif "s" in self.anchor:
+            return self.bb_height - self.config.margin
+        elif "n" in self.anchor:
+            return self.config.margin
+        else:
+            return self.bb_height // 2
+
+    @property
+    def texts(self):
+        if "s" in self.anchor:
+            return self.config.delimiter.join(t.value for t in reversed(self.values))
+        else:
+            return self.config.delimiter.join(t.value for t in self.values)
 
 
 def how_many_should_we_pop(texts: deque[Text], max_length: int):
@@ -147,23 +178,27 @@ async def subtitle_worker(
                 tag="text",
                 anchor=context.config.subtitle.text.anchor,
                 config=context.config.subtitle.text,
+                bb_height=tk_root.winfo_height(),
+                bb_width=tk_root.winfo_width(),
             ),
             "s": Texts(
                 tag="translated",
                 anchor=context.config.subtitle.translated.anchor,
                 config=context.config.subtitle.translated,
+                bb_height=tk_root.winfo_height(),
+                bb_width=tk_root.winfo_width(),
             ),
         }
         interval_sec = 1.0 / 30.0
         while True:
             set_bg_color(canvas, bg_color=context.config.subtitle.bg_color)
-            text_coord_x = tk_root.winfo_width() / 2
-            text_coord_y = tk_root.winfo_height() / 2
             for p in texts:
                 if p == "n":
                     texts[p].config = context.config.subtitle.text
                 elif p == "s":
                     texts[p].config = context.config.subtitle.translated
+                texts[p].bb_width = tk_root.winfo_width()
+                texts[p].bb_height = tk_root.winfo_height()
                 if not texts[p].values:
                     continue
                 t = texts[p].values[0]
@@ -173,11 +208,9 @@ async def subtitle_worker(
                     canvas.delete(texts[p].tag)
                     draw_text_with_outline(
                         canvas=canvas,
-                        texts=texts[p].config.delimiter.join(
-                            t.value for t in texts[p].values
-                        ),
-                        text_coord_x=text_coord_x,
-                        text_coord_y=text_coord_y,
+                        texts=texts[p].texts,
+                        text_coord_x=texts[p].coord_x,
+                        text_coord_y=texts[p].coord_y,
                         text_tag=texts[p].tag,
                         anchor=texts[p].anchor,
                         config=texts[p].config,
@@ -209,9 +242,9 @@ async def subtitle_worker(
                 canvas.delete(ts.tag)
                 draw_text_with_outline(
                     canvas=canvas,
-                    texts=ts.config.delimiter.join(t.value for t in ts.values),
-                    text_coord_x=text_coord_x,
-                    text_coord_y=text_coord_y,
+                    texts=ts.texts,
+                    text_coord_x=ts.coord_x,
+                    text_coord_y=ts.coord_y,
                     text_tag=ts.tag,
                     anchor=ts.anchor,
                     config=ts.config,

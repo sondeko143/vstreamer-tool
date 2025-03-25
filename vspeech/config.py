@@ -211,6 +211,7 @@ class SubtitleTextConfig(BaseModel):
     outline_color: str = "#000000"
     max_histories: int = 10
     delimiter: str = " "
+    margin: int = 4
 
 
 class SubtitleConfig(BaseModel):
