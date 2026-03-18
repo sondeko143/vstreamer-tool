@@ -7,45 +7,34 @@ from typing import cast
 import numpy as np
 import pyworld
 from numpy.typing import NDArray
+from onnxruntime import GraphOptimizationLevel
 from onnxruntime import InferenceSession
+from onnxruntime import SessionOptions
 from scipy import signal
 from torch import Tensor
 from torch import cuda
 
 from vspeech.config import F0ExtractorType
-from vspeech.config import RvcConfig
 
 
 class PitchExtractor:
     pass
 
 
-def prepare_pitch_extractor(config: RvcConfig):
-    if config.f0_extractor_type == F0ExtractorType.harvest:
-        pass
-    elif config.f0_extractor_type == F0ExtractorType.dio:
-        pass
-    elif config.f0_extractor_type == F0ExtractorType.crepe:
-        providers = ["CPUExecutionProvider"]
-        providers_options: list[dict[str, Any]] = [{}]
-        if cuda.is_available():
-            providers.insert(0, "CUDAExecutionProvider")
-            providers_options.insert(0, {"device_id": config.gpu_id})
-        return InferenceSession(
-            str(config.crepe_model_file.expanduser()),
-            providers=providers,
-            provider_options=providers_options,
-        )
-
-
 def create_crepe_session(model_file: Path, gpu_id: int):
+    sess_options = SessionOptions()
+    sess_options.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
     providers = ["CPUExecutionProvider"]
     providers_options: list[dict[str, Any]] = [{}]
     if cuda.is_available():
         providers.insert(0, "CUDAExecutionProvider")
-        providers_options.insert(0, {"device_id": gpu_id})
+        providers_options.insert(0, {"device_id": gpu_id,
+                                         "cudnn_conv_algo_search": "HEURISTIC",
+                "arena_extend_strategy": "kNextPowerOfTwo",
+        })
     return InferenceSession(
         str(model_file.expanduser()),
+        sess_options=sess_options,
         providers=providers,
         provider_options=providers_options,
     )
