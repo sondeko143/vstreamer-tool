@@ -14,6 +14,7 @@ from grpc import ssl_channel_credentials
 from grpc.aio import AioRpcError
 from grpc.aio import insecure_channel
 from grpc.aio import secure_channel
+from vstreamer_protos.commander.commander_pb2 import SUBTITLE
 from vstreamer_protos.commander.commander_pb2 import Command
 from vstreamer_protos.commander.commander_pb2 import Response
 from vstreamer_protos.commander.commander_pb2_grpc import CommanderStub
@@ -76,6 +77,8 @@ async def send_command(
                 command.operand.text,
                 address,
             )
+            if command.chains[0].operations[0].operation == SUBTITLE:
+                command.operand.sound.data = b""
             logger.debug("send: chains(%s)", command.chains)
             res = cast(Response, await stub.process_command(command))
             logger.info("success response: %s", str(res))

@@ -39,7 +39,7 @@ class OutputStream:
     audio: PyAudio = field(init=False)
     device: DeviceInfo = field(init=False)
 
-    def __post_init__(self, config: PlaybackConfig):
+    def __post_init__(self, config: PlaybackConfig) -> None:
         self.audio = PyAudio()
         self.device = get_output_device(audio=self.audio, config=config)
         logger.info("setting device %s: %s", self.device.index, self.device.name)

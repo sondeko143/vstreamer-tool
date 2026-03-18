@@ -4,8 +4,10 @@ from asyncio import Queue
 from asyncio import Task
 from asyncio import TaskGroup
 from asyncio import to_thread
+from collections import deque
 from math import log
 from typing import Any
+from typing import AsyncGenerator
 from typing import Callable
 from typing import NoReturn
 from typing import Optional
@@ -66,12 +68,16 @@ def get_dbfs(interval_frames: bytes, sample_width: int):
     return 20 * log(rms / max_possible_val, 10)
 
 
-async def pyaudio_recording_worker(config: RecordingConfig):
+async def pyaudio_recording_worker(
+    config: RecordingConfig,
+) -> AsyncGenerator[bytes, None]:
     while True:
         interval_frame_count = 0
         interval_frames: bytes = b""
         speaking_frames: bytes = b""
-        last_interval_frames: bytes = b""
+        last_interval_frames_buffer: deque[bytes] = deque(
+            maxlen=config.last_interval_frames_buffer_size
+        )
         total_seconds_of_this_recording = 0
         status = "waiting"
         audio = PyAudio()
@@ -91,7 +97,9 @@ async def pyaudio_recording_worker(config: RecordingConfig):
                     speaking = approx_max_amp >= config.silence_threshold
                     if status == "waiting" and speaking:
                         logger.info("record start ")
-                        speaking_frames += last_interval_frames + interval_frames
+                        speaking_frames += (
+                            b"".join(last_interval_frames_buffer) + interval_frames
+                        )
                         status = "speaking"
                         approx_max_amps = []
                     elif status == "speaking":
@@ -112,8 +120,9 @@ async def pyaudio_recording_worker(config: RecordingConfig):
                             status = "waiting"
                             speaking_frames = b""
                             interval_frames = b""
+                            last_interval_frames_buffer.clear()
                             total_seconds_of_this_recording = 0
-                    last_interval_frames = interval_frames
+                    last_interval_frames_buffer.append(interval_frames)
                     interval_frame_count = 0
                     interval_frames = b""
         except OSError as e:

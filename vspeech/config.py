@@ -158,6 +158,7 @@ class RecordingConfig(BaseModel):
         description="max wav file length to process",
     )
     gradually_stopping_interval: int = Field(default=3)
+    last_interval_frames_buffer_size: int = Field(default=5)
     input_host_api_name: Optional[str] = Field(
         default=None, description="PortAudio host api name to select an input device"
     )
@@ -307,15 +308,15 @@ class F0ExtractorType(Enum):
 
 
 class RvcConfig(BaseModel):
-    model_file: Path = Field(default="")
-    hubert_model_file: Path = Field(default="")
+    model_file: Path = Field(default=Path())
+    hubert_model_file: Path = Field(default=Path())
     f0_up_key: int = Field(default=0)
     window: int = Field(default=160)
     quality: RvcQuality = Field(default=RvcQuality.zero)
     gpu_id: int = Field(default=0)
     f0_extractor_type: F0ExtractorType = Field(default=F0ExtractorType.harvest)
     input_boost: float = Field(default=1.0)
-    crepe_model_file: Path = Field(default="")
+    crepe_model_file: Path = Field(default=Path())
 
 
 class CustomTomlEncoder(TomlArraySeparatorEncoder):  # type: ignore

@@ -39,6 +39,7 @@ async def vroid2_worker(vr2_: Any, vr2_config: Vr2Config, in_queue: Queue[Worker
             worker_output.sound = SoundOutput(
                 data=speech, rate=44110, format=SampleFormat.INT16, channels=1
             )
+            worker_output.text = demojized
             yield worker_output
         except Exception as e:
             logger.exception(e)
@@ -81,12 +82,12 @@ async def voicevox_worker(vvox_config: VoicevoxConfig, in_queue: Queue[WorkerInp
                 speaker_id=speaker_id,
                 params=audio_query,
             )
-            logger.debug("voice generated")
+            logger.debug("voice generated: %s", demojized)
             worker_output = WorkerOutput.from_input(transcribed)
             worker_output.sound = SoundOutput(
                 data=speech[44:], rate=24000, format=SampleFormat.INT16, channels=1
             )
-            worker_output.text = transcribed.text
+            worker_output.text = demojized
             yield worker_output
         except UnicodeEncodeError as e:
             logger.exception("%s", e)

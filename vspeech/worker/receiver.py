@@ -1,7 +1,6 @@
 from asyncio import CancelledError
 from asyncio import TaskGroup
 from dataclasses import dataclass
-from typing import cast
 
 from grpc import ServicerContext
 from grpc.aio import server as grpc_aio_server
@@ -30,7 +29,7 @@ class Commander(CommanderServicer):
             len(request.operand.sound.data),
             request.operand.file_path,
             request.operand.filters,
-            cast(str, context.peer()),
+            context.peer(),
         )
         logger.debug("receive: chain(%s)", request.chains)
         for worker_input in WorkerInput.from_command(request):
@@ -44,7 +43,7 @@ class Commander(CommanderServicer):
             len(request.operand.sound.data),
             request.operand.file_path,
             request.operand.filters,
-            cast(str, context.peer()),
+            context.peer(),
         )
         logger.debug("receive: chain(%s)", request.chains)
         for worker_input in WorkerInput.from_command(request):

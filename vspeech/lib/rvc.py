@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 from typing import Any
 from typing import Optional
@@ -8,7 +9,9 @@ import torch
 from fairseq import checkpoint_utils
 from fairseq.models.hubert import HubertModel
 from numpy.typing import NDArray
+from onnxruntime import GraphOptimizationLevel
 from onnxruntime import InferenceSession
+from onnxruntime import SessionOptions
 from torch.nn import functional
 from torchaudio.functional import resample
 
@@ -17,14 +20,24 @@ from vspeech.lib.pitch_extract import pitch_extract
 from vspeech.logger import logger
 
 
-def create_session(model_file: Path, gpu_id: int):
+def create_session(model_file: Path, gpu_id: int) -> InferenceSession:
+    sess_options = SessionOptions()
+    sess_options.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
     providers = ["CPUExecutionProvider"]
     providers_options: list[dict[str, Any]] = [{}]
     if torch.cuda.is_available():
         providers.insert(0, "CUDAExecutionProvider")
-        providers_options.insert(0, {"device_id": gpu_id})
+        providers_options.insert(
+            0,
+            {
+                "device_id": gpu_id,
+                "cudnn_conv_algo_search": "HEURISTIC",
+                "arena_extend_strategy": "kNextPowerOfTwo",
+            },
+        )
     return InferenceSession(
         str(model_file.expanduser()),
+        sess_options=sess_options,
         providers=providers,
         provider_options=providers_options,
     )
@@ -60,14 +73,14 @@ def extract_features(
     emb_output_layer: int = 9,
     use_final_proj: bool = True,
 ) -> torch.Tensor:
-    padding_mask = torch.BoolTensor(feats.shape).to(dev).fill_(False)
+    padding_mask = torch.zeros(feats.shape, dtype=torch.bool, device=dev)
     inputs = {
         "source": feats.to(dev),
         "padding_mask": padding_mask,
         "output_layer": emb_output_layer,
     }
 
-    with torch.no_grad():
+    with torch.inference_mode():
         logits = model.extract_features(**inputs)  # type: ignore
         if use_final_proj:
             feats = model.final_proj(logits[0])  # type: ignore
@@ -127,6 +140,12 @@ def load_hubert_model(
     model = model.to(device)
     if is_half:
         model = model.half()
+
+    try:
+        model = torch.compile(model, dynamic=True, mode="max-autotune")
+    except Exception as e:
+        logger.warning("torch.compileの適用をスキップしました: %s", e)
+
     return model
 
 
@@ -144,6 +163,7 @@ def change_voice(
     f0_enabled: bool,
     crepe_session: Optional[InferenceSession],
 ) -> NDArray[np.int16]:
+    vc_start_time = time.time()
     input_sound = np.frombuffer(voice_frames, dtype="int16")
     input_size = input_sound.shape[0]
     if input_size % 128 != 0:
@@ -177,7 +197,6 @@ def change_voice(
     assert feats.dim() == 1, feats.dim()
     feats = feats.view(1, -1)
 
-    padding_mask = torch.BoolTensor(feats.shape).to(device).fill_(False)
     feats = extract_features(
         model=hubert_model,
         feats=feats,
@@ -213,6 +232,11 @@ def change_voice(
         pitch, pitchf = None, None
     p_len_tensor = torch.tensor([p_len], device=device).long()
 
+    vc_end_time = time.time()
+    logger.info(
+        "rvc: pitch size adjusted: elapsed time: %s", vc_end_time - vc_start_time
+    )
+
     # check half-precision
     first_input_type = session.get_inputs()[0].type
     if first_input_type == "tensor(float)":
@@ -227,7 +251,7 @@ def change_voice(
     p_len_tensor = torch.tensor([feats_len], device=device).long()
 
     # 推論実行
-    with torch.no_grad():
+    with torch.inference_mode():
         audio1 = (
             infer(
                 session=session,
@@ -241,8 +265,11 @@ def change_voice(
             * 32767.5
         ).data.to(dtype=torch.int16)
 
-    del feats, p_len_tensor, padding_mask
-    torch.cuda.empty_cache()
+    del feats, p_len_tensor
+    # torch.cuda.empty_cache()
+
+    vc_end_time = time.time()
+    logger.info("rvc: inferred: elapsed time: %s", vc_end_time - vc_start_time)
 
     if t_pad_tgt != 0:
         offset = t_pad_tgt
@@ -250,5 +277,5 @@ def change_voice(
         audio1 = audio1[offset:end]
 
     del pitch, pitchf, sid
-    torch.cuda.empty_cache()
+    # torch.cuda.empty_cache()
     return audio1.detach().cpu().numpy()

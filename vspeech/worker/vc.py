@@ -107,8 +107,6 @@ async def rvc_worker(
                 f0_enabled=f0_enabled,
                 crepe_session=crepe_session,
             )
-            vc_end_time = time.time()
-            logger.info("rvc elapsed time: %s", vc_end_time - vc_start_time)
             worker_output = WorkerOutput.from_input(speech)
             if vc_config.adjust_output_vol_to_input_voice and input_vols:
                 raw_frames = audio.tobytes()
@@ -129,6 +127,8 @@ async def rvc_worker(
                     )
             else:
                 output_data = audio.tobytes()
+            vc_end_time = time.time()
+            logger.info("rvc elapsed time: %s", vc_end_time - vc_start_time)
             worker_output.sound = SoundOutput(
                 data=output_data,
                 rate=target_sample_rate,
