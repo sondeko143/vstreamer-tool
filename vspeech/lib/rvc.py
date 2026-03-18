@@ -6,6 +6,7 @@ from typing import cast
 
 import numpy as np
 import torch
+import fairseq.data.dictionary
 from fairseq import checkpoint_utils
 from fairseq.models.hubert import HubertModel
 from numpy.typing import NDArray
@@ -130,6 +131,7 @@ def infer(
 def load_hubert_model(
     file_name: Path, device: torch.device, is_half: bool
 ) -> HubertModel:
+    torch.serialization.add_safe_globals([fairseq.data.dictionary.Dictionary])
     models, _, _ = checkpoint_utils.load_model_ensemble_and_task(
         [str(file_name.expanduser())],
         suffix="",
