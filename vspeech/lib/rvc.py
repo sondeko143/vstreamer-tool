@@ -14,7 +14,8 @@ from onnxruntime import GraphOptimizationLevel
 from onnxruntime import InferenceSession
 from onnxruntime import SessionOptions
 from torch.nn import functional
-from torchaudio.functional import resample
+from functools import lru_cache
+import torchaudio.transforms as T
 
 from vspeech.config import RvcConfig
 from vspeech.lib.pitch_extract import pitch_extract
@@ -65,6 +66,11 @@ def half_precision_available(id: int):
         return False
 
     return True
+
+
+@lru_cache(maxsize=4)
+def get_resampler(orig_freq: int, new_freq: int, device: torch.device):
+    return T.Resample(orig_freq, new_freq, rolloff=0.99).to(device)
 
 
 def extract_features(
@@ -176,7 +182,8 @@ def change_voice(
         audio = np.concatenate([np.zeros([input_size]), audio])
     audio = torch.from_numpy(audio).to(device=device, dtype=torch.float32)
 
-    audio = resample(audio, voice_sample_rate, 16000, rolloff=0.99)
+    resampler = get_resampler(voice_sample_rate, 16000, device)
+    audio = resampler(audio)
     audio = audio.unsqueeze(0)
 
     repeat = rvc_config.quality.value
@@ -220,7 +227,7 @@ def change_voice(
         pitch, pitchf = pitch_extract(
             audio_pad,
             f0_up_key,
-            voice_sample_rate,
+            16000,
             rvc_config.window,
             f0_extractor=rvc_config.f0_extractor_type,
             crepe_session=crepe_session,
