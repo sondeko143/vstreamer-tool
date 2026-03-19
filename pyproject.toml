@@ -29,7 +29,7 @@ torch = [
 fairseq = { url = "https://github.com/sondeko143/fairseq-311/releases/download/v0.12.2.post1/fairseq-0.12.2.post1-cp311-cp311-win_amd64.whl", optional = true }
 pyworld = { version = "^0.3.3", optional = true }
 faiss-cpu = [{ version = "^1.7.2", platform = "win32", optional = true }]
-onnxruntime-gpu = "1.19.0"
+onnxruntime-gpu = "^1.24.4"
 torchaudio = [
     { url = "https://download.pytorch.org/whl/cu128/torchaudio-2.7.0%2Bcu128-cp311-cp311-win_amd64.whl", platform = "win32", optional = true },
 ]

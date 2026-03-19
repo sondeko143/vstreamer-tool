@@ -88,7 +88,7 @@ def pitch_extract_crepe(
 ):
     from vspeech.lib import onnxcrepe
 
-    audio_num = audio.cpu()
+    audio_num = audio.detach().cpu().numpy()
     onnx_f0, onnx_pd = onnxcrepe.predict(
         session,
         audio_num,

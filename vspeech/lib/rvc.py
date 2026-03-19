@@ -105,6 +105,57 @@ def infer(
     pitchf: torch.Tensor | None,
     sid: torch.Tensor,
 ):
+    device = feats.device
+    if device.type == "cuda":
+        io_binding = session.io_binding()
+        
+        def bind(name: str, tensor: torch.Tensor):
+            tensor = tensor.contiguous()
+            if tensor.dtype == torch.float16:
+                element_type = np.float16
+            elif tensor.dtype == torch.float32:
+                element_type = np.float32
+            elif tensor.dtype == torch.int64:
+                element_type = np.int64
+            else:
+                raise ValueError(f"Unsupported dtype: {tensor.dtype}")
+            
+            io_binding.bind_input(
+                name=name,
+                device_type='cuda',
+                device_id=device.index if device.index is not None else 0,
+                element_type=element_type,
+                shape=tuple(tensor.shape),
+                buffer_ptr=tensor.data_ptr()
+            )
+            return tensor
+            
+        tensors = []
+        tensors.append(bind("feats", feats.half() if is_half else feats.float()))
+        tensors.append(bind("p_len", pitch_length))
+        tensors.append(bind("sid", sid))
+        
+        if pitch is not None and pitchf is not None:
+            tensors.append(bind("pitch", pitch))
+            tensors.append(bind("pitchf", pitchf))
+            
+        io_binding.bind_output('audio', 'cuda', device_id=device.index if device.index is not None else 0)
+        session.run_with_iobinding(io_binding)
+        ort_output = io_binding.get_outputs()[0]
+        
+        try:
+            from torch.utils import dlpack
+            try:
+                dlp = ort_output._ortvalue.to_dlpack()
+            except AttributeError:
+                dlp = ort_output.to_dlpack()
+            audio1 = dlpack.from_dlpack(dlp).clone()
+        except Exception:
+            audio1 = torch.tensor(ort_output.numpy(), device=device)
+            
+        return audio1.unsqueeze(0)
+
+    # Fallback for CPU
     if is_half:
         input_feed = {
             "feats": feats.cpu().numpy().astype(np.float16),
@@ -125,13 +176,13 @@ def infer(
             }
         )
     audio1 = cast(
-        NDArray[np.float32],
+        list,
         session.run(
             output_names=["audio"],
             input_feed=input_feed,
         ),
     )
-    return torch.tensor(np.array(audio1))
+    return torch.tensor(np.array(audio1), device=device)
 
 
 def load_hubert_model(
