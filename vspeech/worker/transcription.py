@@ -22,6 +22,7 @@ from grpc.aio import AioRpcError
 from httpx import AsyncClient
 from httpx import HTTPError
 from pydantic import ValidationError
+from torch import device
 
 from vspeech.config import AmiConfig
 from vspeech.config import GcpConfig
@@ -95,11 +96,16 @@ async def transcript_worker_whisper(
 ) -> AsyncGenerator[WorkerOutput, None]:
     from faster_whisper import WhisperModel
 
+    from vspeech.lib.cuda_util import get_device
+
+    device, device_name = get_device(whisper_config.gpu_id, whisper_config.gpu_name)
+    logger.info("transcript worker device: %s, %s", device, device_name)
+
     model = WhisperModel(
         whisper_config.model,
         device="cuda",
         compute_type="float16",
-        device_index=whisper_config.gpu_id,
+        device_index=device.index,
     )
     logger.info("transcript worker [whisper] started")
     while True:

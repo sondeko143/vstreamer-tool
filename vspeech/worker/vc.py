@@ -36,25 +36,24 @@ async def rvc_worker(
     vc_config: VcConfig,
     in_queue: Queue[WorkerInput],
 ):
+    from vspeech.lib.cuda_util import get_device
     from vspeech.lib.pitch_extract import create_crepe_session
     from vspeech.lib.rvc import change_voice
     from vspeech.lib.rvc import create_session
-    from vspeech.lib.rvc import get_device
     from vspeech.lib.rvc import half_precision_available
     from vspeech.lib.rvc import load_hubert_model
 
-    device = get_device(rvc_config.gpu_id)
-    half_available = half_precision_available(rvc_config.gpu_id)
+    device, device_name = get_device(rvc_config.gpu_id, rvc_config.gpu_name)
+    logger.info("vc worker device: %s, %s", device, device_name)
+    half_available = half_precision_available(id=device.index)
     hubert_model = load_hubert_model(
         file_name=rvc_config.hubert_model_file,
         device=device,
         is_half=half_available,
     )
-    session = create_session(rvc_config.model_file, rvc_config.gpu_id)
+    session = create_session(rvc_config.model_file, gpu_id=device.index)
     if rvc_config.f0_extractor_type == F0ExtractorType.crepe:
-        crepe_session = create_crepe_session(
-            rvc_config.crepe_model_file, rvc_config.gpu_id
-        )
+        crepe_session = create_crepe_session(rvc_config.crepe_model_file, device.index)
     else:
         crepe_session = None
     modelmeta: Any = session.get_modelmeta()

@@ -1,12 +1,14 @@
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from typing import Optional
 from typing import cast
 
+import fairseq.data.dictionary
 import numpy as np
 import torch
-import fairseq.data.dictionary
+import torchaudio.transforms as T
 from fairseq import checkpoint_utils
 from fairseq.models.hubert import HubertModel
 from numpy.typing import NDArray
@@ -14,10 +16,9 @@ from onnxruntime import GraphOptimizationLevel
 from onnxruntime import InferenceSession
 from onnxruntime import SessionOptions
 from torch.nn import functional
-from functools import lru_cache
-import torchaudio.transforms as T
 
 from vspeech.config import RvcConfig
+from vspeech.lib.cuda_util import get_device_index_by_name
 from vspeech.lib.pitch_extract import pitch_extract
 from vspeech.logger import logger
 
@@ -43,12 +44,6 @@ def create_session(model_file: Path, gpu_id: int) -> InferenceSession:
         providers=providers,
         provider_options=providers_options,
     )
-
-
-def get_device(gpu_id: int):
-    if torch.cuda.is_available():
-        return torch.device("cuda", gpu_id)
-    return torch.device("cpu")
 
 
 def half_precision_available(id: int):
@@ -108,7 +103,7 @@ def infer(
     device = feats.device
     if device.type == "cuda":
         io_binding = session.io_binding()
-        
+
         def bind(name: str, tensor: torch.Tensor):
             tensor = tensor.contiguous()
             if tensor.dtype == torch.float16:
@@ -119,32 +114,35 @@ def infer(
                 element_type = np.int64
             else:
                 raise ValueError(f"Unsupported dtype: {tensor.dtype}")
-            
+
             io_binding.bind_input(
                 name=name,
-                device_type='cuda',
+                device_type="cuda",
                 device_id=device.index if device.index is not None else 0,
                 element_type=element_type,
                 shape=tuple(tensor.shape),
-                buffer_ptr=tensor.data_ptr()
+                buffer_ptr=tensor.data_ptr(),
             )
             return tensor
-            
+
         tensors = []
         tensors.append(bind("feats", feats.half() if is_half else feats.float()))
         tensors.append(bind("p_len", pitch_length))
         tensors.append(bind("sid", sid))
-        
+
         if pitch is not None and pitchf is not None:
             tensors.append(bind("pitch", pitch))
             tensors.append(bind("pitchf", pitchf))
-            
-        io_binding.bind_output('audio', 'cuda', device_id=device.index if device.index is not None else 0)
+
+        io_binding.bind_output(
+            "audio", "cuda", device_id=device.index if device.index is not None else 0
+        )
         session.run_with_iobinding(io_binding)
         ort_output = io_binding.get_outputs()[0]
-        
+
         try:
             from torch.utils import dlpack
+
             try:
                 dlp = ort_output._ortvalue.to_dlpack()
             except AttributeError:
@@ -152,7 +150,7 @@ def infer(
             audio1 = dlpack.from_dlpack(dlp).clone()
         except Exception:
             audio1 = torch.tensor(ort_output.numpy(), device=device)
-            
+
         return audio1.unsqueeze(0)
 
     # Fallback for CPU

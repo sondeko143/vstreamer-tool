@@ -287,7 +287,8 @@ class WhisperConfig(BaseModel):
     model: str = "large-v3"
     no_speech_prob_threshold: float = 0.6
     logprob_threshold: float = -1.0
-    gpu_id: int = 0
+    gpu_id: Optional[int] = None
+    gpu_name: str = ""
 
 
 class VoicevoxConfig(BaseModel):
@@ -313,7 +314,8 @@ class RvcConfig(BaseModel):
     f0_up_key: int = Field(default=0)
     window: int = Field(default=160)
     quality: RvcQuality = Field(default=RvcQuality.zero)
-    gpu_id: int = Field(default=0)
+    gpu_id: Optional[int] = Field(default=None)
+    gpu_name: str = Field(default="")
     f0_extractor_type: F0ExtractorType = Field(default=F0ExtractorType.harvest)
     input_boost: float = Field(default=1.0)
     crepe_model_file: Path = Field(default=Path())
