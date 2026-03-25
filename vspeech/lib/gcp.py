@@ -1,5 +1,6 @@
 from typing import TypeAlias
 
+from google.auth import default as google_auth_default
 from google.auth.compute_engine import Credentials as CeCredentials
 from google.auth.compute_engine import IDTokenCredentials as CeIdTokenCredentials
 from google.auth.exceptions import TransportError
@@ -23,15 +24,21 @@ def unescape_private_key(service_account_info: ServiceAccountInfo):
     return decoded
 
 
-def get_credentials(config: GcpConfig) -> Credentials | CeCredentials:
+def get_credentials(config: GcpConfig) -> tuple[Credentials | CeCredentials, str]:
     if config.service_account_file_path:
         file_path = config.service_account_file_path.expanduser()
-        return Credentials.from_service_account_file(file_path)
+        cred = Credentials.from_service_account_file(file_path)
+        return cred, cred.project_id  # type: ignore
     elif config.service_account_info:
         decoded = unescape_private_key(config.service_account_info)
-        return Credentials.from_service_account_info(decoded)
+        cred = Credentials.from_service_account_info(decoded)
+        return cred, cred.project_id  # type: ignore
+    elif config.use_ce_credentials:
+        cred = CeCredentials()
+        return cred, ""
     else:
-        return CeCredentials()
+        cred, project_id = google_auth_default()
+        return cred, project_id or ""
 
 
 def get_id_token_credentials(

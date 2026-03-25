@@ -72,7 +72,7 @@ class TranslationBlock:
 async def translation_worker_google(
     config: TranslationConfig, gcp_config: GcpConfig, in_queue: Queue[WorkerInput]
 ) -> AsyncGenerator[WorkerOutput, None]:
-    credentials = get_credentials(gcp_config)
+    credentials, project_id = get_credentials(gcp_config)
     client = TranslationServiceAsyncClient(credentials=credentials)
     logger.info("translation worker [google] started")
     while True:
@@ -113,7 +113,7 @@ async def translation_worker_google(
                 contents=[b.text],
                 source_language_code=b.source_language_code,
                 target_language_code=b.target_language_code,
-                parent=f"projects/{credentials.project_id}",  # type: ignore
+                parent=f"projects/{project_id}",  # type: ignore
             )
             for b in blocks
         ]

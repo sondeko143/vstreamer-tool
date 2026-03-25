@@ -273,6 +273,10 @@ class GcpConfig(BaseModel):
         default_factory=dict,
         description="Google Cloud Platform API service account info",
     )
+    use_ce_credentials: bool = Field(
+        default=False,
+        description="Whether to use Compute Engine credentials",
+    )
     request_timeout: float = 3.0
     max_retry_count: int = 5
     retry_delay_sec: float = 0.5
