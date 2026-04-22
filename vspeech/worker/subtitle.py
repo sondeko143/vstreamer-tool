@@ -46,6 +46,7 @@ def draw_text_with_outline(
     text_tag: str,
     anchor: Anchor,
     config: SubtitleTextConfig,
+    max_width: int = 0,
 ):
     text_color = config.font_color
     outline_color = config.outline_color
@@ -55,6 +56,37 @@ def draw_text_with_outline(
         size=config.font_size,
         weight="bold" if config.font_style.lower() == "bold" else "normal",
     )
+
+    if max_width > 0:
+        wrapped_lines = []
+        for line in texts.split("\n"):
+            if not line:
+                wrapped_lines.append("")
+                continue
+            if font_tuple.measure(line) <= max_width:
+                wrapped_lines.append(line)
+            else:
+                current_line = ""
+                for char in line:
+                    if not current_line:
+                        current_line = char
+                        continue
+                    test_line = current_line + char
+                    if font_tuple.measure(test_line) <= max_width:
+                        current_line = test_line
+                    else:
+                        wrapped_lines.append(current_line)
+                        current_line = char
+                if current_line:
+                    wrapped_lines.append(current_line)
+        texts = "\n".join(wrapped_lines)
+
+    justify_val = "center"
+    if "e" in anchor:
+        justify_val = "right"
+    elif "w" in anchor:
+        justify_val = "left"
+
     offset = 1
     for i in range(0, 4):
         x = text_coord_x - offset if i % 2 == 0 else text_coord_x + offset
@@ -66,6 +98,7 @@ def draw_text_with_outline(
             font=font_tuple,
             fill=outline_color,
             anchor=anchor,
+            justify=justify_val,
             tags=text_tag,
         )
     canvas.create_text(
@@ -75,6 +108,7 @@ def draw_text_with_outline(
         font=font_tuple,
         fill=text_color,
         anchor=anchor,
+        justify=justify_val,
         tags=text_tag,
     )
 
@@ -214,6 +248,7 @@ async def subtitle_worker(
                         text_tag=texts[p].tag,
                         anchor=texts[p].anchor,
                         config=texts[p].config,
+                        max_width=texts[p].bb_width - texts[p].config.margin * 2,
                     )
                     canvas.pack()
             tk_root.update()
@@ -248,6 +283,7 @@ async def subtitle_worker(
                     text_tag=ts.tag,
                     anchor=ts.anchor,
                     config=ts.config,
+                    max_width=ts.bb_width - ts.config.margin * 2,
                 )
                 canvas.pack()
             except QueueEmpty:
