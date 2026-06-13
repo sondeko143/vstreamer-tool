@@ -71,7 +71,7 @@ async def voicevox_worker(vvox_config: VoicevoxConfig, in_queue: Queue[WorkerInp
             given_speed = transcribed.current_event.params.speed
             given_pitch = transcribed.current_event.params.pitch
             audio_query = VoicevoxParam(
-                **vvox_config.params.dict(exclude={"speed_scale", "pitch_scale"}),
+                **vvox_config.params.model_dump(exclude={"speed_scale", "pitch_scale"}),
                 speed_scale=given_speed
                 if given_speed is not None
                 else vvox_config.params.speed_scale,

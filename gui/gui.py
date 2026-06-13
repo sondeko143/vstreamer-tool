@@ -223,7 +223,7 @@ class VspeechGUI(Frame):
     def write_config_to_file(self, file: IO[bytes]):
         file_name = file.name
         if VspeechGUI.is_file_json(file_name):
-            file.write(bytes(self.config.json(), encoding="utf-8"))
+            file.write(bytes(self.config.model_dump_json(), encoding="utf-8"))
         else:
             file.write(bytes(self.config.export_to_toml(), encoding="utf-8"))
 
@@ -1298,7 +1298,7 @@ class VspeechGUI(Frame):
             )
             self.terminate_main()
         with NamedTemporaryFile("w", delete=False, suffix=".json") as temp_config_file:
-            temp_config_file.write(self.config.json())
+            temp_config_file.write(self.config.model_dump_json())
             temp_config_file.flush()
         temp_config_file_path = Path(temp_config_file.name)
         try:
@@ -1400,7 +1400,7 @@ class VspeechGUI(Frame):
 
     def reload_config(self):
         with NamedTemporaryFile("w", delete=False, suffix=".json") as temp_config_file:
-            temp_config_file.write(self.config.json())
+            temp_config_file.write(self.config.model_dump_json())
             temp_config_file.flush()
         temp_config_file_path = Path(temp_config_file.name)
         try:
