@@ -8,6 +8,7 @@ from typing import Dict
 from typing import Literal
 from typing import MutableMapping
 from typing import TypeAlias
+from typing import cast
 from urllib.parse import ParseResult
 from urllib.parse import parse_qs
 from urllib.parse import urlparse
@@ -325,9 +326,10 @@ class WorkerInput(BaseModel):
 
     @model_validator(mode="after")
     def _validate_input(self):
-        if is_sound_event(self.current_event) and self.sound.is_invalid():
+        event = cast(EventType, self.current_event)
+        if is_sound_event(event) and self.sound.is_invalid():
             raise ValueError("sound input is invalid")
-        if self.current_event == EventType.reload and not self.file_path:
+        if event == EventType.reload and not self.file_path:
             raise ValueError("file_path is required")
         return self
 
@@ -362,7 +364,7 @@ class WorkerInput(BaseModel):
                 text=command.operand.text,
                 sound=SoundInput.model_validate(command.operand.sound),
                 file_path=command.operand.file_path,
-                filters=command.operand.filters,
+                filters=list(command.operand.filters),
             )
             for first_event, following_events in first_event_maps.items()
         ]
