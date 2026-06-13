@@ -65,6 +65,8 @@ dev = [
     "pytest-grpc>=0.8.0,<0.9",
     "pytest-asyncio>=0.21.0,<0.22",
     "pytest-httpx",
+    "ruff>=0.15.17",
+    "ty>=0.0.49",
 ]
 
 [tool.uv]
@@ -103,11 +105,8 @@ testpaths = ["tests"]
 pythonpath = "."
 asyncio_mode = "auto"
 
-[tool.pyright]
-typeCheckingMode = "strict"
-reportUnknownMemberType = "warning"
-reportMissingTypeStubs = "warning"
-reportUnknownVariableType = "warning"
+[tool.ty.environment]
+python-version = "3.11"
 
 [tool.ruff.lint.isort]
 force-single-line = true

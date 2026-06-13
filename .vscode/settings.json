@@ -30,8 +30,10 @@
         "websockets",
         "yukarinette"
     ],
-    "python.analysis.stubPath": "typings",
     "python.languageServer": "Pylance",
     "python.testing.pytestEnabled": true,
     "python.testing.unittestEnabled": false,
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.typeCheckingMode": "off",
+    "python-envs.defaultEnvManager": "ms-python.python:system",
 }
