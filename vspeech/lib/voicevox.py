@@ -1,6 +1,5 @@
 from pathlib import Path
 
-from voicevox_core import AccelerationMode
 from voicevox_core.blocking import Onnxruntime
 from voicevox_core.blocking import OpenJtalk
 from voicevox_core.blocking import Synthesizer
@@ -25,7 +24,9 @@ class Voicevox:
         self.synthesizer = Synthesizer(
             onnxruntime,
             OpenJtalk(str(open_jtalk_dict_dir.expanduser())),
-            acceleration_mode=AccelerationMode.AUTO,
+            # 0.16 では AccelerationMode は Literal["AUTO","CPU","GPU"] エイリアス
+            # （enum ではない）。文字列をそのまま渡す。
+            acceleration_mode="AUTO",
         )
         self.model_dir = model_dir.expanduser()
         self._style_index: dict[int, Path] = self._build_style_index(self.model_dir)

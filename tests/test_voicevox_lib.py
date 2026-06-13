@@ -83,7 +83,6 @@ class _FakeOpenJtalk:
 @pytest.fixture
 def voicevox_module(monkeypatch):
     core = types.ModuleType("voicevox_core")
-    core.AccelerationMode = types.SimpleNamespace(AUTO="AUTO")
     blocking = types.ModuleType("voicevox_core.blocking")
     blocking.Onnxruntime = _FakeOnnxruntime
     blocking.OpenJtalk = _FakeOpenJtalk
