@@ -4,13 +4,10 @@ from asyncio import current_task
 from collections import defaultdict
 from dataclasses import dataclass
 from dataclasses import field
-from typing import Any
 from typing import Dict
-from typing import Iterable
 from typing import Literal
 from typing import MutableMapping
 from typing import TypeAlias
-from typing import cast
 from urllib.parse import ParseResult
 from urllib.parse import parse_qs
 from urllib.parse import urlparse
@@ -19,8 +16,9 @@ from uuid import UUID
 from uuid import uuid4
 
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
-from pydantic import root_validator
+from pydantic import model_validator
 from vstreamer_protos.commander.commander_pb2 import FORWARD
 from vstreamer_protos.commander.commander_pb2 import PAUSE
 from vstreamer_protos.commander.commander_pb2 import PING
@@ -133,8 +131,7 @@ class Params(BaseModel):
     speed: float | None = Field(default=None, alias="spd")
     pitch: float | None = Field(default=None, alias="pit")
 
-    class Config:
-        allow_population_by_field_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
     def to_pb(self):
         return {key: str(value) for key, value in self if value is not None}
@@ -300,8 +297,7 @@ class SoundInput(BaseModel):
     format: SampleFormat
     channels: int
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
     def is_invalid(self):
         return any(
@@ -325,18 +321,15 @@ class WorkerInput(BaseModel):
     text: str
     sound: SoundInput
     file_path: str
-    filters: Iterable[str]
+    filters: list[str]
 
-    @classmethod
-    @root_validator(pre=False, skip_on_failure=True)
-    def root_validator(cls, values: dict[str, Any]):
-        sound = cast(SoundInput, values.get("sound"))
-        event = cast(EventType, values.get("current_event"))
-        if is_sound_event(event) and sound.is_invalid():
+    @model_validator(mode="after")
+    def _validate_input(self):
+        if is_sound_event(self.current_event) and self.sound.is_invalid():
             raise ValueError("sound input is invalid")
-        if event == EventType.reload and not values.get("file_path"):
+        if self.current_event == EventType.reload and not self.file_path:
             raise ValueError("file_path is required")
-        return values
+        return self
 
     @classmethod
     def from_output(cls, output: WorkerOutput, remote: str):
@@ -347,7 +340,7 @@ class WorkerInput(BaseModel):
                 current_event=first_event,
                 following_events=following_events,
                 text=output.text or "",
-                sound=SoundInput.from_orm(output.sound)
+                sound=SoundInput.model_validate(output.sound)
                 if output.sound
                 else SoundInput.invalid(),
                 file_path="",
@@ -367,7 +360,7 @@ class WorkerInput(BaseModel):
                 current_event=first_event,
                 following_events=following_events,
                 text=command.operand.text,
-                sound=SoundInput.from_orm(command.operand.sound),
+                sound=SoundInput.model_validate(command.operand.sound),
                 file_path=command.operand.file_path,
                 filters=command.operand.filters,
             )
