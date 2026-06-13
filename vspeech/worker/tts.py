@@ -4,7 +4,6 @@ from asyncio import TaskGroup
 from asyncio import to_thread
 from functools import partial
 from typing import Any
-from typing import List
 from typing import cast
 
 from emoji import demojize
@@ -111,7 +110,7 @@ async def tts_worker(
 
                 vr2 = VR2()
                 with vr2.vc_roid2:
-                    lang_list: List[str] = vr2.list_languages()
+                    lang_list: list[str] = vr2.list_languages()
                     if "standard" in lang_list:
                         vr2.load_language("standard")
                     elif lang_list:
@@ -121,7 +120,7 @@ async def tts_worker(
                     if context.config.vr2.voice_name:
                         voice_name = context.config.vr2.voice_name
                     else:
-                        voice_list: List[str] = vr2.list_voices()
+                        voice_list: list[str] = vr2.list_voices()
                         if voice_list:
                             voice_name = voice_list[0]
                         else:

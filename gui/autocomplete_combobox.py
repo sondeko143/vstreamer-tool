@@ -7,13 +7,11 @@ Created by Mitja Martini on 2008-11-29.
 Updated by Russell Adams, 2011/01/24 to support Python 3 and Combobox.
    Licensed same as original (not specified?), or public domain, whichever is less restrictive.
 """
+
 import tkinter
 from tkinter import Event
 from typing import Any
-from typing import Dict
 from typing import Generic
-from typing import List
-from typing import Optional
 from typing import TypeVar
 
 import ttkbootstrap as ttk
@@ -22,20 +20,20 @@ T = TypeVar("T")
 
 
 class AutocompleteCombobox(ttk.Combobox, Generic[T]):
-    _completion_list: List[str]
+    _completion_list: list[str]
     _hit_index: int
-    _hits: List[str]
-    _label_value_map: Dict[str, T]
+    _hits: list[str]
+    _label_value_map: dict[str, T]
 
     def get_value(self) -> T:
         return self._label_value_map[self.get()]
 
-    def get_label_for_item_value(self, value: T) -> Optional[str]:
+    def get_label_for_item_value(self, value: T) -> str | None:
         for label, _value in self._label_value_map.items():
             if _value == value:
                 return label
 
-    def set_completion_list(self, label_value_map: Dict[str, T]):
+    def set_completion_list(self, label_value_map: dict[str, T]):
         """Use our completion list as our drop down selection menu, arrows move through menu."""
         completion_list = list(label_value_map.keys())
         self._completion_list = sorted(

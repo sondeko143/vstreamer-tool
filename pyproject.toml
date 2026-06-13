@@ -113,5 +113,14 @@ markers = [
 [tool.ty.environment]
 python-version = "3.11"
 
+[tool.ty.src]
+exclude = ["vspeech/lib/onnxcrepe/**"]
+
+[tool.ruff]
+extend-exclude = ["vspeech/lib/onnxcrepe"]
+
+[tool.ruff.lint]
+extend-select = ["I", "UP"]
+
 [tool.ruff.lint.isort]
 force-single-line = true

@@ -1,7 +1,5 @@
 import re
 from typing import Any
-from typing import List
-from typing import Optional
 from typing import cast
 
 from pydantic import BaseModel
@@ -18,17 +16,17 @@ class AmiToken(BaseModel):
 
 
 class AmiResult(BaseModel):
-    tokens: List[AmiToken]
-    confidence: Optional[float]
-    starttime: Optional[int]
-    endtime: Optional[int]
-    tags: List[Any]
+    tokens: list[AmiToken]
+    confidence: float | None
+    starttime: int | None
+    endtime: int | None
+    tags: list[Any]
     rulename: str
     text: str
 
 
 class AmiResponse(BaseModel):
-    results: List[AmiResult]
+    results: list[AmiResult]
     utteranceid: str
     text: str
     code: str
@@ -66,7 +64,7 @@ def text_removed_filler_symbol(res_body: AmiResponse):
     )
 
 
-def delimiter_token(token: AmiToken) -> Optional[str]:
+def delimiter_token(token: AmiToken) -> str | None:
     match = re.fullmatch(FILLER_PATTERN, token.written)
     if match:
         return match.group(1)

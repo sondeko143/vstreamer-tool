@@ -2,6 +2,7 @@ from asyncio import Queue
 from asyncio import wait_for
 from uuid import uuid4
 
+from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from vspeech.config import AmiConfig
@@ -73,7 +74,7 @@ async def test_ami(httpx_mock: HTTPXMock):
         }
     )
     config = TranscriptionConfig()
-    ami_config = AmiConfig(appkey="", engine_uri="https://dummy")
+    ami_config = AmiConfig(appkey=SecretStr(""), engine_uri="https://dummy")
     queue = Queue[WorkerInput]()
     await put_queue(queue)
     try:

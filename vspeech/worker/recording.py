@@ -5,13 +5,11 @@ from asyncio import Task
 from asyncio import TaskGroup
 from asyncio import to_thread
 from collections import deque
+from collections.abc import AsyncGenerator
+from collections.abc import Callable
 from math import log
 from typing import Any
-from typing import AsyncGenerator
-from typing import Callable
 from typing import NoReturn
-from typing import Optional
-from typing import Tuple
 
 from pyaudio import PyAudio
 
@@ -31,9 +29,8 @@ from vspeech.shared_context import WorkerOutput
 def open_input_stream(
     audio: PyAudio,
     config: RecordingConfig,
-    stream_callback: Optional[
-        Callable[[Optional[bytes], int, Any, int], Tuple[Optional[bytes], int]]
-    ] = None,
+    stream_callback: Callable[[bytes | None, int, Any, int], tuple[bytes | None, int]]
+    | None = None,
 ):
     input_device_index = config.input_device_index
     if input_device_index is None:

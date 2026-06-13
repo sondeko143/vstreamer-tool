@@ -2,11 +2,10 @@ from asyncio import Event
 from asyncio import Queue
 from asyncio import current_task
 from collections import defaultdict
+from collections.abc import MutableMapping
 from dataclasses import dataclass
 from dataclasses import field
-from typing import Dict
 from typing import Literal
-from typing import MutableMapping
 from typing import TypeAlias
 from typing import cast
 from urllib.parse import ParseResult
@@ -124,13 +123,16 @@ def operation_to_event(operation: Operation) -> EventType:
 
 
 class Params(BaseModel):
-    target_language_code: str | None = Field(default=None, alias="t")
-    source_language_code: str | None = Field(default=None, alias="s")
-    position: Literal["s", "n"] | None = Field(default=None, alias="p")
-    speaker_id: int | None = Field(default=None, alias="i")
-    volume: int | None = Field(default=None, alias="v")
-    speed: float | None = Field(default=None, alias="spd")
-    pitch: float | None = Field(default=None, alias="pit")
+    # Use `validation_alias` (not `alias`) so the short query codes populate the
+    # fields on input while the Python field names stay the public constructor
+    # kwargs. `populate_by_name` keeps both spellings accepted at runtime.
+    target_language_code: str | None = Field(default=None, validation_alias="t")
+    source_language_code: str | None = Field(default=None, validation_alias="s")
+    position: Literal["s", "n"] | None = Field(default=None, validation_alias="p")
+    speaker_id: int | None = Field(default=None, validation_alias="i")
+    volume: int | None = Field(default=None, validation_alias="v")
+    speed: float | None = Field(default=None, validation_alias="spd")
+    pitch: float | None = Field(default=None, validation_alias="pit")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -140,11 +142,13 @@ class Params(BaseModel):
     @classmethod
     def from_qs(cls, url: ParseResult):
         queries = parse_qs(url.query)
-        return cls(**{key: next(iter(values), None) for key, values in queries.items()})
+        return cls.model_validate(
+            {key: next(iter(values), None) for key, values in queries.items()}
+        )
 
     @classmethod
     def from_pb(cls, queries: MutableMapping[str, str]):
-        return cls(**queries)
+        return cls.model_validate(dict(queries))
 
     def __bool__(self):
         return any(value is not None for _, value in self)
@@ -370,7 +374,7 @@ class WorkerInput(BaseModel):
         ]
 
 
-InputQueues = Dict[EventType, Queue[WorkerInput]]
+InputQueues = dict[EventType, Queue[WorkerInput]]
 
 
 @dataclass

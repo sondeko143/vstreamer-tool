@@ -2,7 +2,6 @@ import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-from typing import Optional
 from typing import cast
 
 import fairseq.data.dictionary
@@ -18,7 +17,6 @@ from onnxruntime import SessionOptions
 from torch.nn import functional
 
 from vspeech.config import RvcConfig
-from vspeech.lib.cuda_util import get_device_index_by_name
 from vspeech.lib.pitch_extract import pitch_extract
 from vspeech.logger import logger
 
@@ -203,7 +201,7 @@ def load_hubert_model(
     except Exception as e:
         logger.warning("torch.compileの適用をスキップしました: %s", e)
 
-    return model
+    return cast(HubertModel, model)
 
 
 def change_voice(
@@ -218,7 +216,7 @@ def change_voice(
     hubert_model: HubertModel,
     session: InferenceSession,
     f0_enabled: bool,
-    crepe_session: Optional[InferenceSession],
+    crepe_session: InferenceSession | None,
 ) -> NDArray[np.int16]:
     vc_start_time = time.time()
     input_sound = np.frombuffer(voice_frames, dtype="int16")

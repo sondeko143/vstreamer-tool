@@ -84,10 +84,10 @@ class _FakeOpenJtalk:
 def voicevox_module(monkeypatch):
     core = types.ModuleType("voicevox_core")
     blocking = types.ModuleType("voicevox_core.blocking")
-    blocking.Onnxruntime = _FakeOnnxruntime
-    blocking.OpenJtalk = _FakeOpenJtalk
-    blocking.Synthesizer = _FakeSynthesizer
-    blocking.VoiceModelFile = _FakeVoiceModelFile
+    setattr(blocking, "Onnxruntime", _FakeOnnxruntime)
+    setattr(blocking, "OpenJtalk", _FakeOpenJtalk)
+    setattr(blocking, "Synthesizer", _FakeSynthesizer)
+    setattr(blocking, "VoiceModelFile", _FakeVoiceModelFile)
     monkeypatch.setitem(sys.modules, "voicevox_core", core)
     monkeypatch.setitem(sys.modules, "voicevox_core.blocking", blocking)
     monkeypatch.delitem(sys.modules, "vspeech.lib.voicevox", raising=False)

@@ -6,9 +6,7 @@ from pathlib import Path
 from typing import IO
 from typing import Any
 from typing import Literal
-from typing import Optional
 from typing import TypeAlias
-from typing import Union
 
 import toml
 from pydantic import AliasChoices
@@ -157,13 +155,13 @@ class RecordingConfig(BaseModel):
     )
     gradually_stopping_interval: int = Field(default=3)
     last_interval_frames_buffer_size: int = Field(default=5)
-    input_host_api_name: Optional[str] = Field(
+    input_host_api_name: str | None = Field(
         default=None, description="PortAudio host api name to select an input device"
     )
-    input_device_name: Optional[str] = Field(
+    input_device_name: str | None = Field(
         default=None, description="PortAudio device name to select an input device"
     )
-    input_device_index: Optional[int] = Field(
+    input_device_index: int | None = Field(
         default=None, description="use this device as recording input if supplied"
     )
 
@@ -184,15 +182,15 @@ class TtsConfig(BaseModel):
 class PlaybackConfig(BaseModel):
     enable: bool = False
     volume: int = 100
-    output_host_api_name: Optional[str] = Field(
+    output_host_api_name: str | None = Field(
         default=None,
         description="PortAudio host api name to select an output device",
     )
-    output_device_name: Optional[str] = Field(
+    output_device_name: str | None = Field(
         default=None,
         description="PortAudio device name to select an output device",
     )
-    output_device_index: Optional[int] = Field(
+    output_device_index: int | None = Field(
         default=None,
         description="use this device as voiceroid2 output if supplied",
     )
@@ -290,14 +288,14 @@ class GcpConfig(BaseModel):
 
 class Vr2Config(BaseModel):
     params: VR2Param = Field(default_factory=VR2Param)
-    voice_name: Optional[str] = None
+    voice_name: str | None = None
 
 
 class WhisperConfig(BaseModel):
     model: str = "large-v3"
     no_speech_prob_threshold: float = 0.6
     logprob_threshold: float = -1.0
-    gpu_id: Optional[int] = None
+    gpu_id: int | None = None
     gpu_name: str = ""
 
 
@@ -331,14 +329,14 @@ class RvcConfig(BaseModel):
     f0_up_key: int = Field(default=0)
     window: int = Field(default=160)
     quality: RvcQuality = Field(default=RvcQuality.zero)
-    gpu_id: Optional[int] = Field(default=None)
+    gpu_id: int | None = Field(default=None)
     gpu_name: str = Field(default="")
     f0_extractor_type: F0ExtractorType = Field(default=F0ExtractorType.harvest)
     input_boost: float = Field(default=1.0)
     crepe_model_file: Path = Field(default=Path())
 
 
-class CustomTomlEncoder(TomlArraySeparatorEncoder):  # type: ignore
+class CustomTomlEncoder(TomlArraySeparatorEncoder):
     def dump_value(self, v: Any) -> str:
         if isinstance(v, Path):
             v = str(v)
@@ -372,7 +370,7 @@ class Config(BaseSettings):
     )
     filters: list[ReplaceFilter] = []
     log_file: str = "./voice_%%Y_%%m_%%d.log"
-    log_level: Union[int, str] = logging.INFO
+    log_level: int | str = logging.INFO
 
     model_config = SettingsConfigDict(
         env_prefix="vspeech_",
@@ -380,7 +378,7 @@ class Config(BaseSettings):
     )
 
     @staticmethod
-    def is_file_json(file_path: Union[str, Path]):
+    def is_file_json(file_path: str | Path):
         file_name = str(file_path)
         return file_name.endswith(".json")
 

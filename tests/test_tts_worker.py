@@ -44,7 +44,7 @@ class FakeVoicevox:
 def fake_voicevox(monkeypatch):
     FakeVoicevox.instances = []
     module = types.ModuleType("vspeech.lib.voicevox")
-    module.Voicevox = FakeVoicevox
+    setattr(module, "Voicevox", FakeVoicevox)
     monkeypatch.setitem(sys.modules, "vspeech.lib.voicevox", module)
     return FakeVoicevox
 
@@ -131,7 +131,7 @@ async def test_worker_swallows_value_error(monkeypatch):
 
     RaiseOnBad.instances = []
     module = types.ModuleType("vspeech.lib.voicevox")
-    module.Voicevox = RaiseOnBad
+    setattr(module, "Voicevox", RaiseOnBad)
     monkeypatch.setitem(sys.modules, "vspeech.lib.voicevox", module)
 
     cfg = VoicevoxConfig(speaker_id=2)

@@ -3,11 +3,11 @@ from asyncio import Queue
 from asyncio import TaskGroup
 from asyncio import sleep
 from asyncio import timeout
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from functools import partial
 from html import unescape
 from time import time_ns
-from typing import AsyncGenerator
 
 from google.api_core.exceptions import BadRequest
 from google.cloud.exceptions import GoogleCloudError
@@ -113,7 +113,7 @@ async def translation_worker_google(
                 contents=[b.text],
                 source_language_code=b.source_language_code,
                 target_language_code=b.target_language_code,
-                parent=f"projects/{project_id}",  # type: ignore
+                parent=f"projects/{project_id}",
             )
             for b in blocks
         ]

@@ -12,7 +12,7 @@ from vspeech.config import Config
 logger = colorlog.getLogger()
 
 
-class TaskStreamHandler(colorlog.StreamHandler):  # type: ignore
+class TaskStreamHandler(colorlog.StreamHandler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
             task = current_task()

@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import List
 
 from pyvcroid2.pyvcroid2 import Param
 
@@ -11,7 +10,7 @@ class DummySpeaker:
 
 @dataclass
 class DummyTTtsParam:
-    speaker: List[DummySpeaker]
+    speaker: list[DummySpeaker]
     numSpeakers: int
     voiceName: str
 

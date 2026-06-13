@@ -1,7 +1,6 @@
 from codecs import encode
 from dataclasses import dataclass
 from dataclasses import field
-from typing import Optional
 from typing import get_type_hints
 
 from humps import camelize
@@ -36,7 +35,7 @@ class VR2:
         return self.vc_roid2.listVoices()
 
     def text_to_speech(
-        self, text: str, timeout: Optional[float] = None, raw: bool = False
+        self, text: str, timeout: float | None = None, raw: bool = False
     ):
         remove_invalid_shiftjis = encode(text, encoding="shift-jis", errors="ignore")
         remove_invalid = remove_invalid_shiftjis.decode(

@@ -3,12 +3,12 @@ from asyncio import Queue
 from asyncio import TaskGroup
 from asyncio import sleep
 from asyncio import to_thread
+from collections.abc import AsyncGenerator
 from datetime import datetime
 from functools import partial
 from io import BytesIO
 from logging import DEBUG
 from pathlib import Path
-from typing import AsyncGenerator
 from wave import Error as WavError
 from wave import open as wav_open
 
@@ -22,7 +22,6 @@ from grpc.aio import AioRpcError
 from httpx import AsyncClient
 from httpx import HTTPError
 from pydantic import ValidationError
-from torch import device
 
 from vspeech.config import AmiConfig
 from vspeech.config import GcpConfig
@@ -118,7 +117,7 @@ async def transcript_worker_whisper(
                     await out.flush()
                 logger.debug("transcribing...")
                 segments, _ = await to_thread(
-                    model.transcribe,  # type: ignore
+                    model.transcribe,
                     audio="./recorded.wav",
                     language="ja",
                     no_speech_threshold=whisper_config.no_speech_prob_threshold,
@@ -132,6 +131,7 @@ async def transcript_worker_whisper(
                         if segment.no_speech_prob
                         < whisper_config.no_speech_prob_threshold
                         and segment.avg_logprob > whisper_config.logprob_threshold
+                        and segment.temperature is not None
                         and segment.temperature < 1.0
                     ]
                 )
@@ -170,7 +170,7 @@ async def transcript_worker_google(
     gcp_config: GcpConfig,
     in_queue: Queue[WorkerInput],
 ) -> AsyncGenerator[WorkerOutput, None]:
-    credentials = get_credentials(gcp_config)
+    credentials, _ = get_credentials(gcp_config)
     client = SpeechAsyncClient(credentials=credentials)
     logger.info("transcript worker [google] started")
     while True:

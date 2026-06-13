@@ -222,14 +222,16 @@ def test_parse_queries_from_pb():
 
 
 def test_parse_queries_to_pb():
-    p = Params(
-        t="ja",
-        s="en",
-        p="n",
-        i=1,
-        v=100,
-        spd=1.1,
-        pit=-0.05,
+    p = Params.model_validate(
+        {
+            "t": "ja",
+            "s": "en",
+            "p": "n",
+            "i": 1,
+            "v": 100,
+            "spd": 1.1,
+            "pit": -0.05,
+        }
     )
     q = p.to_pb()
     o = OperationRoute(queries=q)

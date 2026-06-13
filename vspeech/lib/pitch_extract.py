@@ -1,7 +1,5 @@
 from pathlib import Path
 from typing import Any
-from typing import Optional
-from typing import Tuple
 from typing import cast
 
 import numpy as np
@@ -28,10 +26,14 @@ def create_crepe_session(model_file: Path, gpu_id: int):
     providers_options: list[dict[str, Any]] = [{}]
     if cuda.is_available():
         providers.insert(0, "CUDAExecutionProvider")
-        providers_options.insert(0, {"device_id": gpu_id,
-                                         "cudnn_conv_algo_search": "HEURISTIC",
+        providers_options.insert(
+            0,
+            {
+                "device_id": gpu_id,
+                "cudnn_conv_algo_search": "HEURISTIC",
                 "arena_extend_strategy": "kNextPowerOfTwo",
-        })
+            },
+        )
     return InferenceSession(
         str(model_file.expanduser()),
         sess_options=sess_options,
@@ -114,9 +116,9 @@ def pitch_extract(
     sr: int,
     window: int,
     f0_extractor: F0ExtractorType,
-    crepe_session: Optional[InferenceSession],
+    crepe_session: InferenceSession | None,
     silence_front: int = 0,
-) -> Tuple[NDArray[Any], NDArray[np.floating[Any]]]:
+) -> tuple[NDArray[Any], NDArray[np.floating[Any]]]:
     start_frame = int(silence_front * sr / window)
     real_silence_front = start_frame * window / sr
 

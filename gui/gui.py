@@ -1,4 +1,5 @@
 import sys
+from collections.abc import Iterable
 from functools import partial
 from logging import Handler
 from logging import LogRecord
@@ -26,11 +27,6 @@ from tkinter import font
 from tkinter import messagebox
 from typing import IO
 from typing import Any
-from typing import Dict
-from typing import Iterable
-from typing import List
-from typing import Optional
-from typing import Union
 from typing import cast
 from typing import get_type_hints
 
@@ -45,11 +41,11 @@ from ttkbootstrap import Frame
 from ttkbootstrap import Label
 from ttkbootstrap import Menu
 from ttkbootstrap import Notebook
-from ttkbootstrap import ScrolledText as ttkScrolledText
 from ttkbootstrap import Spinbox as ttkSpinbox
 from ttkbootstrap import Text
 from ttkbootstrap import Window
 from ttkbootstrap.themes.standard import STANDARD_THEMES
+from ttkbootstrap.widgets.scrolled import ScrolledText as ttkScrolledText
 from vstreamer_protos.commander.commander_pb2 import PAUSE
 from vstreamer_protos.commander.commander_pb2 import PING
 from vstreamer_protos.commander.commander_pb2 import RELOAD
@@ -86,7 +82,7 @@ except ModuleNotFoundError:
 
 
 class ScrolledText(ttkScrolledText):
-    def select_range(self, start: Union[str, int], end: Union[str, int]):
+    def select_range(self, start: str | int, end: str | int):
         start_index = start
         if isinstance(start, int) or start.isnumeric():
             start_index = str(1.0 + float(start))
@@ -98,7 +94,7 @@ class ScrolledText(ttkScrolledText):
         self.see(INSERT)
         return "break"
 
-    def icursor(self, pos: Union[str, int]):
+    def icursor(self, pos: str | int):
         pos_index = pos
         if isinstance(pos, int) or pos.isnumeric():
             pos_index = str(1.0 + float(pos))
@@ -109,7 +105,7 @@ class TextHandler(Handler):
     # This class allows you to log to a Tkinter Text or ScrolledText widget
     # Adapted from Moshe Kaplan: https://gist.github.com/moshekaplan/c425f861de7bbf28ef06
 
-    def __init__(self, text: Text):
+    def __init__(self, text: "Text | ScrolledText"):
         # run the regular Handler __init__
         Handler.__init__(self)
         # Store a reference to the Text it will log to
@@ -193,16 +189,16 @@ class CommaSeparatedTextbox(Entry):
             self.var.set(value)
 
 
-Widgets = Union[
-    AutocompleteCombobox[Any], Spinbox, Checkbutton, Textbox, CommaSeparatedTextbox
-]
+Widgets = (
+    AutocompleteCombobox[Any] | Spinbox | Checkbutton | Textbox | CommaSeparatedTextbox
+)
 
 
 class VspeechGUI(Frame):
     master: Tk
     config: Config
-    config_entry_map: Dict[Widgets, str]
-    thread: Optional[Popen[bytes]]
+    config_entry_map: dict[Widgets, str]
+    thread: Popen[bytes] | None
     config_file_path: Path
     paused: bool = False
     run_bt: Button
@@ -216,7 +212,7 @@ class VspeechGUI(Frame):
     text_routes_list: Variable
 
     @staticmethod
-    def is_file_json(file_path: Union[str, Path]):
+    def is_file_json(file_path: str | Path):
         file_name = str(file_path)
         return file_name.endswith(".json")
 
@@ -844,7 +840,7 @@ class VspeechGUI(Frame):
                 config_name=f"{prefix}.voice_name",
             ).grid(column=0, row=1, columnspan=max_columns, sticky=EW)
             params = list(get_type_hints(VR2Param).keys())
-            chunked_list: List[List[str]] = list()
+            chunked_list: list[list[str]] = list()
             for i in range(0, len(params), max_columns):
                 chunked_list.append(params[i : i + max_columns])
             dummy_param = create_dummy_param()
@@ -888,7 +884,7 @@ class VspeechGUI(Frame):
             increment=1,
         ).grid(column=0, row=3, sticky=EW)
         params = list(get_type_hints(VoicevoxParam).keys())
-        chunked_list: List[List[str]] = list()
+        chunked_list: list[list[str]] = list()
         for i in range(0, len(params), max_columns):
             chunked_list.append(params[i : i + max_columns])
         for row, params_chunk in enumerate(chunked_list):
@@ -1055,7 +1051,7 @@ class VspeechGUI(Frame):
             )
 
     def add_text_to_template(self, text: Entry):
-        templates: List[str] = list(self.templates.get())  # type: ignore
+        templates: list[str] = list(self.templates.get())
         templates.append(text.get())
         self.templates.set(templates)
         self.config.template_texts.clear()
@@ -1065,7 +1061,7 @@ class VspeechGUI(Frame):
 
     def del_text_from_template(self, listbox: Listbox):
         selected_indices = cast(Iterable[int], listbox.curselection())
-        templates: List[str] = list(self.templates.get())  # type: ignore
+        templates: list[str] = list(self.templates.get())
         for i in selected_indices:
             text = listbox.get(i)
             templates = [template for template in templates if template != text]
@@ -1086,7 +1082,7 @@ class VspeechGUI(Frame):
             )
             logger.warning("%s 無効な値です: %s", value, e)
             return
-        filters: List[str] = list(self.filters.get())  # type: ignore
+        filters: list[str] = list(self.filters.get())
         filters.append(str(rf))
         self.filters.set(filters)
         self.config.filters.clear()
@@ -1106,7 +1102,7 @@ class VspeechGUI(Frame):
 
     def del_filter(self, listbox: Listbox):
         selected_indices = cast(Iterable[int], listbox.curselection())
-        filters: List[str] = list(self.filters.get())  # type: ignore
+        filters: list[str] = list(self.filters.get())
         for i in selected_indices:
             text = listbox.get(i)
             filters = [filter for filter in filters if filter != text]
@@ -1139,7 +1135,7 @@ class VspeechGUI(Frame):
             )
             logger.warning("無効な値です: %s", e)
             return
-        new_routes_list: list[str] = list(routes_list_var.get())  # type: ignore
+        new_routes_list: list[str] = list(routes_list_var.get())
         new_routes_list.append(new_routes_value)
         routes_list_var.set(new_routes_list)
         routes_list_conf.clear()
@@ -1152,7 +1148,7 @@ class VspeechGUI(Frame):
         self, listbox: Listbox, routes_list_var: Variable, routes_list_conf: RoutesList
     ):
         selected_indices = cast(Iterable[int], listbox.curselection())
-        new_routes_list: list[str] = list(routes_list_var.get())  # type: ignore
+        new_routes_list: list[str] = list(routes_list_var.get())
         for i in selected_indices:
             text = listbox.get(i)
             new_routes_list = [routes for routes in new_routes_list if routes != text]
@@ -1172,7 +1168,7 @@ class VspeechGUI(Frame):
     def draw_cb(
         self,
         frame: Frame,
-        candidates: Dict[str, Any],
+        candidates: dict[str, Any],
         config_name: str,
     ) -> Frame:
         inner_frame = Frame(frame)
@@ -1328,7 +1324,7 @@ class VspeechGUI(Frame):
             except grpc.RpcError:
                 sleep(0.5)
 
-    def send_text(self, text: Text):
+    def send_text(self, text: "Text | ScrolledText"):
         if self.thread:
             lines = text.get("1.0", "end-1c").splitlines()
             for line in lines:

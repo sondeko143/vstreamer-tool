@@ -5,8 +5,6 @@ from asyncio import get_event_loop
 from traceback import format_exception
 from typing import IO
 from typing import Any
-from typing import List
-from typing import Optional
 
 import click
 
@@ -19,7 +17,7 @@ from vspeech.worker.receiver import create_receiver_task
 from vspeech.worker.sender import create_sender_task
 
 
-async def cancel_tasks(tasks: List[Task[Any]]):
+async def cancel_tasks(tasks: list[Task[Any]]):
     task_name = ", ".join([task.get_name() for task in tasks if task.done()])
     logger.warning(f"{task_name} error")
     for task in tasks:
@@ -79,7 +77,7 @@ async def vspeech_coro(config: Config):
     "config_file",
     type=click.File("rb"),
 )
-def cmd(config_file: Optional[IO[bytes]]):
+def cmd(config_file: IO[bytes] | None):
     if config_file:
         config = Config.read_config_from_file(config_file)
         config_file.close()

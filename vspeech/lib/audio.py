@@ -1,6 +1,3 @@
-from typing import Dict
-from typing import Optional
-
 from humps import camelize
 from pyaudio import PyAudio
 from pyaudio import paFloat32
@@ -33,7 +30,7 @@ class DeviceInfo(BaseModel):
 
 def list_all_devices(input: bool = False, output: bool = False):
     p = PyAudio()
-    results: Dict[str, int] = {}
+    results: dict[str, int] = {}
     for i in range(p.get_device_count()):
         d = DeviceInfo.model_validate(p.get_device_info_by_index(i))
         if input and d.max_input_channels <= 0:
@@ -63,8 +60,8 @@ def search_host_api_by_type(p: PyAudio, name: str):
 
 def search_device_by_name(
     p: PyAudio,
-    name: Optional[str],
-    host_api_index: Optional[int],
+    name: str | None,
+    host_api_index: int | None,
     input: bool = False,
     output: bool = False,
 ):
@@ -88,8 +85,8 @@ def search_device_by_name(
 
 def search_device(
     p: PyAudio,
-    host_api_type: Optional[str],
-    name: Optional[str],
+    host_api_type: str | None,
+    name: str | None,
     input: bool = False,
     output: bool = False,
 ):

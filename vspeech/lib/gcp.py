@@ -28,11 +28,11 @@ def get_credentials(config: GcpConfig) -> tuple[Credentials | CeCredentials, str
     if config.service_account_file_path:
         file_path = config.service_account_file_path.expanduser()
         cred = Credentials.from_service_account_file(file_path)
-        return cred, cred.project_id  # type: ignore
+        return cred, cred.project_id
     elif config.service_account_info:
         decoded = unescape_private_key(config.service_account_info)
         cred = Credentials.from_service_account_info(decoded)
-        return cred, cred.project_id  # type: ignore
+        return cred, cred.project_id
     elif config.use_ce_credentials:
         cred = CeCredentials()
         return cred, ""

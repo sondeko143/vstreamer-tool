@@ -1,6 +1,4 @@
 import re
-from typing import List
-from typing import Optional
 
 from vspeech.config import Config
 from vspeech.config import ReplaceFilter
@@ -13,7 +11,7 @@ from vspeech.shared_context import WorkerOutput
 from vspeech.shared_context import is_text_event
 
 
-def text_filter(filters: List[ReplaceFilter], text: Optional[str]):
+def text_filter(filters: list[ReplaceFilter], text: str | None):
     if not text:
         return ""
     replaced_text = f"{text}"
@@ -24,7 +22,7 @@ def text_filter(filters: List[ReplaceFilter], text: Optional[str]):
     return replaced_text
 
 
-def transform_content(command: WorkerInput, filters: List[ReplaceFilter]):
+def transform_content(command: WorkerInput, filters: list[ReplaceFilter]):
     if is_text_event(command.current_event.event):
         command.text = text_filter(filters=filters, text=command.text)
 

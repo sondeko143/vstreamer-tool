@@ -6,11 +6,11 @@ from asyncio import Queue
 from asyncio import TaskGroup
 from asyncio import to_thread
 from audioop import mul
+from collections.abc import Generator
 from functools import partial
 from math import floor
 from math import sqrt
 from typing import Any
-from typing import Generator
 
 from vspeech.config import EventType
 from vspeech.config import F0ExtractorType
