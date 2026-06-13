@@ -216,7 +216,7 @@ def change_voice(
     hubert_model: HubertModel,
     session: InferenceSession,
     f0_enabled: bool,
-    crepe_session: InferenceSession | None,
+    rmvpe_session: InferenceSession | None,
 ) -> NDArray[np.int16]:
     vc_start_time = time.time()
     input_sound = np.frombuffer(voice_frames, dtype="int16")
@@ -277,7 +277,7 @@ def change_voice(
             16000,
             rvc_config.window,
             f0_extractor=rvc_config.f0_extractor_type,
-            crepe_session=crepe_session,
+            rmvpe_session=rmvpe_session,
             silence_front=0,
         )
         pitch = pitch[:p_len]

@@ -19,7 +19,10 @@ class PitchExtractor:
     pass
 
 
-def create_crepe_session(model_file: Path, gpu_id: int):
+RMVPE_THRESHOLD = 0.3
+
+
+def create_rmvpe_session(model_file: Path, gpu_id: int):
     sess_options = SessionOptions()
     sess_options.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
     providers = ["CPUExecutionProvider"]
@@ -80,34 +83,36 @@ def pitch_extract_dio(
     )
 
 
-def pitch_extract_crepe(
+def pitch_extract_rmvpe(
     audio: Tensor,
-    f0_max: int,
-    f0_min: int,
-    sr: int,
     session: InferenceSession,
-    precision: float = 10.0,
-):
-    from vspeech.lib import onnxcrepe
+    threshold: float = RMVPE_THRESHOLD,
+) -> NDArray[np.double]:
+    """Extract f0 with an rmvpe.onnx model (VCClient-style export).
 
-    audio_num = audio.detach().cpu().numpy()
-    onnx_f0, onnx_pd = onnxcrepe.predict(
-        session,
-        audio_num,
-        sr,
-        precision=precision,
-        fmin=f0_min,
-        fmax=f0_max,
-        batch_size=256,
-        return_periodicity=True,
-        decoder=onnxcrepe.decode.weighted_argmax,
+    The ONNX graph bundles mel extraction, the E2E network, and threshold-based
+    voicing/decoding, so it consumes the raw 16kHz mono waveform (batched as
+    ``(1, N)``) plus a voicing ``threshold`` and emits f0 in Hz with unvoiced
+    frames zeroed as its first output.
+
+    The f0 output name differs across exports (``f0`` for the yxlllc/RMVPE
+    ``export.py``, ``pitchf`` for the w-okada re-export), so we request all
+    outputs and read index 0 instead of hard-coding a name. The yxlllc export's
+    second ``uv`` output is unused — index 0 is already threshold-masked.
+    """
+    audio_num = audio.detach().cpu().numpy().astype(np.float32)
+    audio_num = np.expand_dims(audio_num, axis=0)
+    onnx_f0 = cast(
+        NDArray[np.float32],
+        session.run(
+            None,
+            {
+                "waveform": audio_num,
+                "threshold": np.array([threshold], dtype=np.float32),
+            },
+        )[0],
     )
-
-    f0 = onnxcrepe.filter.median(onnx_f0, 3)
-    pd = onnxcrepe.filter.median(onnx_pd, 3)
-
-    f0[pd < 0.1] = 0
-    return cast(NDArray[np.double], f0.squeeze())
+    return cast(NDArray[np.double], onnx_f0.squeeze())
 
 
 def pitch_extract(
@@ -116,7 +121,7 @@ def pitch_extract(
     sr: int,
     window: int,
     f0_extractor: F0ExtractorType,
-    crepe_session: InferenceSession | None,
+    rmvpe_session: InferenceSession | None,
     silence_front: int = 0,
 ) -> tuple[NDArray[Any], NDArray[np.floating[Any]]]:
     start_frame = int(silence_front * sr / window)
@@ -138,12 +143,10 @@ def pitch_extract(
         f0 = pitch_extract_harvest(
             audio=audio.detach().cpu().numpy(), f0_max=f0_max, sr=sr
         )
-    elif f0_extractor == F0ExtractorType.crepe:
-        if not crepe_session:
-            raise ValueError("Crepe onnx session is not provided.")
-        f0 = pitch_extract_crepe(
-            audio, f0_max=f0_max, f0_min=f0_min, sr=sr, session=crepe_session
-        )
+    elif f0_extractor == F0ExtractorType.rmvpe:
+        if not rmvpe_session:
+            raise ValueError("RMVPE onnx session is not provided.")
+        f0 = pitch_extract_rmvpe(audio, session=rmvpe_session)
 
     else:
         raise ValueError("unknown f0 extractor type")

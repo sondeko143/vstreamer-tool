@@ -54,7 +54,7 @@ async def rvc_worker(
     in_queue: Queue[WorkerInput],
 ):
     from vspeech.lib.cuda_util import get_device
-    from vspeech.lib.pitch_extract import create_crepe_session
+    from vspeech.lib.pitch_extract import create_rmvpe_session
     from vspeech.lib.rvc import change_voice
     from vspeech.lib.rvc import create_session
     from vspeech.lib.rvc import half_precision_available
@@ -70,10 +70,10 @@ async def rvc_worker(
     )
     session = create_session(rvc_config.model_file, gpu_id=device.index)
     check_cuda_provider(session.get_providers())
-    if rvc_config.f0_extractor_type == F0ExtractorType.crepe:
-        crepe_session = create_crepe_session(rvc_config.crepe_model_file, device.index)
+    if rvc_config.f0_extractor_type == F0ExtractorType.rmvpe:
+        rmvpe_session = create_rmvpe_session(rvc_config.rmvpe_model_file, device.index)
     else:
-        crepe_session = None
+        rmvpe_session = None
     modelmeta: Any = session.get_modelmeta()
     metadata: dict[str, Any] = json.loads(modelmeta.custom_metadata_map["metadata"])
     target_sample_rate = metadata["samplingRate"]
@@ -95,7 +95,7 @@ async def rvc_worker(
             hubert_model=hubert_model,
             session=session,
             f0_enabled=f0_enabled,
-            crepe_session=crepe_session,
+            rmvpe_session=rmvpe_session,
         )
         logger.info("vc worker warmed up")
     except Exception as e:
@@ -144,7 +144,7 @@ async def rvc_worker(
                 hubert_model=hubert_model,
                 session=session,
                 f0_enabled=f0_enabled,
-                crepe_session=crepe_session,
+                rmvpe_session=rmvpe_session,
             )
             worker_output = WorkerOutput.from_input(speech)
             if vc_config.adjust_output_vol_to_input_voice and input_vols:

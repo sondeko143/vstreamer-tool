@@ -112,7 +112,10 @@ f0_up_key = 12
 window = 160
 quality = 0
 gpu_id = 0
+# f0 抽出器: "dio" / "harvest" / "rmvpe"
 f0_extractor_type = "harvest"
+# f0_extractor_type = "rmvpe" のとき必要な rmvpe.onnx のパス
+# rmvpe_model_file = "./rmvpe.onnx"
 
 [subtitle.text]
 display_sec_per_letter = 0.4
