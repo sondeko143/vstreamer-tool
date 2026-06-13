@@ -11,10 +11,14 @@ from typing import TypeAlias
 from typing import Union
 
 import toml
+from pydantic import AliasChoices
 from pydantic import BaseModel
-from pydantic import BaseSettings
+from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import SecretStr
+from pydantic import field_serializer
+from pydantic_settings import BaseSettings
+from pydantic_settings import SettingsConfigDict
 from toml.encoder import TomlArraySeparatorEncoder
 
 from vspeech.exceptions import ReplaceFilterParseError
@@ -139,22 +143,16 @@ class RecordingConfig(BaseModel):
     enable: bool = False
     routes_list: RoutesList = Field(default_factory=lambda: [["transcription"]])
     format: SampleFormat = SampleFormat.INT16
-    channels: int = Field(
-        default=1, cli=("-c", "--channels"), description="recording channels"
-    )
+    channels: int = Field(default=1, description="recording channels")
     rate: int = Field(default=16000, description="recording rate")
     chunk: int = Field(default=1024, description="recording block size")
-    interval_sec: float = Field(
-        default=0.1, cli=("-s", "--interval_sec"), description="recording interval sec."
-    )
+    interval_sec: float = Field(default=0.1, description="recording interval sec.")
     silence_threshold: int = Field(
         default=-40,
-        cli=("-t", "--silence_threshold"),
         description="voice detection volume percentage (approx)",
     )
     max_recording_sec: float = Field(
         default=5,
-        cli=("-m", "--max_recording_sec"),
         description="max wav file length to process",
     )
     gradually_stopping_interval: int = Field(default=3)
@@ -260,6 +258,10 @@ class AmiConfig(BaseModel):
     request_timeout: float = 3.0
     extra_parameters: str = "keepFillerToken=1"
 
+    @field_serializer("appkey", when_used="json")
+    def serialize_appkey(self, v: SecretStr) -> str:
+        return v.get_secret_value()
+
 
 ServiceAccountInfo: TypeAlias = dict[str, SecretStr]
 
@@ -281,6 +283,10 @@ class GcpConfig(BaseModel):
     max_retry_count: int = 5
     retry_delay_sec: float = 0.5
 
+    @field_serializer("service_account_info", when_used="json")
+    def serialize_service_account_info(self, v: ServiceAccountInfo) -> dict[str, str]:
+        return {k: secret.get_secret_value() for k, secret in v.items()}
+
 
 class Vr2Config(BaseModel):
     params: VR2Param = Field(default_factory=VR2Param)
@@ -296,6 +302,7 @@ class WhisperConfig(BaseModel):
 
 
 class VoicevoxConfig(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
     speaker_id: int = 1
     params: VoicevoxParam = Field(default_factory=VoicevoxParam)
     openjtalk_dir: Path = Path("./voicevox/dict/open_jtalk_dic_utf_8-1.11")
@@ -318,6 +325,7 @@ class F0ExtractorType(Enum):
 
 
 class RvcConfig(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
     model_file: Path = Field(default=Path())
     hubert_model_file: Path = Field(default=Path())
     f0_up_key: int = Field(default=0)
@@ -355,7 +363,9 @@ class Config(BaseSettings):
     rvc: RvcConfig = Field(default_factory=RvcConfig)
 
     listen_address: str = "[::]"
-    listen_port: int = Field(default=8080, env="PORT")
+    listen_port: int = Field(
+        default=8080, validation_alias=AliasChoices("listen_port", "PORT")
+    )
     template_texts: list[str] = Field(default_factory=lambda: [""])
     text_send_operations: RoutesList = Field(
         default_factory=lambda: [["tts", "playback"]]
@@ -364,17 +374,10 @@ class Config(BaseSettings):
     log_file: str = "./voice_%%Y_%%m_%%d.log"
     log_level: Union[int, str] = logging.INFO
 
-    class Config(BaseSettings.Config):
-        env_prefix = "vspeech_"
-        env_nested_delimiter = "__"
-
-        @staticmethod
-        def encode_secret(v: SecretStr):
-            return v.get_secret_value()
-
-        json_encoders = {
-            SecretStr: encode_secret,
-        }
+    model_config = SettingsConfigDict(
+        env_prefix="vspeech_",
+        env_nested_delimiter="__",
+    )
 
     @staticmethod
     def is_file_json(file_path: Union[str, Path]):
@@ -388,10 +391,10 @@ class Config(BaseSettings):
             config_obj = json.loads(file.read())
         else:
             config_obj = toml.loads(file.read().decode("utf-8"))
-        return Config.parse_obj(config_obj)
+        return Config.model_validate(config_obj)
 
     def export_to_toml(self):
-        encoded = self.dict()
+        encoded = self.model_dump()
         conf_dict = {
             **encoded,
             "ami": {**encoded["ami"], "appkey": self.ami.appkey.get_secret_value()},
