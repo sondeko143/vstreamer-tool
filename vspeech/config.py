@@ -299,7 +299,7 @@ class VoicevoxConfig(BaseModel):
     speaker_id: int = 1
     params: VoicevoxParam = Field(default_factory=VoicevoxParam)
     openjtalk_dir: Path = Path("./voicevox/dict/open_jtalk_dic_utf_8-1.11")
-    model_dir: Path = Field(default=Path("./voicevox/models/vvms"))
+    model_dir: Path = Path("./voicevox/models/vvms")
     onnxruntime_path: Path | None = Field(
         default=None,
         description="voicevox_onnxruntime ライブラリの実パス (onnxruntime-gpu とは別物)",

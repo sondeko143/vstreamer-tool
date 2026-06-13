@@ -19,5 +19,6 @@ def test_voicevox_config_parse_obj_roundtrip():
         }
     )
     assert cfg.speaker_id == 3
+    assert cfg.openjtalk_dir == Path("d")
     assert cfg.model_dir == Path("m")
     assert cfg.onnxruntime_path == Path("o.dll")
