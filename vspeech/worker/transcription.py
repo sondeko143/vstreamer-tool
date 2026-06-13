@@ -9,6 +9,7 @@ from functools import partial
 from io import BytesIO
 from logging import DEBUG
 from pathlib import Path
+from typing import TYPE_CHECKING
 from wave import Error as WavError
 from wave import open as wav_open
 
@@ -25,6 +26,7 @@ from pydantic import ValidationError
 
 from vspeech.config import AmiConfig
 from vspeech.config import GcpConfig
+from vspeech.config import SampleFormat
 from vspeech.config import TranscriptionConfig
 from vspeech.config import TranscriptionWorkerType
 from vspeech.config import WhisperConfig
@@ -39,6 +41,49 @@ from vspeech.shared_context import SoundInput
 from vspeech.shared_context import SoundOutput
 from vspeech.shared_context import WorkerInput
 from vspeech.shared_context import WorkerOutput
+
+if TYPE_CHECKING:
+    import numpy as np
+
+
+def pcm_to_waveform(sound: SoundInput) -> "np.ndarray":
+    """Decode INT16 PCM bytes into a mono float32 waveform in [-1, 1].
+
+    faster-whisper accepts a float32 ndarray directly, so this lets the
+    transcription worker hand audio to the model without a temporary WAV
+    file on disk.
+    """
+    import numpy as np
+
+    samples = np.frombuffer(sound.data, dtype=np.int16).astype(np.float32) / 32768.0
+    if sound.channels > 1:
+        samples = samples.reshape(-1, sound.channels).mean(axis=1)
+    return samples.astype(np.float32)
+
+
+def join_transcribed_segments(segments: list, whisper_config: WhisperConfig) -> str:
+    """Join the text of segments that clear whisper's confidence thresholds."""
+    return "".join(
+        segment.text
+        for segment in segments
+        if segment.no_speech_prob < whisper_config.no_speech_prob_threshold
+        and segment.avg_logprob > whisper_config.logprob_threshold
+        and segment.temperature is not None
+        and segment.temperature < 1.0
+    )
+
+
+def _run_whisper(model, waveform, whisper_config: WhisperConfig) -> list:
+    """Transcribe and fully materialize segments. Runs in a worker thread so the
+    heavy decode (which happens while iterating the generator) never blocks the
+    event loop."""
+    segments, _ = model.transcribe(
+        waveform,
+        language="ja",
+        no_speech_threshold=whisper_config.no_speech_prob_threshold,
+        log_prob_threshold=whisper_config.logprob_threshold,
+    )
+    return list(segments)
 
 
 async def log_transcribed(log_dir_parent: Path, wav_file: BytesIO, text: str):
@@ -107,53 +152,48 @@ async def transcript_worker_whisper(
         device_index=device.index,
     )
     logger.info("transcript worker [whisper] started")
+    # Warm up: pay the one-off cold-start cost (model graph build / kernel
+    # compilation that happens on the first decode) at startup instead of
+    # penalizing the first real utterance.
+    try:
+        silence = SoundInput(
+            data=b"\x00\x00" * 16000,
+            rate=16000,
+            format=SampleFormat.INT16,
+            channels=1,
+        )
+        await to_thread(_run_whisper, model, pcm_to_waveform(silence), whisper_config)
+        logger.info("transcript worker [whisper] warmed up")
+    except Exception as e:
+        logger.warning("whisper warmup failed: %s", e)
     while True:
         recorded = await in_queue.get()
         try:
-            sample_size = get_sample_size(recorded.sound.format)
-            with wav(recorded.sound, sample_size=sample_size) as wav_file:
-                async with aio_open("./recorded.wav", mode="wb") as out:
-                    await out.write(wav_file.read())
-                    await out.flush()
-                logger.debug("transcribing...")
-                segments, _ = await to_thread(
-                    model.transcribe,
-                    audio="./recorded.wav",
-                    language="ja",
-                    no_speech_threshold=whisper_config.no_speech_prob_threshold,
-                    log_prob_threshold=whisper_config.logprob_threshold,
-                )
-                segments = list(segments)
-                transcribed = "".join(
-                    [
-                        segment.text
-                        for segment in segments
-                        if segment.no_speech_prob
-                        < whisper_config.no_speech_prob_threshold
-                        and segment.avg_logprob > whisper_config.logprob_threshold
-                        and segment.temperature is not None
-                        and segment.temperature < 1.0
-                    ]
-                )
-                if logger.isEnabledFor(DEBUG):
-                    for segment in segments:
-                        logger.debug(
-                            "segment: %s, log: %s, no_speech: %s",
-                            segment.text,
-                            segment.avg_logprob,
-                            segment.no_speech_prob,
-                        )
-                if transcribed:
-                    worker_output = WorkerOutput.from_input(recorded)
-                    worker_output.sound = SoundOutput(
-                        data=recorded.sound.data,
-                        rate=recorded.sound.rate,
-                        format=recorded.sound.format,
-                        channels=recorded.sound.channels,
+            logger.debug("transcribing...")
+            waveform = pcm_to_waveform(recorded.sound)
+            segments = await to_thread(_run_whisper, model, waveform, whisper_config)
+            transcribed = join_transcribed_segments(segments, whisper_config)
+            if logger.isEnabledFor(DEBUG):
+                for segment in segments:
+                    logger.debug(
+                        "segment: %s, log: %s, no_speech: %s",
+                        segment.text,
+                        segment.avg_logprob,
+                        segment.no_speech_prob,
                     )
-                    worker_output.text = transcribed
-                    yield worker_output
-                if config.recording_log:
+            if transcribed:
+                worker_output = WorkerOutput.from_input(recorded)
+                worker_output.sound = SoundOutput(
+                    data=recorded.sound.data,
+                    rate=recorded.sound.rate,
+                    format=recorded.sound.format,
+                    channels=recorded.sound.channels,
+                )
+                worker_output.text = transcribed
+                yield worker_output
+            if config.recording_log:
+                sample_size = get_sample_size(recorded.sound.format)
+                with wav(recorded.sound, sample_size=sample_size) as wav_file:
                     await log_transcribed(
                         config.recording_log_dir,
                         wav_file=wav_file,

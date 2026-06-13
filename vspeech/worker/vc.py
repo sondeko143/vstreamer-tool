@@ -7,6 +7,7 @@ from asyncio import TaskGroup
 from asyncio import to_thread
 from audioop import mul
 from collections.abc import Generator
+from collections.abc import Sequence
 from functools import partial
 from math import floor
 from math import sqrt
@@ -31,6 +32,22 @@ def chunks(data: bytes, chunk_size: int) -> Generator[bytes, bytes, None]:
         yield data[i : i + chunk_size]
 
 
+def check_cuda_provider(providers: Sequence[str]) -> None:
+    """Fail loudly if the RVC onnxruntime session fell back to CPU.
+
+    Without onnxruntime-gpu the CUDAExecutionProvider is silently dropped and
+    every inference raises a cryptic io-binding error while RVC runs unusably
+    slow on CPU. Surface that at startup instead.
+    """
+    if "CUDAExecutionProvider" not in providers:
+        raise RuntimeError(
+            "RVC onnxruntime session has no CUDAExecutionProvider "
+            f"(active providers: {providers}). Install the GPU runtime with "
+            "`uv sync --extra rvc` (onnxruntime-gpu); running RVC on CPU is "
+            "unusably slow."
+        )
+
+
 async def rvc_worker(
     rvc_config: RvcConfig,
     vc_config: VcConfig,
@@ -52,6 +69,7 @@ async def rvc_worker(
         is_half=half_available,
     )
     session = create_session(rvc_config.model_file, gpu_id=device.index)
+    check_cuda_provider(session.get_providers())
     if rvc_config.f0_extractor_type == F0ExtractorType.crepe:
         crepe_session = create_crepe_session(rvc_config.crepe_model_file, device.index)
     else:
@@ -60,6 +78,28 @@ async def rvc_worker(
     metadata: dict[str, Any] = json.loads(modelmeta.custom_metadata_map["metadata"])
     target_sample_rate = metadata["samplingRate"]
     f0_enabled = metadata["f0"]
+    # Warm up: pay the torch.compile (max-autotune) and onnxruntime graph-build
+    # cost at startup. The first real inference would otherwise stall for
+    # seconds (observed up to ~145s) while these compile lazily.
+    try:
+        await to_thread(
+            change_voice,
+            voice_frames=b"\x00\x00" * 16000,
+            voice_sample_rate=16000,
+            rvc_config=rvc_config,
+            half_available=half_available,
+            target_sample_rate=target_sample_rate,
+            device=device,
+            emb_output_layer=metadata.get("embOutputLayer", 9),
+            use_final_proj=metadata.get("useFinalProj", True),
+            hubert_model=hubert_model,
+            session=session,
+            f0_enabled=f0_enabled,
+            crepe_session=crepe_session,
+        )
+        logger.info("vc worker warmed up")
+    except Exception as e:
+        logger.warning("vc warmup failed: %s", e)
     logger.info("vc worker started")
     while True:
         speech = await in_queue.get()
