@@ -285,7 +285,7 @@ class GcpConfig(BaseModel):
 
     @field_serializer("service_account_info", when_used="json")
     def serialize_service_account_info(self, v: ServiceAccountInfo) -> dict[str, str]:
-        return {k: s.get_secret_value() for k, s in v.items()}
+        return {k: secret.get_secret_value() for k, secret in v.items()}
 
 
 class Vr2Config(BaseModel):
