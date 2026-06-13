@@ -104,6 +104,10 @@ build-backend = "uv_build"
 testpaths = ["tests"]
 pythonpath = "."
 asyncio_mode = "auto"
+addopts = "-m 'not voicevox_e2e'"
+markers = [
+    "voicevox_e2e: VOICEVOX 実合成 E2E（実行時資産が必要。通常実行では除外）",
+]
 
 [tool.ty.environment]
 python-version = "3.11"
