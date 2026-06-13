@@ -9,7 +9,7 @@ def test_voicevox_config_new_fields_defaults():
     assert cfg.onnxruntime_path is None
 
 
-def test_voicevox_config_parse_obj_roundtrip():
+def test_voicevox_config_model_validate_roundtrip():
     cfg = VoicevoxConfig.model_validate(
         {
             "speaker_id": 3,
