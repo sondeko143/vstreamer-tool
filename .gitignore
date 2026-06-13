@@ -11,3 +11,5 @@ config*.toml
 *.log
 *.wav
 key.json
+/tests/assets/voicevox/
+/download-voicevox.exe

@@ -874,13 +874,19 @@ class VspeechGUI(Frame):
         self.draw_tb(tab_frame, config_name=f"{prefix}.openjtalk_dir").grid(
             column=0, row=0, columnspan=max_columns, sticky=EW
         )
+        self.draw_tb(tab_frame, config_name=f"{prefix}.model_dir").grid(
+            column=0, row=1, columnspan=max_columns, sticky=EW
+        )
+        self.draw_tb(tab_frame, config_name=f"{prefix}.onnxruntime_path").grid(
+            column=0, row=2, columnspan=max_columns, sticky=EW
+        )
         self.draw_sb(
             frame=tab_frame,
             config_name=f"{prefix}.speaker_id",
             from_=0,
             to=10,
             increment=1,
-        ).grid(column=0, row=1, sticky=EW)
+        ).grid(column=0, row=3, sticky=EW)
         params = list(get_type_hints(VoicevoxParam).keys())
         chunked_list: List[List[str]] = list()
         for i in range(0, len(params), max_columns):
@@ -893,7 +899,7 @@ class VspeechGUI(Frame):
                     from_=-1.0,
                     to=2.0,
                     increment=0.01,
-                ).grid(column=column, row=row + 2, sticky=EW)
+                ).grid(column=column, row=row + 4, sticky=EW)
 
         notebook.add(tab_frame, text="vvox")
 
@@ -1231,7 +1237,7 @@ class VspeechGUI(Frame):
         return inner_frame
 
     def get_display_name(self, config_name: str) -> str:
-        return f'{config_name.split(".")[-1].replace("_", " ").capitalize()}'
+        return f"{config_name.split('.')[-1].replace('_', ' ').capitalize()}"
 
     def get_entry_from_config(self, config_name: str):
         for entry, name in self.config_entry_map.items():
