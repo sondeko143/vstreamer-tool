@@ -377,7 +377,6 @@ class Config(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="vspeech_",
         env_nested_delimiter="__",
-        json_encoders={SecretStr: lambda v: v.get_secret_value()},
     )
 
     @staticmethod
