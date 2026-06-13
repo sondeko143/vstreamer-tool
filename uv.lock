@@ -1641,7 +1641,7 @@ requires-dist = [
     { name = "torch", marker = "sys_platform == 'win32' and extra == 'whisper'", url = "https://download.pytorch.org/whl/cu128/torch-2.7.0%2Bcu128-cp311-cp311-win_amd64.whl" },
     { name = "torchaudio", marker = "sys_platform == 'win32' and extra == 'rvc'", url = "https://download.pytorch.org/whl/cu128/torchaudio-2.7.0%2Bcu128-cp311-cp311-win_amd64.whl" },
     { name = "ttkbootstrap", marker = "extra == 'gui'", specifier = ">=1.10.1,<2" },
-    { name = "voicevox-core", marker = "sys_platform == 'win32' and extra == 'voicevox'", url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cuda-cp38-abi3-win_amd64.whl" },
+    { name = "voicevox-core", marker = "sys_platform == 'win32' and extra == 'voicevox'", url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl" },
     { name = "vstreamer-protos", url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-04910026/vstreamer_protos-0.1.0-py3-none-any.whl" },
 ]
 provides-extras = ["voicevox", "whisper", "rvc", "mozc", "vroid2", "audio", "gui", "crepe"]
@@ -1660,20 +1660,10 @@ dev = [
 
 [[package]]
 name = "voicevox-core"
-version = "0.14.3+cuda"
-source = { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cuda-cp38-abi3-win_amd64.whl" }
-dependencies = [
-    { name = "numpy", marker = "sys_platform == 'win32'" },
-    { name = "pydantic", marker = "sys_platform == 'win32'" },
-]
+version = "0.16.4"
+source = { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl" }
 wheels = [
-    { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cuda-cp38-abi3-win_amd64.whl", hash = "sha256:ba987ea728a5fbbea50430737f042924c506849e6e337f95c99895dfc342082e" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "numpy" },
-    { name = "pydantic", specifier = ">=1.9.2,<2" },
+    { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl", hash = "sha256:16f0f59e6175220162b709b5a24de9c3766e14b54ab71338c2b9484f1a8f1794" },
 ]
 
 [[package]]
