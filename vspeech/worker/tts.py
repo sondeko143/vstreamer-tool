@@ -48,7 +48,11 @@ async def vroid2_worker(vr2_: Any, vr2_config: Vr2Config, in_queue: Queue[Worker
 async def voicevox_worker(vvox_config: VoicevoxConfig, in_queue: Queue[WorkerInput]):
     from vspeech.lib.voicevox import Voicevox
 
-    vvox = Voicevox(vvox_config.openjtalk_dir)
+    vvox = Voicevox(
+        vvox_config.openjtalk_dir,
+        vvox_config.model_dir,
+        vvox_config.onnxruntime_path,
+    )
     loaded_models: list[int] = []
     logger.info("tts worker [voicevox] started")
     while True:
