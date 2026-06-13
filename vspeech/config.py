@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import SecretStr
+from pydantic import field_serializer
 from pydantic_settings import BaseSettings
 from pydantic_settings import SettingsConfigDict
 from toml.encoder import TomlArraySeparatorEncoder
@@ -257,6 +258,10 @@ class AmiConfig(BaseModel):
     request_timeout: float = 3.0
     extra_parameters: str = "keepFillerToken=1"
 
+    @field_serializer("appkey", when_used="json")
+    def serialize_appkey(self, v: SecretStr) -> str:
+        return v.get_secret_value()
+
 
 ServiceAccountInfo: TypeAlias = dict[str, SecretStr]
 
@@ -277,6 +282,10 @@ class GcpConfig(BaseModel):
     request_timeout: float = 3.0
     max_retry_count: int = 5
     retry_delay_sec: float = 0.5
+
+    @field_serializer("service_account_info", when_used="json")
+    def serialize_service_account_info(self, v: ServiceAccountInfo) -> dict[str, str]:
+        return {k: s.get_secret_value() for k, s in v.items()}
 
 
 class Vr2Config(BaseModel):
