@@ -36,7 +36,7 @@ class AmiResponse(BaseModel):
 
 
 def parse_response(res_json: Any, use_mozc: bool):
-    res_body = AmiResponse.parse_obj(res_json)
+    res_body = AmiResponse.model_validate(res_json)
     if use_mozc:
         text = get_transliterated_text(res_body=res_body)
     else:
