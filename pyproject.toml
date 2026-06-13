@@ -1,84 +1,96 @@
-[tool.poetry]
+[project]
 name = "voicerecog"
 version = "0.1.0"
 description = ""
-authors = ["sondeko <sondeko143@gmail.com>"]
+authors = [{ name = "sondeko", email = "sondeko143@gmail.com" }]
+requires-python = ">=3.11,<3.12"
+readme = "README.md"
 license = "MIT"
-readme = ["README.md"]
-repository = "https://github.com/sondeko143/vstreamer-tool"
-packages = [{ include = "vspeech" }]
-
-[tool.poetry.dependencies]
-google-cloud-translate = "^3.11.1"
-python = ">=3.11,<3.12"
-httpx = ">=0.26.0,<0.27.0"
-pydantic = "^1.10.7"
-aiofiles = "^23.1.0"
-pyhumps = "^3.8.0"
-google-cloud-speech = "^2.19.0"
-toml = "^0.10.2"
-click = "^8.1.3"
-vstreamer-protos = { url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-04910026/vstreamer_protos-0.1.0-py3-none-any.whl" }
-voicevox-core = [
-    { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cuda-cp38-abi3-win_amd64.whl", platform = "win32", optional = true },
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
 ]
-faster-whisper = "1.2.1"
-torch = [
-    { url = "https://download.pytorch.org/whl/cu128/torch-2.7.0%2Bcu128-cp311-cp311-win_amd64.whl", platform = "win32", optional = true },
+dependencies = [
+    "google-cloud-translate>=3.11.1,<4",
+    "httpx>=0.26.0,<0.27.0",
+    "pydantic>=1.10.7,<2",
+    "aiofiles>=23.1.0,<24",
+    "pyhumps>=3.8.0,<4",
+    "google-cloud-speech>=2.19.0,<3",
+    "toml>=0.10.2,<0.11",
+    "click>=8.1.3,<9",
+    "vstreamer-protos",
+    "colorlog>=6.7.0,<7",
+    "emoji>=2.6.0,<3",
+    "ctranslate2>=4.6.1,<5",
 ]
-fairseq = { url = "https://github.com/sondeko143/fairseq-311/releases/download/v0.12.2.post1/fairseq-0.12.2.post1-cp311-cp311-win_amd64.whl", optional = true }
-pyworld = { version = "^0.3.3", optional = true }
-faiss-cpu = [{ version = "^1.7.2", platform = "win32", optional = true }]
-onnxruntime-gpu = "^1.24.4"
-torchaudio = [
-    { url = "https://download.pytorch.org/whl/cu128/torchaudio-2.7.0%2Bcu128-cp311-cp311-win_amd64.whl", platform = "win32", optional = true },
+
+[project.optional-dependencies]
+voicevox = ["voicevox-core ; sys_platform == 'win32'"]
+whisper = [
+    "faster-whisper==1.2.1",
+    "torch ; sys_platform == 'win32'",
 ]
-numpy = { version = ">=1.18,<1.24", optional = true }
-scipy = { version = "^1.10.1", optional = true }
-mozcpy = { version = "^0.1.1", optional = true }
-pyvcroid2 = { git = "https://github.com/Nkyoku/pyvcroid2", platform = "win32", optional = true }
-PyAudio = { version = "^0.2.13", optional = true }
-ttkbootstrap = { version = "^1.10.1", optional = true }
-pillow = { version = "^12.1.1", optional = true }
-colorlog = "^6.7.0"
-emoji = "^2.6.0"
-librosa = { version = "^0.10.1", optional = true }
-ctranslate2 = "^4.6.1"
-
-[tool.poetry.group.dev.dependencies]
-pytest = "^7.3.1"
-docutils = "^0.19"
-pytest-cov = "^4.0.0"
-pytest-grpc = "^0.8.0"
-pytest-asyncio = "^0.21.0"
-pytest-httpx = "*"
-
-
-[tool.poetry.extras]
-voicevox = ["voicevox-core"]
-whisper = ["faster-whisper", "torch"]
 rvc = [
-    "torch",
-    "fairseq",
-    "pyworld",
-    "faiss-cpu",
-    "onnxruntime-gpu",
-    "torchaudio",
-    "numpy",
-    "scipy",
+    "torch ; sys_platform == 'win32'",
+    "fairseq ; sys_platform == 'win32'",
+    "pyworld>=0.3.3,<0.4",
+    "faiss-cpu>=1.7.2,<2 ; sys_platform == 'win32'",
+    "onnxruntime-gpu>=1.24.4,<2",
+    "torchaudio ; sys_platform == 'win32'",
+    "numpy>=1.18,<1.24",
+    "scipy>=1.10.1,<2",
 ]
-mozc = ["mozcpy"]
-vroid2 = ["pyvcroid2"]
-audio = ["PyAudio"]
-gui = ["ttkbootstrap", "pillow"]
-crepe = ["librosa"]
+mozc = ["mozcpy>=0.1.1,<0.2"]
+vroid2 = ["pyvcroid2 ; sys_platform == 'win32'"]
+audio = ["PyAudio>=0.2.13,<0.3"]
+gui = [
+    "ttkbootstrap>=1.10.1,<2",
+    "pillow>=12.1.1,<13",
+]
+crepe = ["librosa>=0.10.1,<0.11"]
 
-[tool.poetry.scripts]
+[project.urls]
+Repository = "https://github.com/sondeko143/vstreamer-tool"
+
+[project.scripts]
 vspeech = "vspeech.main:cmd"
 
+[dependency-groups]
+dev = [
+    "pytest>=7.3.1,<8",
+    "docutils>=0.19,<0.20",
+    "pytest-cov>=4.0.0,<5",
+    "pytest-grpc>=0.8.0,<0.9",
+    "pytest-asyncio>=0.21.0,<0.22",
+    "pytest-httpx",
+]
+
+[tool.uv]
+default-groups = "all"
+# voicevox-core / torch / torchaudio / fairseq / pyvcroid2 are Windows-only wheels,
+# and onnxruntime-gpu has no macOS wheel. Restrict resolution to the platforms this
+# project actually targets (Windows for dev, Linux for the Docker image).
+environments = [
+    "sys_platform == 'win32'",
+    "sys_platform == 'linux'",
+]
+
+[tool.uv.sources]
+vstreamer-protos = { url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-04910026/vstreamer_protos-0.1.0-py3-none-any.whl" }
+voicevox-core = { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.14.3/voicevox_core-0.14.3+cuda-cp38-abi3-win_amd64.whl" }
+torch = { url = "https://download.pytorch.org/whl/cu128/torch-2.7.0%2Bcu128-cp311-cp311-win_amd64.whl" }
+torchaudio = { url = "https://download.pytorch.org/whl/cu128/torchaudio-2.7.0%2Bcu128-cp311-cp311-win_amd64.whl" }
+fairseq = { url = "https://github.com/sondeko143/fairseq-311/releases/download/v0.12.2.post1/fairseq-0.12.2.post1-cp311-cp311-win_amd64.whl" }
+pyvcroid2 = { git = "https://github.com/Nkyoku/pyvcroid2" }
+
+[tool.uv.build-backend]
+module-name = ["vspeech"]
+module-root = ""
+
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["uv_build>=0.11.20,<0.12.0"]
+build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
