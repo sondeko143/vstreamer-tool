@@ -35,7 +35,7 @@ class _FakeModel:
     def __enter__(self):
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *_exc):
         return False
 
 
@@ -50,7 +50,7 @@ class _FakeVoiceModelFile:
 
 
 class _FakeSynthesizer:
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *_args, **_kwargs):
         self.loaded = []
         self.last_audio_query = None
         self.last_synth_style_id = None
@@ -71,12 +71,12 @@ class _FakeSynthesizer:
 
 class _FakeOnnxruntime:
     @staticmethod
-    def load_once(*args, **kwargs):
+    def load_once(*_args, **_kwargs):
         return object()
 
 
 class _FakeOpenJtalk:
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *_args, **_kwargs):
         pass
 
 
