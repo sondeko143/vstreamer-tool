@@ -30,6 +30,7 @@ voicevox = ["voicevox-core ; sys_platform == 'win32'"]
 whisper = [
     "faster-whisper==1.2.1",
     "torch ; sys_platform == 'win32'",
+    "onnxruntime-gpu>=1.24.4,<2",
 ]
 rvc = [
     "torch ; sys_platform == 'win32'",
@@ -75,6 +76,11 @@ environments = [
     "sys_platform == 'win32'",
     "sys_platform == 'linux'",
 ]
+# faster-whisper depends on the CPU `onnxruntime`, which shares the same `onnxruntime`
+# module with `onnxruntime-gpu` and clobbers its CUDA-enabled binary when both are
+# installed. Drop the CPU build entirely; `onnxruntime-gpu` (in the whisper/rvc extras)
+# provides the `onnxruntime` module that faster-whisper imports.
+override-dependencies = ["onnxruntime ; sys_platform == 'never'"]
 
 [tool.uv.sources]
 vstreamer-protos = { url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-04910026/vstreamer_protos-0.1.0-py3-none-any.whl" }
