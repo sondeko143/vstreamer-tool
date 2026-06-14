@@ -1,5 +1,7 @@
 from asyncio import CancelledError
 from asyncio import Queue
+from asyncio import QueueEmpty
+from asyncio import QueueFull
 from asyncio import TaskGroup
 from typing import cast
 from urllib.parse import urlparse
@@ -12,6 +14,7 @@ from grpc import composite_channel_credentials
 from grpc import metadata_call_credentials
 from grpc import ssl_channel_credentials
 from grpc.aio import AioRpcError
+from grpc.aio import Channel
 from grpc.aio import insecure_channel
 from grpc.aio import secure_channel
 from vstreamer_protos.commander.commander_pb2 import SUBTITLE
@@ -61,6 +64,33 @@ def get_channel(address: str, credentials: GcpIDTokenCredentials | None):
                 "Could not obtain credentials, so transport with insecure channel."
             )
         return insecure_channel(address.strip("/"))
+
+
+REMOTE_QUEUE_MAXSIZE = 16
+
+
+class RemoteSender:
+    def __init__(
+        self,
+        remote: str,
+        credentials: GcpIDTokenCredentials | None,
+        maxsize: int = REMOTE_QUEUE_MAXSIZE,
+    ):
+        self.remote = remote
+        self.credentials = credentials
+        self.queue: Queue[Command] = Queue(maxsize=maxsize)
+        self.channel: Channel | None = None
+
+    def enqueue(self, command: Command):
+        try:
+            self.queue.put_nowait(command)
+        except QueueFull:
+            try:
+                self.queue.get_nowait()  # 最古を破棄
+                logger.warning("drop oldest command for %s (queue full)", self.remote)
+            except QueueEmpty:
+                pass
+            self.queue.put_nowait(command)
 
 
 async def send_command(
