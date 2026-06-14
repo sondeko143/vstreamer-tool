@@ -99,3 +99,34 @@ def test_enqueue_preserves_fifo_order():
     rs.enqueue(make_command(data=b"2"))
     assert rs.queue.get_nowait().operand.sound.data == b"1"
     assert rs.queue.get_nowait().operand.sound.data == b"2"
+
+
+async def _ok(channel, command):
+    return Response(result=True)
+
+
+async def test_send_reuses_channel(monkeypatch):
+    state = fake_transport(monkeypatch, _ok)
+    rs = RemoteSender(remote="//r", credentials=None)
+    await rs._send(make_command())
+    await rs._send(make_command())
+    assert len(state["channels"]) == 1  # チャネルは1回だけ生成
+    assert len(state["commands"]) == 2  # 送信は2回
+
+
+async def test_send_trims_sound_for_subtitle(monkeypatch):
+    state = fake_transport(monkeypatch, _ok)
+    rs = RemoteSender(remote="//r", credentials=None)
+    await rs._send(make_command(op=SUBTITLE, data=b"loud"))
+    assert state["commands"][0][1].operand.sound.data == b""
+
+
+async def test_send_swallows_errors_and_continues(monkeypatch):
+    async def boom(channel, command):
+        raise ValueError("boom")
+
+    state = fake_transport(monkeypatch, boom)
+    rs = RemoteSender(remote="//r", credentials=None)
+    await rs._send(make_command())  # 例外を外に漏らさない
+    await rs._send(make_command())
+    assert len(state["commands"]) == 2  # 2回とも試行された

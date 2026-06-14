@@ -92,6 +92,27 @@ class RemoteSender:
                 pass
             self.queue.put_nowait(command)
 
+    async def _send(self, command: Command):
+        try:
+            if self.channel is None:
+                self.channel = get_channel(self.remote, self.credentials)
+            stub = CommanderStub(self.channel)
+            logger.info(
+                "send: s(%s), t(%s), to %s",
+                len(command.operand.sound.data),
+                command.operand.text,
+                self.remote,
+            )
+            if command.chains[0].operations[0].operation == SUBTITLE:
+                command.operand.sound.data = b""
+            logger.debug("send: chains(%s)", command.chains)
+            res = cast(Response, await stub.process_command(command))
+            logger.info("success response: %s", str(res))
+        except (RefreshError, MutualTLSChannelError, AioRpcError) as e:
+            logger.warning("%s", e)
+        except Exception as e:  # noqa: BLE001 - 宛先タスクを死なせない
+            logger.warning("send error to %s: %s", self.remote, e)
+
 
 async def send_command(
     credentials: GcpIDTokenCredentials | None,
