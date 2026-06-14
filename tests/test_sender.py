@@ -220,3 +220,29 @@ def test_dispatch_empty_remote_uses_local_process_command():
     wi = worker.in_queue.get_nowait()
     assert wi.current_event == EventType.subtitle
     assert wi.text == "hello"
+
+
+async def test_sender_dispatches_to_remote_end_to_end(monkeypatch):
+    done = asyncio.Event()
+    received: list[tuple[str, Command]] = []
+
+    async def process(channel, command):
+        received.append((channel.remote, command))
+        done.set()
+        return Response(result=True)
+
+    fake_transport(monkeypatch, process)
+    monkeypatch.setattr(sender_mod, "get_id_token_credentials", lambda gcp: None)
+    context = SharedContext(config=Config())
+    in_queue: Queue = Queue()
+    await in_queue.put(
+        make_output([[EventAddress(event=EventType.vc, remote="//localhost:8084")]])
+    )
+    task = asyncio.create_task(sender_mod.sender(context, in_queue))
+    try:
+        await asyncio.wait_for(done.wait(), timeout=2)
+        assert received[0][0] == "//localhost:8084"
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, WorkerShutdown):
+            await task

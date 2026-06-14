@@ -127,29 +127,6 @@ class RemoteSender:
                     logger.debug("channel close error for %s: %s", self.remote, e)
 
 
-async def send_command(
-    credentials: GcpIDTokenCredentials | None,
-    address: str,
-    command: Command,
-):
-    try:
-        async with get_channel(address=address, credentials=credentials) as channel:
-            stub = CommanderStub(channel)
-            logger.info(
-                "send: s(%s), t(%s), to %s",
-                len(command.operand.sound.data),
-                command.operand.text,
-                address,
-            )
-            if command.chains[0].operations[0].operation == SUBTITLE:
-                command.operand.sound.data = b""
-            logger.debug("send: chains(%s)", command.chains)
-            res = cast(Response, await stub.process_command(command))
-            logger.info("success response: %s", str(res))
-    except (RefreshError, MutualTLSChannelError, AioRpcError) as e:
-        logger.warning("%s", e)
-
-
 def _dispatch_output(
     context: SharedContext,
     senders: dict[str, "RemoteSender"],
@@ -179,26 +156,24 @@ async def sender(
     credentials = get_id_token_credentials(context.config.gcp)
     logger.info("sender worker started")
     try:
-        while True:
-            try:
-                worker_output = await in_queue.get()
-                for remote in worker_output.remotes:
-                    if remote:
-                        await send_command(
-                            credentials=credentials,
-                            address=remote,
-                            command=worker_output.to_pb(remote=remote),
-                        )
-                    else:
-                        for worker_input in WorkerInput.from_output(
-                            output=worker_output, remote=remote
-                        ):
-                            process_command(
-                                context=context,
-                                request=worker_input,
-                            )
-            except EventDestinationNotFoundError as e:
-                logger.warning("unsupported event: %s", e)
+        async with TaskGroup() as send_tg:
+            senders: dict[str, RemoteSender] = {}
+
+            def spawn(rs: RemoteSender):
+                send_tg.create_task(rs.run(), name=f"sender:{rs.remote}")
+
+            while True:
+                try:
+                    worker_output = await in_queue.get()
+                    _dispatch_output(
+                        context=context,
+                        senders=senders,
+                        credentials=credentials,
+                        spawn=spawn,
+                        worker_output=worker_output,
+                    )
+                except EventDestinationNotFoundError as e:
+                    logger.warning("unsupported event: %s", e)
     except CancelledError as e:
         raise shutdown_worker(e)
 
