@@ -115,6 +115,12 @@ class RemoteSender:
             logger.warning("send error to %s: %s", self.remote, e)
 
     async def run(self):
+        # Must only ever terminate via CancelledError. This task runs under the
+        # nested TaskGroup in `sender`; any other exception escaping here would
+        # cancel the dispatcher and surface as an ExceptionGroup that bypasses
+        # `sender`'s `except CancelledError`, crashing the process instead of a
+        # graceful WorkerShutdown. `_send` swallows all non-cancellation
+        # Exceptions to uphold this invariant.
         try:
             while True:
                 command = await self.queue.get()
@@ -129,9 +135,9 @@ class RemoteSender:
 
 def _dispatch_output(
     context: SharedContext,
-    senders: dict[str, "RemoteSender"],
+    senders: dict[str, RemoteSender],
     credentials: GcpIDTokenCredentials | None,
-    spawn: Callable[["RemoteSender"], None],
+    spawn: Callable[[RemoteSender], None],
     worker_output: WorkerOutput,
 ):
     for remote in worker_output.remotes:
