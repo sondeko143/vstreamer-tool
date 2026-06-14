@@ -3,6 +3,7 @@ from asyncio import Queue
 from asyncio import QueueEmpty
 from asyncio import QueueFull
 from asyncio import TaskGroup
+from collections.abc import Callable
 from typing import cast
 from urllib.parse import urlparse
 
@@ -147,6 +148,28 @@ async def send_command(
             logger.info("success response: %s", str(res))
     except (RefreshError, MutualTLSChannelError, AioRpcError) as e:
         logger.warning("%s", e)
+
+
+def _dispatch_output(
+    context: SharedContext,
+    senders: dict[str, "RemoteSender"],
+    credentials: GcpIDTokenCredentials | None,
+    spawn: Callable[["RemoteSender"], None],
+    worker_output: WorkerOutput,
+):
+    for remote in worker_output.remotes:
+        if remote:
+            rs = senders.get(remote)
+            if rs is None:
+                rs = RemoteSender(remote=remote, credentials=credentials)
+                spawn(rs)
+                senders[remote] = rs
+            rs.enqueue(worker_output.to_pb(remote=remote))
+        else:
+            for worker_input in WorkerInput.from_output(
+                output=worker_output, remote=remote
+            ):
+                process_command(context=context, request=worker_input)
 
 
 async def sender(

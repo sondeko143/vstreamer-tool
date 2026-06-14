@@ -23,6 +23,7 @@ from vspeech.shared_context import SharedContext
 from vspeech.shared_context import SoundOutput
 from vspeech.shared_context import WorkerOutput
 from vspeech.worker.sender import RemoteSender
+from vspeech.worker.sender import _dispatch_output
 
 
 def make_command(op: Operation = VC, data: bytes = b"abc") -> Command:
@@ -183,3 +184,39 @@ async def test_blocked_remote_does_not_block_others(monkeypatch):
         for t in (ta, tb):
             with contextlib.suppress(asyncio.CancelledError):
                 await t
+
+
+def test_dispatch_routes_each_remote_to_own_sender():
+    context = SharedContext(config=Config())
+    senders: dict[str, RemoteSender] = {}
+    spawned: list[RemoteSender] = []
+    output = make_output(
+        [
+            [EventAddress(event=EventType.subtitle, remote="//windesk:8080")],
+            [
+                EventAddress(event=EventType.vc, remote="//localhost:8084"),
+                EventAddress(event=EventType.playback, remote="//windesk:8083"),
+            ],
+        ]
+    )
+    _dispatch_output(context, senders, None, spawned.append, output)
+    assert set(senders) == {"//windesk:8080", "//localhost:8084"}
+    assert len(spawned) == 2
+    sub_cmd = senders["//windesk:8080"].queue.get_nowait()
+    vc_cmd = senders["//localhost:8084"].queue.get_nowait()
+    assert sub_cmd.chains[0].operations[0].operation == SUBTITLE
+    assert vc_cmd.chains[0].operations[0].operation == VC
+
+
+def test_dispatch_empty_remote_uses_local_process_command():
+    context = SharedContext(config=Config())
+    worker = context.add_worker(event=EventType.subtitle, configs_depends_on=[])
+    senders: dict[str, RemoteSender] = {}
+    output = make_output(
+        [[EventAddress(event=EventType.subtitle)]], sound=False, text="hello"
+    )
+    _dispatch_output(context, senders, None, lambda rs: None, output)
+    assert senders == {}  # リモート送信は発生しない
+    wi = worker.in_queue.get_nowait()
+    assert wi.current_event == EventType.subtitle
+    assert wi.text == "hello"
