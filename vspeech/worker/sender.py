@@ -113,6 +113,18 @@ class RemoteSender:
         except Exception as e:  # noqa: BLE001 - 宛先タスクを死なせない
             logger.warning("send error to %s: %s", self.remote, e)
 
+    async def run(self):
+        try:
+            while True:
+                command = await self.queue.get()
+                await self._send(command)
+        finally:
+            if self.channel is not None:
+                try:
+                    await self.channel.close()
+                except Exception as e:  # noqa: BLE001 - クローズ失敗は無視
+                    logger.debug("channel close error for %s: %s", self.remote, e)
+
 
 async def send_command(
     credentials: GcpIDTokenCredentials | None,

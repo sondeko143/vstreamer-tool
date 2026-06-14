@@ -130,3 +130,56 @@ async def test_send_swallows_errors_and_continues(monkeypatch):
     await rs._send(make_command())  # 例外を外に漏らさない
     await rs._send(make_command())
     assert len(state["commands"]) == 2  # 2回とも試行された
+
+
+async def test_run_processes_commands_in_order(monkeypatch):
+    state = fake_transport(monkeypatch, _ok)
+    rs = RemoteSender(remote="//r", credentials=None)
+    rs.enqueue(make_command(data=b"1"))
+    rs.enqueue(make_command(data=b"2"))
+    task = asyncio.create_task(rs.run())
+    try:
+        for _ in range(200):
+            if len(state["commands"]) >= 2:
+                break
+            await asyncio.sleep(0.005)
+        assert [c.operand.sound.data for _, c in state["commands"]] == [b"1", b"2"]
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
+async def test_blocked_remote_does_not_block_others(monkeypatch):
+    a_started = asyncio.Event()
+    a_finished = asyncio.Event()
+    b_done = asyncio.Event()
+    block = asyncio.Event()
+
+    async def process(channel, command):
+        if channel.remote == "A":
+            a_started.set()
+            await block.wait()  # 永久にブロック
+            a_finished.set()
+        else:
+            b_done.set()
+        return Response(result=True)
+
+    fake_transport(monkeypatch, process)
+    a = RemoteSender(remote="A", credentials=None)
+    b = RemoteSender(remote="B", credentials=None)
+    a.enqueue(make_command())
+    b.enqueue(make_command())
+    ta = asyncio.create_task(a.run())
+    tb = asyncio.create_task(b.run())
+    try:
+        await asyncio.wait_for(b_done.wait(), timeout=2)
+        assert a_started.is_set()
+        assert not a_finished.is_set()  # A はまだ詰まっている
+        assert b_done.is_set()  # それでも B は完了
+    finally:
+        for t in (ta, tb):
+            t.cancel()
+        for t in (ta, tb):
+            with contextlib.suppress(asyncio.CancelledError):
+                await t
