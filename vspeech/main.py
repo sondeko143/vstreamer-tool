@@ -10,6 +10,7 @@ import click
 
 from vspeech.config import Config
 from vspeech.exceptions import WorkerShutdown
+from vspeech.lib.telemetry import telemetry
 from vspeech.logger import configure_logger
 from vspeech.logger import logger
 from vspeech.shared_context import SharedContext
@@ -85,6 +86,9 @@ def cmd(config_file: IO[bytes] | None):
         # from environment variables
         config = Config()
     configure_logger(config)
+    telemetry.configure(
+        enabled=config.telemetry.enable, max_samples=config.telemetry.max_samples
+    )
     loop = get_event_loop()
     try:
         loop.run_until_complete(vspeech_coro(config=config))
