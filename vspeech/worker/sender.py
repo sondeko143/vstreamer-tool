@@ -1,6 +1,9 @@
 from asyncio import CancelledError
 from asyncio import Queue
+from asyncio import QueueEmpty
+from asyncio import QueueFull
 from asyncio import TaskGroup
+from collections.abc import Callable
 from typing import cast
 from urllib.parse import urlparse
 
@@ -12,6 +15,7 @@ from grpc import composite_channel_credentials
 from grpc import metadata_call_credentials
 from grpc import ssl_channel_credentials
 from grpc.aio import AioRpcError
+from grpc.aio import Channel
 from grpc.aio import insecure_channel
 from grpc.aio import secure_channel
 from vstreamer_protos.commander.commander_pb2 import SUBTITLE
@@ -63,27 +67,92 @@ def get_channel(address: str, credentials: GcpIDTokenCredentials | None):
         return insecure_channel(address.strip("/"))
 
 
-async def send_command(
-    credentials: GcpIDTokenCredentials | None,
-    address: str,
-    command: Command,
-):
-    try:
-        async with get_channel(address=address, credentials=credentials) as channel:
-            stub = CommanderStub(channel)
+REMOTE_QUEUE_MAXSIZE = 16
+
+
+class RemoteSender:
+    def __init__(
+        self,
+        remote: str,
+        credentials: GcpIDTokenCredentials | None,
+        maxsize: int = REMOTE_QUEUE_MAXSIZE,
+    ):
+        self.remote = remote
+        self.credentials = credentials
+        self.queue: Queue[Command] = Queue(maxsize=maxsize)
+        self.channel: Channel | None = None
+
+    def enqueue(self, command: Command):
+        try:
+            self.queue.put_nowait(command)
+        except QueueFull:
+            try:
+                self.queue.get_nowait()  # 最古を破棄
+                logger.warning("drop oldest command for %s (queue full)", self.remote)
+            except QueueEmpty:
+                pass
+            self.queue.put_nowait(command)
+
+    async def _send(self, command: Command):
+        try:
+            if self.channel is None:
+                self.channel = get_channel(self.remote, self.credentials)
+            stub = CommanderStub(self.channel)
             logger.info(
                 "send: s(%s), t(%s), to %s",
                 len(command.operand.sound.data),
                 command.operand.text,
-                address,
+                self.remote,
             )
             if command.chains[0].operations[0].operation == SUBTITLE:
                 command.operand.sound.data = b""
             logger.debug("send: chains(%s)", command.chains)
             res = cast(Response, await stub.process_command(command))
             logger.info("success response: %s", str(res))
-    except (RefreshError, MutualTLSChannelError, AioRpcError) as e:
-        logger.warning("%s", e)
+        except (RefreshError, MutualTLSChannelError, AioRpcError) as e:
+            logger.warning("%s", e)
+        except Exception as e:  # noqa: BLE001 - 宛先タスクを死なせない
+            logger.warning("send error to %s: %s", self.remote, e)
+
+    async def run(self):
+        # Must only ever terminate via CancelledError. This task runs under the
+        # nested TaskGroup in `sender`; any other exception escaping here would
+        # cancel the dispatcher and surface as an ExceptionGroup that bypasses
+        # `sender`'s `except CancelledError`, crashing the process instead of a
+        # graceful WorkerShutdown. `_send` swallows all non-cancellation
+        # Exceptions to uphold this invariant.
+        try:
+            while True:
+                command = await self.queue.get()
+                await self._send(command)
+        finally:
+            if self.channel is not None:
+                try:
+                    await self.channel.close()
+                except Exception as e:  # noqa: BLE001 - クローズ失敗は無視
+                    logger.debug("channel close error for %s: %s", self.remote, e)
+
+
+def _dispatch_output(
+    context: SharedContext,
+    senders: dict[str, RemoteSender],
+    credentials: GcpIDTokenCredentials | None,
+    spawn: Callable[[RemoteSender], None],
+    worker_output: WorkerOutput,
+):
+    for remote in worker_output.remotes:
+        if remote:
+            rs = senders.get(remote)
+            if rs is None:
+                rs = RemoteSender(remote=remote, credentials=credentials)
+                spawn(rs)
+                senders[remote] = rs
+            rs.enqueue(worker_output.to_pb(remote=remote))
+        else:
+            for worker_input in WorkerInput.from_output(
+                output=worker_output, remote=remote
+            ):
+                process_command(context=context, request=worker_input)
 
 
 async def sender(
@@ -93,26 +162,24 @@ async def sender(
     credentials = get_id_token_credentials(context.config.gcp)
     logger.info("sender worker started")
     try:
-        while True:
-            try:
-                worker_output = await in_queue.get()
-                for remote in worker_output.remotes:
-                    if remote:
-                        await send_command(
-                            credentials=credentials,
-                            address=remote,
-                            command=worker_output.to_pb(remote=remote),
-                        )
-                    else:
-                        for worker_input in WorkerInput.from_output(
-                            output=worker_output, remote=remote
-                        ):
-                            process_command(
-                                context=context,
-                                request=worker_input,
-                            )
-            except EventDestinationNotFoundError as e:
-                logger.warning("unsupported event: %s", e)
+        async with TaskGroup() as send_tg:
+            senders: dict[str, RemoteSender] = {}
+
+            def spawn(rs: RemoteSender):
+                send_tg.create_task(rs.run(), name=f"sender:{rs.remote}")
+
+            while True:
+                try:
+                    worker_output = await in_queue.get()
+                    _dispatch_output(
+                        context=context,
+                        senders=senders,
+                        credentials=credentials,
+                        spawn=spawn,
+                        worker_output=worker_output,
+                    )
+                except EventDestinationNotFoundError as e:
+                    logger.warning("unsupported event: %s", e)
     except CancelledError as e:
         raise shutdown_worker(e)
 
