@@ -8,8 +8,10 @@ from collections import deque
 from collections.abc import AsyncGenerator
 from collections.abc import Callable
 from math import log
+from time import time
 from typing import Any
 from typing import NoReturn
+from uuid import uuid4
 
 from pyaudio import PyAudio
 
@@ -129,6 +131,19 @@ async def pyaudio_recording_worker(
             audio.terminate()
 
 
+def build_recording_output(config: RecordingConfig, frames: bytes) -> WorkerOutput:
+    worker_output = WorkerOutput.from_routes_list(config.routes_list)
+    worker_output.trace_id = uuid4().hex
+    worker_output.origin_ts = time()
+    worker_output.sound = SoundOutput(
+        data=frames,
+        rate=config.rate,
+        format=config.format,
+        channels=config.channels,
+    )
+    return worker_output
+
+
 async def recording_worker(context: SharedContext, out_queue: Queue[WorkerOutput]):
     try:
         while True:
@@ -140,13 +155,7 @@ async def recording_worker(context: SharedContext, out_queue: Queue[WorkerOutput
                 if not context.running.is_set():
                     logger.info("recording have been paused")
                     break
-                worker_output = WorkerOutput.from_routes_list(rec_config.routes_list)
-                worker_output.sound = SoundOutput(
-                    data=frames,
-                    rate=rec_config.rate,
-                    format=rec_config.format,
-                    channels=rec_config.channels,
-                )
+                worker_output = build_recording_output(rec_config, frames)
                 out_queue.put_nowait(worker_output)
                 if context.need_reload:
                     break
