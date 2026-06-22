@@ -18,6 +18,7 @@ from vspeech.config import GcpConfig
 from vspeech.config import TranslationConfig
 from vspeech.exceptions import shutdown_worker
 from vspeech.lib.gcp import get_credentials
+from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
@@ -120,13 +121,14 @@ async def translation_worker_google(
         try:
             for request, block in zip(requests, blocks):
                 logger.debug("translating... %s", block.text)
-                response = await translate_request(
-                    client=client,
-                    request=request,
-                    timeout=gcp_config.request_timeout,
-                    max_retry_count=gcp_config.max_retry_count,
-                    retry_delay_sec=gcp_config.retry_delay_sec,
-                )
+                with telemetry.timer("translation"):
+                    response = await translate_request(
+                        client=client,
+                        request=request,
+                        timeout=gcp_config.request_timeout,
+                        max_retry_count=gcp_config.max_retry_count,
+                        retry_delay_sec=gcp_config.retry_delay_sec,
+                    )
                 translated = unescape(
                     "".join(
                         [

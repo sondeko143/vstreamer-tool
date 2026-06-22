@@ -336,6 +336,13 @@ class RvcConfig(BaseModel):
     rmvpe_model_file: Path = Field(default=Path())
 
 
+class TelemetryConfig(BaseModel):
+    enable: bool = True
+    max_samples: int = 5000
+    log_raw_e2e: bool = True
+    skew_warn_threshold: float = 120.0
+
+
 class CustomTomlEncoder(TomlArraySeparatorEncoder):
     def dump_value(self, v: Any) -> str:
         if isinstance(v, Path):
@@ -359,6 +366,7 @@ class Config(BaseSettings):
     whisper: WhisperConfig = Field(default_factory=WhisperConfig)
     voicevox: VoicevoxConfig = Field(default_factory=VoicevoxConfig)
     rvc: RvcConfig = Field(default_factory=RvcConfig)
+    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
 
     listen_address: str = "[::]"
     listen_port: int = Field(

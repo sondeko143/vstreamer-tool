@@ -7,6 +7,7 @@ from asyncio import to_thread
 from dataclasses import InitVar
 from dataclasses import dataclass
 from dataclasses import field
+from time import time
 from typing import NoReturn
 
 from pyaudio import PyAudio
@@ -14,6 +15,7 @@ from pyaudio import Stream as PaStream
 
 from vspeech.config import PlaybackConfig
 from vspeech.config import SampleFormat
+from vspeech.config import TelemetryConfig
 from vspeech.config import get_sample_size
 from vspeech.exceptions import shutdown_worker
 from vspeech.lib.audio import DeviceInfo
@@ -21,12 +23,32 @@ from vspeech.lib.audio import get_device_info
 from vspeech.lib.audio import get_pa_format
 from vspeech.lib.audio import search_device
 from vspeech.lib.audio import search_device_by_name
+from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import SoundOutput
 from vspeech.shared_context import WorkerInput
 from vspeech.shared_context import WorkerOutput
+
+
+def record_playback_e2e(
+    speech: WorkerInput, now: float, cfg: TelemetryConfig
+) -> float | None:
+    if speech.origin_ts <= 0.0:
+        return None
+    e2e = now - speech.origin_ts
+    if e2e < 0.0 or e2e > cfg.skew_warn_threshold:
+        logger.warning(
+            "clock skew suspected: e2e=%.3fs trace=%s (NTP同期を確認)",
+            e2e,
+            speech.trace_id,
+        )
+        return None
+    telemetry.record_e2e(e2e)
+    if cfg.log_raw_e2e:
+        logger.info("e2e trace=%s %.3fs", speech.trace_id, e2e)
+    return e2e
 
 
 @dataclass
@@ -115,6 +137,7 @@ def get_output_device(audio: PyAudio, config: PlaybackConfig):
 
 async def pyaudio_playback_worker(
     config: PlaybackConfig,
+    telemetry_config: TelemetryConfig,
     in_queue: Queue[WorkerInput],
 ):
     output_stream = OutputStream(config)
@@ -130,11 +153,15 @@ async def pyaudio_playback_worker(
                 )
                 given_volume = speech.current_event.params.volume
                 logger.debug("playback... %s", speech.text)
-                await output_stream.playback(
-                    volume=given_volume if given_volume is not None else config.volume,
-                    data=speech.sound.data,
-                )
+                with telemetry.timer("playback"):
+                    await output_stream.playback(
+                        volume=given_volume
+                        if given_volume is not None
+                        else config.volume,
+                        data=speech.sound.data,
+                    )
                 logger.debug("playback end")
+                record_playback_e2e(speech, now=time(), cfg=telemetry_config)
                 worker_output = WorkerOutput.from_input(speech)
                 worker_output.sound = SoundOutput.from_input(speech.sound)
                 worker_output.text = speech.text
@@ -153,7 +180,9 @@ async def playback_worker(
         while True:
             context.reset_need_reload()
             async for output in pyaudio_playback_worker(
-                config=context.config.playback, in_queue=in_queue
+                config=context.config.playback,
+                telemetry_config=context.config.telemetry,
+                in_queue=in_queue,
             ):
                 out_queue.put_nowait(output)
                 if context.need_reload:

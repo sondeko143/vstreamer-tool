@@ -20,11 +20,17 @@ from vspeech.config import SampleFormat
 from vspeech.config import VcConfig
 from vspeech.config import get_sample_size
 from vspeech.exceptions import shutdown_worker
+from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import SoundOutput
 from vspeech.shared_context import WorkerInput
 from vspeech.shared_context import WorkerOutput
+
+
+def record_vc_elapsed(seconds: float) -> None:
+    telemetry.record("vc", seconds)
+    logger.info("rvc elapsed time: %s", seconds)
 
 
 def chunks(data: bytes, chunk_size: int) -> Generator[bytes, bytes, None]:
@@ -126,7 +132,7 @@ async def rvc_worker(
                 ]
             else:
                 input_vols = []
-            vc_start_time = time.time()
+            vc_start_time = time.perf_counter()
             audio = await to_thread(
                 change_voice,
                 voice_frames=mul(
@@ -166,8 +172,8 @@ async def rvc_worker(
                     )
             else:
                 output_data = audio.tobytes()
-            vc_end_time = time.time()
-            logger.info("rvc elapsed time: %s", vc_end_time - vc_start_time)
+            vc_end_time = time.perf_counter()
+            record_vc_elapsed(vc_end_time - vc_start_time)
             worker_output.sound = SoundOutput(
                 data=output_data,
                 rate=target_sample_rate,

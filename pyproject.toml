@@ -86,7 +86,7 @@ environments = [
 override-dependencies = ["onnxruntime ; sys_platform == 'never'"]
 
 [tool.uv.sources]
-vstreamer-protos = { url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-04910026/vstreamer_protos-0.1.0-py3-none-any.whl" }
+vstreamer-protos = { url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-e25b3319/vstreamer_protos-0.1.0-py3-none-any.whl" }
 voicevox-core = { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl" }
 torch = { url = "https://download.pytorch.org/whl/cu128/torch-2.7.0%2Bcu128-cp311-cp311-win_amd64.whl" }
 torchaudio = { url = "https://download.pytorch.org/whl/cu128/torchaudio-2.7.0%2Bcu128-cp311-cp311-win_amd64.whl" }
