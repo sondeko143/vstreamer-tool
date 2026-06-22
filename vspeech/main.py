@@ -69,6 +69,8 @@ async def vspeech_coro(config: Config):
         for e in eg.exceptions:
             logger.warning("workers shutdown: %s", e.args)
             logger.debug("".join(format_exception(e)))
+    finally:
+        telemetry.log_summary()
 
 
 @click.command()

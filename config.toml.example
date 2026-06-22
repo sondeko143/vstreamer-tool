@@ -156,3 +156,11 @@ intonation_scale = 1.0
 volume_scale = 1.0
 pre_phoneme_length = 0.1
 post_phoneme_length = 0.1
+
+[telemetry]
+enable = true
+max_samples = 5000
+log_raw_e2e = true
+# 発話→再生の真E2Eはマシン間で time.time() を比較するため、各マシンの
+# 時計をNTPで同期しておくこと。未同期だと負値/極端値となり skew 警告が出る。
+skew_warn_threshold = 120.0
