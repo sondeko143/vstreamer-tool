@@ -34,6 +34,7 @@ from vspeech.config import get_sample_size
 from vspeech.exceptions import shutdown_worker
 from vspeech.lib.ami import parse_response
 from vspeech.lib.gcp import get_credentials
+from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
@@ -171,8 +172,11 @@ async def transcript_worker_whisper(
         try:
             logger.debug("transcribing...")
             waveform = pcm_to_waveform(recorded.sound)
-            segments = await to_thread(_run_whisper, model, waveform, whisper_config)
-            transcribed = join_transcribed_segments(segments, whisper_config)
+            with telemetry.timer("transcription"):
+                segments = await to_thread(
+                    _run_whisper, model, waveform, whisper_config
+                )
+                transcribed = join_transcribed_segments(segments, whisper_config)
             if logger.isEnabledFor(DEBUG):
                 for segment in segments:
                     logger.debug(
@@ -226,13 +230,14 @@ async def transcript_worker_google(
                 )
                 logger.debug("transcribing...")
                 request = RecognizeRequest(config=rec_config, audio=rec_audio)
-                r = await transcribe_request_google(
-                    client=client,
-                    request=request,
-                    timeout=gcp_config.request_timeout,
-                    max_retry_count=gcp_config.max_retry_count,
-                    retry_delay_sec=gcp_config.retry_delay_sec,
-                )
+                with telemetry.timer("transcription"):
+                    r = await transcribe_request_google(
+                        client=client,
+                        request=request,
+                        timeout=gcp_config.request_timeout,
+                        max_retry_count=gcp_config.max_retry_count,
+                        retry_delay_sec=gcp_config.retry_delay_sec,
+                    )
                 transcribed = "".join(
                     [result.alternatives[0].transcript for result in r.results]
                 )
@@ -281,7 +286,10 @@ async def transcript_worker_ami(
                     }
                     files = {"a": wav_file}
                     logger.debug("transcribing...")
-                    r = await client.post(ami_config.engine_uri, data=data, files=files)
+                    with telemetry.timer("transcription"):
+                        r = await client.post(
+                            ami_config.engine_uri, data=data, files=files
+                        )
                     res_json = r.json()
                     logger.info("transcribed: %s", res_json)
                     text, spoken = parse_response(

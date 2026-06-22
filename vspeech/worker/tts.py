@@ -14,6 +14,7 @@ from vspeech.config import VoicevoxConfig
 from vspeech.config import VoicevoxParam
 from vspeech.config import Vr2Config
 from vspeech.exceptions import shutdown_worker
+from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
@@ -32,7 +33,8 @@ async def vroid2_worker(vr2_: Any, vr2_config: Vr2Config, in_queue: Queue[Worker
         logger.debug("voice generating...")
         try:
             demojized = demojize(transcribed.text)
-            speech, _ = await to_thread(vr2.text_to_speech, demojized, raw=True)
+            with telemetry.timer("tts"):
+                speech, _ = await to_thread(vr2.text_to_speech, demojized, raw=True)
             logger.debug("voice generated")
             worker_output = WorkerOutput.from_input(transcribed)
             worker_output.sound = SoundOutput(
@@ -79,12 +81,13 @@ async def voicevox_worker(vvox_config: VoicevoxConfig, in_queue: Queue[WorkerInp
                 else vvox_config.params.pitch_scale,
             )
             demojized = demojize(transcribed.text)
-            speech = await to_thread(
-                vvox.voicevox_tts,
-                text=demojized,
-                speaker_id=speaker_id,
-                params=audio_query,
-            )
+            with telemetry.timer("tts"):
+                speech = await to_thread(
+                    vvox.voicevox_tts,
+                    text=demojized,
+                    speaker_id=speaker_id,
+                    params=audio_query,
+                )
             logger.debug("voice generated: %s", demojized)
             worker_output = WorkerOutput.from_input(transcribed)
             worker_output.sound = SoundOutput(
