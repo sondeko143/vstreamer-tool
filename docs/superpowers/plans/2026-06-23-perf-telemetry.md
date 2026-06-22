@@ -109,6 +109,8 @@ uv lock
 uv sync
 ```
 
+> 注: 素の `uv sync` は extra（audio/whisper/vroid2/voicevox/rvc/gui）を prune する。本計画のテストは base 依存のみで通るため作業中は base で進め、Task 10 で `uv sync --extra ...` 一式により protos 正式版と extra を同時復元する。
+
 - [ ] **Step 3: tool venv で新フィールドを確認**
 
 ```bash
@@ -993,7 +995,8 @@ vstreamer-protos = { url = "https://github.com/sondeko143/vstreamer-protos/relea
 ```bash
 cd /c/Users/me_my/vstreamer/vstreamer-tool
 uv lock
-uv sync
+# extra も同時に復元（Task 2 の素の uv sync で prune されたため）
+uv sync --extra audio --extra whisper --extra vroid2 --extra voicevox --extra rvc --extra gui
 ```
 
 - [ ] **Step 3: 全ゲート green を確認**
