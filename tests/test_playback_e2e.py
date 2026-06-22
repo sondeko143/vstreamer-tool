@@ -16,9 +16,7 @@ def _speech(origin_ts: float) -> WorkerInput:
         current_event=EventAddress(event=EventType.playback),
         following_events=[],
         text="",
-        sound=SoundInput(
-            data=b"00", rate=16000, format=SampleFormat.INT16, channels=1
-        ),
+        sound=SoundInput(data=b"00", rate=16000, format=SampleFormat.INT16, channels=1),
         file_path="",
         filters=[],
         trace_id="abc",
