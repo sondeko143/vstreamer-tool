@@ -253,12 +253,23 @@ class SoundOutput:
         )
 
 
+def encode_trace(operand: Operand, trace_id: str, origin_ts: float) -> None:
+    operand.trace_id = trace_id
+    operand.origin_ts = origin_ts
+
+
+def decode_trace(operand: Operand) -> tuple[str, float]:
+    return operand.trace_id, operand.origin_ts
+
+
 @dataclass
 class WorkerOutput:
     input_id: UUID
     followings: FollowingEvents
     sound: SoundOutput | None = None
     text: str | None = None
+    trace_id: str = ""
+    origin_ts: float = 0.0
 
     @property
     def remotes(self):
@@ -269,14 +280,16 @@ class WorkerOutput:
 
     def to_pb(self, remote: str) -> Command:
         events = self.events(remote)
+        operand = Operand(
+            text=self.text,
+            sound=self.sound.to_pb() if self.sound else None,
+        )
+        encode_trace(operand, self.trace_id, self.origin_ts)
         return Command(
             chains=[
                 OperationChain(operations=[f.to_pb() for f in fs]) for fs in events
             ],
-            operand=Operand(
-                text=self.text,
-                sound=self.sound.to_pb() if self.sound else None,
-            ),
+            operand=operand,
         )
 
     @classmethod
@@ -284,6 +297,8 @@ class WorkerOutput:
         return cls(
             input_id=worker_input.input_id,
             followings=worker_input.following_events,
+            trace_id=worker_input.trace_id,
+            origin_ts=worker_input.origin_ts,
         )
 
     @classmethod
@@ -327,6 +342,8 @@ class WorkerInput(BaseModel):
     sound: SoundInput
     file_path: str
     filters: list[str]
+    trace_id: str = ""
+    origin_ts: float = 0.0
 
     @model_validator(mode="after")
     def _validate_input(self):
@@ -351,6 +368,8 @@ class WorkerInput(BaseModel):
                 else SoundInput.invalid(),
                 file_path="",
                 filters=[],
+                trace_id=output.trace_id,
+                origin_ts=output.origin_ts,
             )
             for first_event, following_events in first_event_maps.items()
         ]
@@ -358,6 +377,7 @@ class WorkerInput(BaseModel):
     @classmethod
     def from_command(cls, command: Command) -> list["WorkerInput"]:
         input_id = uuid4()
+        trace_id, origin_ts = decode_trace(command.operand)
         events = command_to_events(command)
         first_event_maps = get_first_event_map(events)
         return [
@@ -369,6 +389,8 @@ class WorkerInput(BaseModel):
                 sound=SoundInput.model_validate(command.operand.sound),
                 file_path=command.operand.file_path,
                 filters=list(command.operand.filters),
+                trace_id=trace_id,
+                origin_ts=origin_ts,
             )
             for first_event, following_events in first_event_maps.items()
         ]
