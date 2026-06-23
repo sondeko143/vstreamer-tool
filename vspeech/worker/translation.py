@@ -121,7 +121,7 @@ async def translation_worker_google(
         try:
             for request, block in zip(requests, blocks):
                 logger.debug("translating... %s", block.text)
-                with telemetry.timer("translation"):
+                with telemetry.timer("translation", trace_id=block.original.trace_id):
                     response = await translate_request(
                         client=client,
                         request=request,

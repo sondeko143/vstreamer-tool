@@ -28,8 +28,8 @@ from vspeech.shared_context import WorkerInput
 from vspeech.shared_context import WorkerOutput
 
 
-def record_vc_elapsed(seconds: float) -> None:
-    telemetry.record("vc", seconds)
+def record_vc_elapsed(seconds: float, trace_id: str = "") -> None:
+    telemetry.record("vc", seconds, trace_id=trace_id)
     logger.info("rvc elapsed time: %s", seconds)
 
 
@@ -173,7 +173,7 @@ async def rvc_worker(
             else:
                 output_data = audio.tobytes()
             vc_end_time = time.perf_counter()
-            record_vc_elapsed(vc_end_time - vc_start_time)
+            record_vc_elapsed(vc_end_time - vc_start_time, trace_id=speech.trace_id)
             worker_output.sound = SoundOutput(
                 data=output_data,
                 rate=target_sample_rate,
