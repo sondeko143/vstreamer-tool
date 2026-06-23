@@ -12,3 +12,7 @@ def test_defaults():
 
 def test_config_has_telemetry():
     assert Config().telemetry.enable is True
+
+
+def test_jsonl_path_default_empty():
+    assert TelemetryConfig().jsonl_path == ""

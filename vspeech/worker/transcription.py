@@ -172,7 +172,7 @@ async def transcript_worker_whisper(
         try:
             logger.debug("transcribing...")
             waveform = pcm_to_waveform(recorded.sound)
-            with telemetry.timer("transcription"):
+            with telemetry.timer("transcription", trace_id=recorded.trace_id):
                 segments = await to_thread(
                     _run_whisper, model, waveform, whisper_config
                 )
@@ -230,7 +230,7 @@ async def transcript_worker_google(
                 )
                 logger.debug("transcribing...")
                 request = RecognizeRequest(config=rec_config, audio=rec_audio)
-                with telemetry.timer("transcription"):
+                with telemetry.timer("transcription", trace_id=recorded.trace_id):
                     r = await transcribe_request_google(
                         client=client,
                         request=request,
@@ -286,7 +286,7 @@ async def transcript_worker_ami(
                     }
                     files = {"a": wav_file}
                     logger.debug("transcribing...")
-                    with telemetry.timer("transcription"):
+                    with telemetry.timer("transcription", trace_id=recorded.trace_id):
                         r = await client.post(
                             ami_config.engine_uri, data=data, files=files
                         )

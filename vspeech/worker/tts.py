@@ -33,7 +33,7 @@ async def vroid2_worker(vr2_: Any, vr2_config: Vr2Config, in_queue: Queue[Worker
         logger.debug("voice generating...")
         try:
             demojized = demojize(transcribed.text)
-            with telemetry.timer("tts"):
+            with telemetry.timer("tts", trace_id=transcribed.trace_id):
                 speech, _ = await to_thread(vr2.text_to_speech, demojized, raw=True)
             logger.debug("voice generated")
             worker_output = WorkerOutput.from_input(transcribed)
@@ -81,7 +81,7 @@ async def voicevox_worker(vvox_config: VoicevoxConfig, in_queue: Queue[WorkerInp
                 else vvox_config.params.pitch_scale,
             )
             demojized = demojize(transcribed.text)
-            with telemetry.timer("tts"):
+            with telemetry.timer("tts", trace_id=transcribed.trace_id):
                 speech = await to_thread(
                     vvox.voicevox_tts,
                     text=demojized,

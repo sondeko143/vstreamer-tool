@@ -45,7 +45,7 @@ def record_playback_e2e(
             speech.trace_id,
         )
         return None
-    telemetry.record_e2e(e2e)
+    telemetry.record_e2e(e2e, trace_id=speech.trace_id)
     if cfg.log_raw_e2e:
         logger.info("e2e trace=%s %.3fs", speech.trace_id, e2e)
     return e2e
@@ -153,7 +153,7 @@ async def pyaudio_playback_worker(
                 )
                 given_volume = speech.current_event.params.volume
                 logger.debug("playback... %s", speech.text)
-                with telemetry.timer("playback"):
+                with telemetry.timer("playback", trace_id=speech.trace_id):
                     await output_stream.playback(
                         volume=given_volume
                         if given_volume is not None

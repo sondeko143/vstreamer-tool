@@ -1,7 +1,12 @@
+import json
+import os
 from contextlib import contextmanager
+from datetime import datetime
 from math import ceil
 from math import floor
+from pathlib import Path
 from time import perf_counter
+from time import time
 
 from vspeech.logger import logger
 
@@ -37,32 +42,58 @@ class Telemetry:
         self.max_samples: int = 5000
         self._durations: dict[str, list[float]] = {}
         self._e2e: list[float] = []
+        self._jsonl = None
 
-    def configure(self, enabled: bool, max_samples: int) -> None:
+    def configure(
+        self, enabled: bool, max_samples: int, jsonl_path: str = ""
+    ) -> None:
         self.enabled = enabled
         self.max_samples = max_samples
+        self._close_jsonl()
+        if enabled and jsonl_path:
+            try:
+                resolved = datetime.now().strftime(jsonl_path.replace("%%", "%"))
+                path = Path(resolved)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                self._jsonl = open(path, "a", encoding="utf-8")
+            except OSError as e:
+                logger.warning(
+                    "telemetry jsonl disabled (cannot open %s): %s", jsonl_path, e
+                )
+                self._jsonl = None
+
+    def _close_jsonl(self) -> None:
+        if self._jsonl is not None:
+            try:
+                self._jsonl.close()
+            except OSError:
+                pass
+            self._jsonl = None
 
     def reset(self) -> None:
         self._durations = {}
         self._e2e = []
+        self._close_jsonl()
 
     def _append(self, buf: list[float], seconds: float) -> None:
         buf.append(seconds)
         if len(buf) > self.max_samples:
             del buf[0]
 
-    def record(self, stage: str, seconds: float) -> None:
+    def record(self, stage: str, seconds: float, trace_id: str = "") -> None:
         if not self.enabled:
             return
         self._append(self._durations.setdefault(stage, []), seconds)
+        self._emit_jsonl(stage, seconds, trace_id)
 
-    def record_e2e(self, seconds: float) -> None:
+    def record_e2e(self, seconds: float, trace_id: str = "") -> None:
         if not self.enabled:
             return
         self._append(self._e2e, seconds)
+        self._emit_jsonl("e2e", seconds, trace_id)
 
     @contextmanager
-    def timer(self, stage: str):
+    def timer(self, stage: str, trace_id: str = ""):
         if not self.enabled:
             yield
             return
@@ -70,7 +101,24 @@ class Telemetry:
         try:
             yield
         finally:
-            self.record(stage, perf_counter() - start)
+            self.record(stage, perf_counter() - start, trace_id)
+
+    def _emit_jsonl(self, stage: str, seconds: float, trace_id: str) -> None:
+        if self._jsonl is None:
+            return
+        record = {
+            "ts": time(),
+            "trace_id": trace_id,
+            "stage": stage,
+            "dur_s": seconds,
+            "pid": os.getpid(),
+        }
+        try:
+            self._jsonl.write(json.dumps(record) + "\n")
+            self._jsonl.flush()
+        except OSError as e:
+            logger.warning("telemetry jsonl write failed, disabling: %s", e)
+            self._close_jsonl()
 
     def summary(self) -> dict[str, dict[str, float]]:
         out: dict[str, dict[str, float]] = {}

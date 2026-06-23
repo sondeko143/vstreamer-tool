@@ -89,7 +89,9 @@ def cmd(config_file: IO[bytes] | None):
         config = Config()
     configure_logger(config)
     telemetry.configure(
-        enabled=config.telemetry.enable, max_samples=config.telemetry.max_samples
+        enabled=config.telemetry.enable,
+        max_samples=config.telemetry.max_samples,
+        jsonl_path=config.telemetry.jsonl_path,
     )
     loop = get_event_loop()
     try:
