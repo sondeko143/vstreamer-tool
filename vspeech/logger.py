@@ -2,6 +2,7 @@ import logging
 from asyncio.tasks import current_task
 from datetime import datetime
 from pathlib import Path
+from sys import stderr
 from sys import stdout
 
 import colorlog
@@ -48,11 +49,17 @@ def configure_logger(config: Config):
     now = datetime.now()
     filename = now.strftime(config.log_file.replace("%%", "%"))
     if filename:
-        Path(filename).parent.mkdir(parents=True, exist_ok=True)
-        file_handler = TaskFileHandler(filename, encoding="utf-8")
-        file_handler.setFormatter(log_file_format)
-        file_handler.setLevel(config.log_level)
-        logger.addHandler(file_handler)
+        try:
+            Path(filename).parent.mkdir(parents=True, exist_ok=True)
+            file_handler = TaskFileHandler(filename, encoding="utf-8")
+            file_handler.setFormatter(log_file_format)
+            file_handler.setLevel(config.log_level)
+            logger.addHandler(file_handler)
+        except OSError as e:
+            print(
+                f"log file disabled (cannot open {filename}): {e}",
+                file=stderr,
+            )
     stdout_handler = TaskStreamHandler(stdout)
     stdout_handler.setLevel(config.log_level)
     stdout_handler.setFormatter(log_sout_format)
