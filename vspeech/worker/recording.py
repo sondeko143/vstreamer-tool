@@ -7,7 +7,9 @@ from asyncio import to_thread
 from collections import deque
 from collections.abc import AsyncGenerator
 from collections.abc import Callable
+from dataclasses import dataclass
 from math import log
+from time import perf_counter
 from time import time
 from typing import Any
 from typing import NoReturn
@@ -22,6 +24,7 @@ from vspeech.exceptions import shutdown_worker
 from vspeech.lib.audio import get_device_name
 from vspeech.lib.audio import get_pa_format
 from vspeech.lib.audio import search_device
+from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import SoundOutput
@@ -67,9 +70,32 @@ def get_dbfs(interval_frames: bytes, sample_width: int):
     return 20 * log(rms / max_possible_val, 10)
 
 
+@dataclass
+class RecordedUtterance:
+    frames: bytes
+    capture_sec: float
+    silence_lag: float
+    stop_reason: str  # "silence" | "maxlen"
+
+
+def utterance_capture_sec(frames: bytes, config: RecordingConfig) -> float:
+    denom = get_sample_size(config.format) * config.channels * config.rate
+    if denom <= 0:
+        return 0.0
+    return len(frames) / denom
+
+
+def record_recording_metrics(
+    capture_sec: float, silence_lag: float, stop_reason: str, trace_id: str = ""
+) -> None:
+    telemetry.record("rec_capture", capture_sec, trace_id=trace_id)
+    if stop_reason == "silence":
+        telemetry.record("rec_silence_lag", silence_lag, trace_id=trace_id)
+
+
 async def pyaudio_recording_worker(
     config: RecordingConfig,
-) -> AsyncGenerator[bytes, None]:
+) -> AsyncGenerator[RecordedUtterance, None]:
     while True:
         interval_frame_count = 0
         interval_frames: bytes = b""
@@ -79,6 +105,7 @@ async def pyaudio_recording_worker(
         )
         total_seconds_of_this_recording = 0
         status = "waiting"
+        last_voice_ts = perf_counter()
         audio = PyAudio()
         stream = open_input_stream(audio, config)
         sample_width = get_sample_size(config.format)
@@ -100,10 +127,13 @@ async def pyaudio_recording_worker(
                             b"".join(last_interval_frames_buffer) + interval_frames
                         )
                         status = "speaking"
+                        last_voice_ts = perf_counter()
                         approx_max_amps = []
                     elif status == "speaking":
                         speaking_frames += interval_frames
                         total_seconds_of_this_recording += config.interval_sec
+                        if speaking:
+                            last_voice_ts = perf_counter()
                         approx_max_amps.append(approx_max_amp)
                         if len(approx_max_amps) > n_move_avg_amp:
                             approx_max_amps.pop(0)
@@ -114,8 +144,24 @@ async def pyaudio_recording_worker(
                             or config.max_recording_sec
                             < total_seconds_of_this_recording
                         ):
-                            logger.info("record stop %s", avg_amp)
-                            yield speaking_frames
+                            stop_reason = "silence" if silent else "maxlen"
+                            silence_lag = (
+                                perf_counter() - last_voice_ts if silent else 0.0
+                            )
+                            logger.info(
+                                "record stop %s reason=%s lag=%.3f",
+                                avg_amp,
+                                stop_reason,
+                                silence_lag,
+                            )
+                            yield RecordedUtterance(
+                                frames=speaking_frames,
+                                capture_sec=utterance_capture_sec(
+                                    speaking_frames, config
+                                ),
+                                silence_lag=silence_lag,
+                                stop_reason=stop_reason,
+                            )
                             status = "waiting"
                             speaking_frames = b""
                             interval_frames = b""
@@ -131,10 +177,12 @@ async def pyaudio_recording_worker(
             audio.terminate()
 
 
-def build_recording_output(config: RecordingConfig, frames: bytes) -> WorkerOutput:
+def build_recording_output(
+    config: RecordingConfig, frames: bytes, silence_lag: float = 0.0
+) -> WorkerOutput:
     worker_output = WorkerOutput.from_routes_list(config.routes_list)
     worker_output.trace_id = uuid4().hex
-    worker_output.origin_ts = time()
+    worker_output.origin_ts = time() - silence_lag
     worker_output.sound = SoundOutput(
         data=frames,
         rate=config.rate,
@@ -149,13 +197,21 @@ async def recording_worker(context: SharedContext, out_queue: Queue[WorkerOutput
         while True:
             context.reset_need_reload()
             rec_config = context.config.recording
-            async for frames in pyaudio_recording_worker(
+            async for utterance in pyaudio_recording_worker(
                 config=rec_config,
             ):
                 if not context.running.is_set():
                     logger.info("recording have been paused")
                     break
-                worker_output = build_recording_output(rec_config, frames)
+                worker_output = build_recording_output(
+                    rec_config, utterance.frames, silence_lag=utterance.silence_lag
+                )
+                record_recording_metrics(
+                    capture_sec=utterance.capture_sec,
+                    silence_lag=utterance.silence_lag,
+                    stop_reason=utterance.stop_reason,
+                    trace_id=worker_output.trace_id,
+                )
                 out_queue.put_nowait(worker_output)
                 if context.need_reload:
                     break
