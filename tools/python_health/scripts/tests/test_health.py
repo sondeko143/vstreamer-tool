@@ -52,15 +52,20 @@ def test_build_gates_uses_targets_for_cov_and_security():
     assert outdated.advisory is True
 
 
+class _ScriptedRunner:
+    # callable class (not a function with an attached attribute) so `ty`
+    # resolves `.calls` — a function-attribute assignment fails `ty check`.
+    def __init__(self, script):
+        self._script = list(script)
+        self.calls: list[list[str]] = []
+
+    def __call__(self, cmd):
+        self.calls.append(cmd)
+        return self._script.pop(0)
+
+
 def _scripted_runner(script):
-    calls = []
-
-    def run(cmd):
-        calls.append(cmd)
-        return script.pop(0)
-
-    run.calls = calls
-    return run
+    return _ScriptedRunner(script)
 
 
 def test_run_gate_pass():
