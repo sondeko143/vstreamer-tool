@@ -1560,7 +1560,7 @@ requires-dist = [
     { name = "torchaudio", marker = "sys_platform == 'win32' and extra == 'rvc'", url = "https://download.pytorch.org/whl/cu128/torchaudio-2.7.0%2Bcu128-cp311-cp311-win_amd64.whl" },
     { name = "ttkbootstrap", marker = "extra == 'gui'", specifier = ">=1.10.1,<2" },
     { name = "voicevox-core", marker = "sys_platform == 'win32' and extra == 'voicevox'", url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl" },
-    { name = "vstreamer-protos", url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-e25b3319/vstreamer_protos-0.1.0-py3-none-any.whl" },
+    { name = "vstreamer-protos", url = "https://github.com/sondeko143/vstreamer-protos/releases/download/v0.1.1/vstreamer_protos-0.1.1-py3-none-any.whl" },
 ]
 provides-extras = ["voicevox", "whisper", "rvc", "mozc", "vroid2", "audio", "gui"]
 
@@ -1586,14 +1586,14 @@ wheels = [
 
 [[package]]
 name = "vstreamer-protos"
-version = "0.1.0"
-source = { url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-e25b3319/vstreamer_protos-0.1.0-py3-none-any.whl" }
+version = "0.1.1"
+source = { url = "https://github.com/sondeko143/vstreamer-protos/releases/download/v0.1.1/vstreamer_protos-0.1.1-py3-none-any.whl" }
 dependencies = [
     { name = "grpcio", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { name = "protobuf", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 wheels = [
-    { url = "https://github.com/sondeko143/vstreamer-protos/releases/download/main-e25b3319/vstreamer_protos-0.1.0-py3-none-any.whl", hash = "sha256:ecbd0174361d0af6afbae6b4bd62555b021d2b6d0e431dc939ffe16c63c6457e" },
+    { url = "https://github.com/sondeko143/vstreamer-protos/releases/download/v0.1.1/vstreamer_protos-0.1.1-py3-none-any.whl", hash = "sha256:21a15079e9c3b309ff00188cc0ca7b0a9aed01cfbaa90bf1b7db1f40cab5e727" },
 ]
 
 [package.metadata]
