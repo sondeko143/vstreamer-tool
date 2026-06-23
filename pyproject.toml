@@ -12,7 +12,7 @@ classifiers = [
 ]
 dependencies = [
     "google-cloud-translate>=3.11.1,<4",
-    "httpx>=0.26.0,<0.27.0",
+    "httpx>=0.28.0,<0.29.0",
     "pydantic>=2,<3",
     "pydantic-settings>=2,<3",
     "aiofiles>=23.1.0,<24",
@@ -60,11 +60,11 @@ vspeech = "vspeech.main:cmd"
 
 [dependency-groups]
 dev = [
-    "pytest>=7.3.1,<8",
+    "pytest>=9.0.3,<10",
     "docutils>=0.19,<0.20",
-    "pytest-cov>=4.0.0,<5",
+    "pytest-cov>=6.0.0,<8",
     "pytest-grpc>=0.8.0,<0.9",
-    "pytest-asyncio>=0.21.0,<0.22",
+    "pytest-asyncio>=1.0,<2",
     "pytest-httpx",
     "ruff>=0.15.17",
     "ty>=0.0.49",

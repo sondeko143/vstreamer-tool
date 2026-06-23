@@ -68,7 +68,7 @@ h11==0.16.0 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via httpcore
 httpcore==1.0.9 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via httpx
-httpx==0.26.0 ; sys_platform == 'linux' or sys_platform == 'win32'
+httpx==0.28.1 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via voicerecog
 idna==3.18 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via
@@ -104,7 +104,7 @@ pydantic==2.13.4 ; sys_platform == 'linux' or sys_platform == 'win32'
     #   voicerecog
 pydantic-core==2.46.4 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via pydantic
-pydantic-settings==2.14.1 ; sys_platform == 'linux' or sys_platform == 'win32'
+pydantic-settings==2.14.2 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via voicerecog
 pyhumps==3.8.0 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via voicerecog
@@ -116,8 +116,6 @@ requests==2.34.2 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via google-api-core
 setuptools==82.0.1 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via ctranslate2
-sniffio==1.3.1 ; sys_platform == 'linux' or sys_platform == 'win32'
-    # via httpx
 toml==0.10.2 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via voicerecog
 typing-extensions==4.15.0 ; sys_platform == 'linux' or sys_platform == 'win32'
@@ -135,5 +133,5 @@ urllib3==2.7.0 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via requests
 voicevox-core @ https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl ; sys_platform == 'win32'
     # via voicerecog
-vstreamer-protos @ https://github.com/sondeko143/vstreamer-protos/releases/download/main-04910026/vstreamer_protos-0.1.0-py3-none-any.whl ; sys_platform == 'linux' or sys_platform == 'win32'
+vstreamer-protos @ https://github.com/sondeko143/vstreamer-protos/releases/download/v0.1.1/vstreamer_protos-0.1.1-py3-none-any.whl ; sys_platform == 'linux' or sys_platform == 'win32'
     # via voicerecog
