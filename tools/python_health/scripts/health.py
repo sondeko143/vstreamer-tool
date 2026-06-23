@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import re
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -152,3 +154,39 @@ def run_gate(gate: Gate, run: CommandRunner) -> GateResult:
     return GateResult(
         gate.name, "fail", "needs attention", (err or out).strip(), gate.advisory
     )
+
+
+_STATUS_TAG = {
+    "pass": "PASS",
+    "fail": "FAIL",
+    "fixed": "FIXED",
+    "skipped": "SKIP",
+    "error": "ERR",
+}
+
+
+def overall_exit(results: list[GateResult]) -> int:
+    for r in results:
+        if r.status in ("fail", "error") and not r.advisory:
+            return 1
+    return 0
+
+
+def render_summary(results: list[GateResult]) -> str:
+    lines = ["", "=== python-health summary ==="]
+    for r in results:
+        tag = _STATUS_TAG.get(r.status, r.status.upper())
+        adv = " (advisory)" if r.advisory else ""
+        lines.append(f"[{tag}] {r.name}{adv}: {r.summary}")
+        if r.status in ("fail", "error") and r.detail:
+            lines.append(f"       {r.detail.splitlines()[-1][:200]}")
+    return "\n".join(lines)
+
+
+def results_to_json(results: list[GateResult]) -> str:
+    return json.dumps([r.__dict__ for r in results], ensure_ascii=False, indent=2)
+
+
+def parse_coverage(stdout: str) -> float | None:
+    match = re.search(r"^TOTAL\s+.*?(\d+(?:\.\d+)?)%\s*$", stdout, re.MULTILINE)
+    return float(match.group(1)) if match else None

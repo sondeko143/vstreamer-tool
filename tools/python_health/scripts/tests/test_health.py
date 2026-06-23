@@ -119,3 +119,36 @@ def test_run_gate_prepare_failure_skips():
     run = _scripted_runner([(127, "", "command not found: uv")])
     result = health.run_gate(gate, run)
     assert result.status == "skipped"
+
+
+def test_overall_exit_advisory_does_not_fail():
+    results = [
+        health.GateResult("ruff-format", "fixed", "auto-fixed"),
+        health.GateResult("outdated", "fail", "stale", advisory=True),
+    ]
+    assert health.overall_exit(results) == 0
+
+
+def test_overall_exit_hard_fail():
+    results = [health.GateResult("ty", "fail", "needs attention")]
+    assert health.overall_exit(results) == 1
+
+
+def test_render_summary_lists_each_gate():
+    results = [
+        health.GateResult("ruff-format", "fixed", "auto-fixed"),
+        health.GateResult("ty", "fail", "needs attention"),
+    ]
+    text = health.render_summary(results)
+    assert "ruff-format" in text
+    assert "FIXED" in text
+    assert "FAIL" in text
+
+
+def test_parse_coverage_reads_total():
+    out = "TOTAL                      1234    200    84%\n"
+    assert health.parse_coverage(out) == 84.0
+
+
+def test_parse_coverage_none_when_absent():
+    assert health.parse_coverage("no coverage here") is None
