@@ -164,3 +164,8 @@ log_raw_e2e = true
 # 発話→再生の真E2Eはマシン間で time.time() を比較するため、各マシンの
 # 時計をNTPで同期しておくこと。未同期だと負値/極端値となり skew 警告が出る。
 skew_warn_threshold = 120.0
+# 1発話ごとの各段所要時間+E2Eを JSONL で記録する出力先。空=無効（既定）。
+# %%Y 等の日付パターン可。Windows/UNC ネットワークパスは TOML の
+# シングルクォート(リテラル文字列)で書くこと（ダブルクォートだと \d 等が壊れる）:
+#   jsonl_path = '\\192.168.138.150\d\vs\tel_%%Y%%m%%d.jsonl'
+jsonl_path = ""
