@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field
 
@@ -116,3 +117,38 @@ def build_gates(targets: Targets) -> list[Gate]:
             advisory=True,
         ),
     ]
+
+
+CommandRunner = Callable[[list[str]], tuple[int, str, str]]
+
+
+def run_gate(gate: Gate, run: CommandRunner) -> GateResult:
+    for prep in gate.prepare:
+        prc, _pout, perr = run(prep)
+        if classify(prc, _pout, perr) == "skipped":
+            return GateResult(
+                gate.name, "skipped", "prepare step unavailable", perr.strip(), gate.advisory
+            )
+
+    rc, out, err = run(gate.check)
+    status = classify(rc, out, err)
+
+    if status == "pass":
+        return GateResult(gate.name, "pass", "ok", advisory=gate.advisory)
+    if status == "skipped":
+        return GateResult(
+            gate.name, "skipped", "tool unavailable", err.strip(), gate.advisory
+        )
+
+    if gate.kind == "fixable" and gate.fix is not None:
+        run(gate.fix)
+        rc2, out2, err2 = run(gate.check)
+        if classify(rc2, out2, err2) == "pass":
+            return GateResult(gate.name, "fixed", "auto-fixed", advisory=gate.advisory)
+        return GateResult(
+            gate.name, "fail", "fix incomplete", (err2 or out2).strip(), gate.advisory
+        )
+
+    return GateResult(
+        gate.name, "fail", "needs attention", (err or out).strip(), gate.advisory
+    )

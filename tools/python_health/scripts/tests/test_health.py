@@ -50,3 +50,67 @@ def test_build_gates_uses_targets_for_cov_and_security():
     assert fmt.kind == "fixable" and fmt.fix is not None
     outdated = next(g for g in gates if g.name == "outdated")
     assert outdated.advisory is True
+
+
+def _scripted_runner(script):
+    calls = []
+
+    def run(cmd):
+        calls.append(cmd)
+        return script.pop(0)
+
+    run.calls = calls
+    return run
+
+
+def test_run_gate_pass():
+    gate = health.Gate("ty", "static", ["ty", "check"], "report")
+    run = _scripted_runner([(0, "ok", "")])
+    result = health.run_gate(gate, run)
+    assert result.status == "pass"
+
+
+def test_run_gate_report_fail():
+    gate = health.Gate("ty", "static", ["ty", "check"], "report")
+    run = _scripted_runner([(1, "type error", "")])
+    result = health.run_gate(gate, run)
+    assert result.status == "fail"
+    assert "type error" in result.detail
+
+
+def test_run_gate_fixable_autofixes():
+    gate = health.Gate(
+        "ruff-format", "static", ["fmt", "--check"], "fixable", fix=["fmt"]
+    )
+    # check fails, then fix runs, then re-check passes
+    run = _scripted_runner([(1, "would reformat", ""), (0, "", ""), (0, "", "")])
+    result = health.run_gate(gate, run)
+    assert result.status == "fixed"
+    assert run.calls == [["fmt", "--check"], ["fmt"], ["fmt", "--check"]]
+
+
+def test_run_gate_fixable_incomplete_stays_fail():
+    gate = health.Gate(
+        "ruff-lint", "static", ["lint"], "fixable", fix=["lint", "--fix"]
+    )
+    run = _scripted_runner([(1, "E501", ""), (0, "", ""), (1, "E501 remains", "")])
+    result = health.run_gate(gate, run)
+    assert result.status == "fail"
+    assert "remains" in result.detail
+
+
+def test_run_gate_skipped_when_tool_missing():
+    gate = health.Gate("bandit", "extra", ["bandit"], "report")
+    run = _scripted_runner([(127, "", "command not found: bandit")])
+    result = health.run_gate(gate, run)
+    assert result.status == "skipped"
+
+
+def test_run_gate_prepare_failure_skips():
+    gate = health.Gate(
+        "pip-audit", "deps", ["pip-audit", "-r", "x"], "report",
+        prepare=[["uv", "export"]],
+    )
+    run = _scripted_runner([(127, "", "command not found: uv")])
+    result = health.run_gate(gate, run)
+    assert result.status == "skipped"
