@@ -113,7 +113,10 @@ def test_run_gate_skipped_when_tool_missing():
 
 def test_run_gate_prepare_failure_skips():
     gate = health.Gate(
-        "pip-audit", "deps", ["pip-audit", "-r", "x"], "report",
+        "pip-audit",
+        "deps",
+        ["pip-audit", "-r", "x"],
+        "report",
         prepare=[["uv", "export"]],
     )
     run = _scripted_runner([(127, "", "command not found: uv")])
@@ -152,3 +155,41 @@ def test_parse_coverage_reads_total():
 
 def test_parse_coverage_none_when_absent():
     assert health.parse_coverage("no coverage here") is None
+
+
+def test_run_all_collects_all_by_default():
+    gates = [
+        health.Gate("a", "static", ["a"], "report"),
+        health.Gate("b", "static", ["b"], "report"),
+    ]
+    run = _scripted_runner([(1, "boom", ""), (0, "", "")])
+    results = health.run_all(gates, run, fail_fast=False)
+    assert [r.status for r in results] == ["fail", "pass"]
+
+
+def test_run_all_fail_fast_stops_after_first_hard_fail():
+    gates = [
+        health.Gate("a", "static", ["a"], "report"),
+        health.Gate("b", "static", ["b"], "report"),
+    ]
+    run = _scripted_runner([(1, "boom", "")])
+    results = health.run_all(gates, run, fail_fast=True)
+    assert [r.status for r in results] == ["fail"]
+
+
+def test_run_all_isolates_gate_exception_as_error():
+    def boom(cmd):
+        raise OSError("kaboom")
+
+    gates = [
+        health.Gate("a", "static", ["a"], "report"),
+        health.Gate("b", "static", ["b"], "report"),
+    ]
+    results = health.run_all(gates, boom, fail_fast=False)
+    assert [r.status for r in results] == ["error", "error"]
+    assert "kaboom" in results[0].detail
+
+
+def test_overall_exit_error_status_hard_fails():
+    results = [health.GateResult("x", "error", "gate raised")]
+    assert health.overall_exit(results) == 1

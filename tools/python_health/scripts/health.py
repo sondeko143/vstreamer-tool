@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
+import subprocess
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field
+from pathlib import Path
 
 
 @dataclass
@@ -100,7 +103,15 @@ def build_gates(targets: Targets) -> list[Gate]:
             ["uvx", "pip-audit", "-r", req],
             "report",
             prepare=[
-                ["uv", "export", "--no-hashes", "--no-emit-project", "--frozen", "-o", req]
+                [
+                    "uv",
+                    "export",
+                    "--no-hashes",
+                    "--no-emit-project",
+                    "--frozen",
+                    "-o",
+                    req,
+                ]
             ],
         ),
         Gate(
@@ -129,7 +140,11 @@ def run_gate(gate: Gate, run: CommandRunner) -> GateResult:
         prc, _pout, perr = run(prep)
         if classify(prc, _pout, perr) == "skipped":
             return GateResult(
-                gate.name, "skipped", "prepare step unavailable", perr.strip(), gate.advisory
+                gate.name,
+                "skipped",
+                "prepare step unavailable",
+                perr.strip(),
+                gate.advisory,
             )
 
     rc, out, err = run(gate.check)
@@ -190,3 +205,67 @@ def results_to_json(results: list[GateResult]) -> str:
 def parse_coverage(stdout: str) -> float | None:
     match = re.search(r"^TOTAL\s+.*?(\d+(?:\.\d+)?)%\s*$", stdout, re.MULTILINE)
     return float(match.group(1)) if match else None
+
+
+def subprocess_runner(cmd: list[str]) -> tuple[int, str, str]:
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:
+        return 127, "", f"command not found: {cmd[0]}"
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def load_pyproject(root: Path) -> dict:
+    import tomllib
+
+    with (root / "pyproject.toml").open("rb") as fh:
+        return tomllib.load(fh)
+
+
+def run_all(
+    gates: list[Gate], run: CommandRunner, fail_fast: bool = False
+) -> list[GateResult]:
+    results: list[GateResult] = []
+    for gate in gates:
+        try:
+            result = run_gate(gate, run)
+        except (
+            Exception
+        ) as exc:  # gate isolation (spec §7): a crash must not abort the rest
+            result = GateResult(
+                gate.name, "error", "gate raised", str(exc), gate.advisory
+            )
+        results.append(result)
+        if fail_fast and result.status in ("fail", "error") and not result.advisory:
+            break
+    return results
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="python-health")
+    parser.add_argument("--root", default=".")
+    parser.add_argument("--fail-fast", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--no-fix", action="store_true")
+    args = parser.parse_args(argv)
+
+    root = Path(args.root).resolve()
+    targets = derive_targets(load_pyproject(root))
+    gates = build_gates(targets)
+    if args.no_fix:
+        gates = [
+            Gate(g.name, g.phase, g.check, "report", None, g.prepare, g.advisory)
+            for g in gates
+        ]
+
+    results = run_all(gates, subprocess_runner, fail_fast=args.fail_fast)
+
+    if args.json:
+        print(results_to_json(results))
+    else:
+        print(render_summary(results))
+    return overall_exit(results)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
