@@ -11,8 +11,8 @@ Each gate is `(name, phase, check command, kind, advisory)`. `kind=fixable` gate
 | uv-lock-check | deps | `uv lock --check` | report | fix is `uv lock` (proposed, not auto-run) |
 | pip-audit | deps | `uvx pip-audit -r <exported-reqs>` | report | prepared via `uv export`; surfaces known CVEs |
 | outdated | deps | `uv pip list --outdated` | report (advisory) | informational; never blocks |
-| bandit | extra | `uvx bandit -q -r <pkg>` | report | security lint |
-| vulture | extra | `uvx vulture <pkg> --min-confidence 80` | report (advisory) | dead-code; high min-confidence to cut false positives |
+| bandit | extra | `uv run --with bandit bandit -q -r <pkg>` | report | security lint; runs under project interpreter so version-specific syntax (e.g. `except*`) parses |
+| vulture | extra | `uv run --with vulture vulture <pkg> --min-confidence 80` | report (advisory) | dead-code; high min-confidence to cut false positives; runs under project interpreter so version-specific syntax (e.g. `except*`) parses |
 
 ## Auto-fix policy
 

@@ -121,11 +121,11 @@ def build_gates(targets: Targets) -> list[Gate]:
             "report",
             advisory=True,
         ),
-        Gate("bandit", "extra", ["uvx", "bandit", "-q", "-r", *pkgs], "report"),
+        Gate("bandit", "extra", ["uv", "run", "--with", "bandit", "bandit", "-q", "-r", *pkgs], "report"),
         Gate(
             "vulture",
             "extra",
-            ["uvx", "vulture", *pkgs, "--min-confidence", "80"],
+            ["uv", "run", "--with", "vulture", "vulture", *pkgs, "--min-confidence", "80"],
             "report",
             advisory=True,
         ),
