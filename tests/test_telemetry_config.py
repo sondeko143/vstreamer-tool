@@ -7,7 +7,7 @@ def test_defaults():
     assert c.enable is True
     assert c.max_samples == 5000
     assert c.log_raw_e2e is True
-    assert c.skew_warn_threshold == 120.0
+    assert c.skew_warn_threshold == 10.0
 
 
 def test_config_has_telemetry():

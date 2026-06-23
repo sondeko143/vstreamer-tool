@@ -340,7 +340,7 @@ class TelemetryConfig(BaseModel):
     enable: bool = True
     max_samples: int = 5000
     log_raw_e2e: bool = True
-    skew_warn_threshold: float = 120.0
+    skew_warn_threshold: float = 10.0
     jsonl_path: str = ""
 
 
