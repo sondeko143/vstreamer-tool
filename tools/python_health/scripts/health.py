@@ -222,6 +222,21 @@ def load_pyproject(root: Path) -> dict:
         return tomllib.load(fh)
 
 
+def apply_no_fix(gates: list[Gate]) -> list[Gate]:
+    return [
+        Gate(
+            g.name,
+            g.phase,
+            g.check,
+            "report" if g.kind == "fixable" else g.kind,
+            None if g.kind == "fixable" else g.fix,
+            g.prepare,
+            g.advisory,
+        )
+        for g in gates
+    ]
+
+
 def run_all(
     gates: list[Gate], run: CommandRunner, fail_fast: bool = False
 ) -> list[GateResult]:
@@ -253,10 +268,7 @@ def main(argv: list[str] | None = None) -> int:
     targets = derive_targets(load_pyproject(root))
     gates = build_gates(targets)
     if args.no_fix:
-        gates = [
-            Gate(g.name, g.phase, g.check, "report", None, g.prepare, g.advisory)
-            for g in gates
-        ]
+        gates = apply_no_fix(gates)
 
     results = run_all(gates, subprocess_runner, fail_fast=args.fail_fast)
 

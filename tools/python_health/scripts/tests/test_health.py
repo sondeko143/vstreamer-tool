@@ -193,3 +193,14 @@ def test_run_all_isolates_gate_exception_as_error():
 def test_overall_exit_error_status_hard_fails():
     results = [health.GateResult("x", "error", "gate raised")]
     assert health.overall_exit(results) == 1
+
+
+def test_apply_no_fix_strips_only_fixable():
+    fixable = health.Gate("f", "static", ["c"], "fixable", fix=["c", "--fix"])
+    report = health.Gate("r", "deps", ["d"], "report")
+    out = health.apply_no_fix([fixable, report])
+    assert out[0].kind == "report"
+    assert out[0].fix is None
+    assert out[1].kind == "report"
+    assert out[1].check == ["d"]
+    assert out[1].fix is None
