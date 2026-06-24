@@ -21,21 +21,18 @@ a flat dispatcher) from "genuinely tangled" (high cognitive). See
 
 1. Confirm the working directory is a uv project (`pyproject.toml` exists). If not,
    say so and stop.
-2. Run the orchestrator from the project root, either way:
-   - **Preferred when the project defines it** (check `[tool.poe.tasks]` for a `metrics`
-     task in `pyproject.toml`): `uv run poe metrics`.
-   - **Otherwise**, run the script directly:
-     `uv run --with tomli python <skill-dir>/scripts/metrics.py --root .`
-
-   Flags append after either form:
-   - Machine-readable: add `--json`. Its stdout is clean JSON; under poe the `Poe =>`
-     banner and any sync noise go to stderr, so pipe stdout only (`... --json 2>/dev/null`).
-   - Show more/all rows: `--top 30` (or `--top 0` for all flagged).
+2. Run it via the project's poe task (the orchestrator lives at `scripts/metrics.py`,
+   wired as `[tool.poe.tasks].metrics`):
+   `uv run poe metrics`
+   - Machine-readable: `uv run poe metrics --json`. Its stdout is clean JSON; poe's
+     `Poe =>` banner and any sync noise go to stderr, so pipe stdout only
+     (`uv run poe metrics --json 2>/dev/null`).
+   - Show more/all rows: append `--top 30` (or `--top 0` for all flagged).
    - Tune bands: `--ccn-warn`, `--ccn-high`, `--cog-warn`.
 
-   A project that vendors the script (like this repo's `tools/code_metrics/`) can expose
-   the shortcut with a one-line poe task:
-   `metrics = { cmd = "python tools/code_metrics/scripts/metrics.py", help = "..." }`
+   If a target project lacks the task, run the script directly
+   (`uv run python scripts/metrics.py`) or add the one-liner:
+   `metrics = { cmd = "python scripts/metrics.py" }`.
 3. Read the ranked table and the prose buckets:
    - **both-high** → top refactor target (tangled AND branchy).
    - **high-cognitive** → "sneaky" target (deep nesting hides in few paths).
