@@ -11,10 +11,11 @@ Run the project's health gates in this environment and triage the results. Mecha
 
 1. Confirm the working directory is a uv project (`pyproject.toml` + `uv.lock` exist). If not, say so and stop.
 2. Run the orchestrator from the project root:
-   - Default (auto-fix mechanical issues): `uv run python <skill-dir>/scripts/health.py --root .`
+   - Default (auto-fix mechanical issues): `uv run --with tomli python <skill-dir>/scripts/health.py --root .`
    - Report-only (no edits): add `--no-fix`.
    - Machine-readable: add `--json`.
    The script exits non-zero if any non-advisory gate fails.
+   Note: `--with tomli` lets the orchestrator parse pyproject on projects whose Python is < 3.11 (stdlib `tomllib` is 3.11+).
 3. Read the summary. For each gate:
    - **PASS / FIXED / SKIP** — note it; FIXED means `ruff format` / `ruff check --fix` already edited files. Show the user `git diff` so they can review or revert.
    - **FAIL (ty, pytest-cov, uv-lock-check, pip-audit, bandit)** — do NOT auto-edit. Investigate the root cause, explain it, and propose a fix for approval. For `pip-audit`, surface the CVE and the fixed version. For `uv-lock-check`, the fix is usually `uv lock`.

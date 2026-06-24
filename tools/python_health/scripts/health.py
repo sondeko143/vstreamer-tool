@@ -216,7 +216,10 @@ def subprocess_runner(cmd: list[str]) -> tuple[int, str, str]:
 
 
 def load_pyproject(root: Path) -> dict:
-    import tomllib
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python < 3.11
+        import tomli as tomllib  # ty: ignore[unresolved-import]
 
     with (root / "pyproject.toml").open("rb") as fh:
         return tomllib.load(fh)
@@ -265,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
+    os.chdir(root)
     targets = derive_targets(load_pyproject(root))
     gates = build_gates(targets)
     if args.no_fix:
