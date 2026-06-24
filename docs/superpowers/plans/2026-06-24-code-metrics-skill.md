@@ -17,6 +17,8 @@
   - complexipy: `uvx complexipy <pkgs> -q --output-format json --output <tmpfile>` with `PYTHONIOENCODING=utf-8` in the child env; **read the JSON file, never parse stdout** (its rich/emoji stdout crashes the Windows cp932 console).
 - **Analyzer exit codes are ignored** except for "tool missing" (rc 127 / spawn failure → SKIP that lens). lizard and complexipy both exit non-zero merely when they find high-complexity functions — that is expected, not a failure.
 - **Code style** matches `health.py`: `from __future__ import annotations`, **one import per line** (ruff `force-single-line`), full type annotations (ty-checked).
+- **Import discipline:** each task adds to `metrics.py` ONLY the imports its new code uses (the project enforces ruff `I` + lint, so unused imports are `F401`/`I001` errors). Before committing each task, run `uv run ruff check --fix tools/code_metrics/` and `uv run ruff format tools/code_metrics/` — both must end clean.
+- **Test import convention** (matches `tools/python_health/scripts/tests/test_health.py`): the test module imports the script via the package path `from tools.code_metrics.scripts import metrics` (NOT `sys.path.insert`). `tools/__init__.py` exists and pytest runs with `pythonpath = "."`, so this resolves and is ty-clean.
 - **Join keys:** complexipy has no line numbers and names functions `Class::method`; lizard has line numbers and bare names. Join on `(normalized_forward_slash_path, simple_name)` where `simple_name` strips any `Class::` prefix. Line numbers come from lizard.
 - **Thresholds (advisory bands):** `ccn_warn=10`, `ccn_high=20`, `cog_warn=15` (complexipy's default cap). Overridable via CLI.
 
@@ -65,14 +67,7 @@ Create three empty files: `tools/code_metrics/__init__.py`, `tools/code_metrics/
 Create `tools/code_metrics/scripts/tests/test_metrics.py`:
 
 ```python
-from __future__ import annotations
-
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import metrics  # noqa: E402
+from tools.code_metrics.scripts import metrics
 
 
 def test_normalize_path_converts_backslashes():
@@ -106,22 +101,12 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'metrics'` (file not cr
 
 - [ ] **Step 4: Write minimal implementation**
 
-Create `tools/code_metrics/scripts/metrics.py`:
+Create `tools/code_metrics/scripts/metrics.py` (import ONLY what Task 1 uses; later tasks add their own imports):
 
 ```python
 from __future__ import annotations
 
-import argparse
-import csv
-import io
-import json
-import os
-import subprocess
-import tempfile
-from collections.abc import Callable
-from dataclasses import asdict
 from dataclasses import dataclass
-from dataclasses import replace
 from pathlib import Path
 
 
@@ -256,7 +241,7 @@ Expected: FAIL — `AttributeError: module 'metrics' has no attribute 'parse_liz
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add to `metrics.py`:
+First add the imports this code uses to the top of `metrics.py` (one per line; `uv run ruff check --fix` will sort them): `import csv` and `import io`. Then add:
 
 ```python
 def parse_lizard_csv(text: str) -> list[FunctionMetric]:
@@ -361,7 +346,7 @@ Expected: FAIL — `AttributeError: module 'metrics' has no attribute 'parse_com
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add to `metrics.py`:
+First add `import json` to the top of `metrics.py` (if not already present). Then add:
 
 ```python
 def parse_complexipy_json(text: str) -> list[tuple[str, str, int]]:
@@ -441,7 +426,7 @@ Expected: FAIL — `AttributeError: module 'metrics' has no attribute 'join_metr
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add to `metrics.py`:
+First add `from dataclasses import replace` to the top of `metrics.py`. Then add:
 
 ```python
 def join_metrics(
@@ -626,7 +611,7 @@ Expected: FAIL — `AttributeError: module 'metrics' has no attribute 'render_su
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add to `metrics.py`:
+First add `from dataclasses import asdict` to the top of `metrics.py`. Then add:
 
 ```python
 def _fmt(value: int | None) -> str:
@@ -761,7 +746,7 @@ Expected: FAIL — `AttributeError: module 'metrics' has no attribute 'collect_c
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add to `metrics.py`:
+First add the imports this code uses to the top of `metrics.py`: `import argparse`, `import os`, `import subprocess`, `import tempfile`, and `from collections.abc import Callable`. Then add:
 
 ```python
 CommandRunner = Callable[[list[str], dict[str, str] | None], tuple[int, str, str]]
