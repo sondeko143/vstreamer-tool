@@ -1328,8 +1328,8 @@ wheels = [
 
 [[package]]
 name = "torch"
-version = "2.7.0+cu128"
-source = { url = "https://download.pytorch.org/whl/cu128/torch-2.7.0%2Bcu128-cp311-cp311-win_amd64.whl" }
+version = "2.10.0+cu128"
+source = { url = "https://download.pytorch.org/whl/cu128/torch-2.10.0%2Bcu128-cp311-cp311-win_amd64.whl" }
 dependencies = [
     { name = "filelock", marker = "sys_platform == 'win32'" },
     { name = "fsspec", marker = "sys_platform == 'win32'" },
@@ -1339,51 +1339,37 @@ dependencies = [
     { name = "typing-extensions", marker = "sys_platform == 'win32'" },
 ]
 wheels = [
-    { url = "https://download.pytorch.org/whl/cu128/torch-2.7.0%2Bcu128-cp311-cp311-win_amd64.whl", hash = "sha256:bf88f647d76d79da9556ca55df49e45aff1d66c12797886364343179dd09a36c" },
+    { url = "https://download.pytorch.org/whl/cu128/torch-2.10.0%2Bcu128-cp311-cp311-win_amd64.whl", hash = "sha256:3523fda6e2cfab2b04ae09b1424681358e508bb3faa11ceb67004113d5e7acad" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "filelock" },
-    { name = "fsspec" },
+    { name = "fsspec", specifier = ">=0.8.5" },
     { name = "jinja2" },
-    { name = "networkx" },
-    { name = "nvidia-cublas-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==12.6.4.1" },
-    { name = "nvidia-cuda-cupti-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==12.6.80" },
-    { name = "nvidia-cuda-nvrtc-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==12.6.77" },
-    { name = "nvidia-cuda-runtime-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==12.6.77" },
-    { name = "nvidia-cudnn-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==9.5.1.17" },
-    { name = "nvidia-cufft-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==11.3.0.4" },
-    { name = "nvidia-cufile-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.11.1.6" },
-    { name = "nvidia-curand-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==10.3.7.77" },
-    { name = "nvidia-cusolver-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==11.7.1.2" },
-    { name = "nvidia-cusparse-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==12.5.4.2" },
-    { name = "nvidia-cusparselt-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.6.3" },
-    { name = "nvidia-nccl-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==2.26.2" },
-    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==12.6.85" },
-    { name = "nvidia-nvtx-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==12.6.77" },
+    { name = "networkx", specifier = ">=2.5.1" },
     { name = "opt-einsum", marker = "extra == 'opt-einsum'", specifier = ">=3.3" },
     { name = "optree", marker = "extra == 'optree'", specifier = ">=0.13.0" },
+    { name = "pyyaml", marker = "extra == 'pyyaml'" },
     { name = "setuptools", marker = "python_full_version >= '3.12'" },
     { name = "sympy", specifier = ">=1.13.3" },
-    { name = "triton", marker = "sys_platform == 'linux'", specifier = "==3.3.0" },
     { name = "typing-extensions", specifier = ">=4.10.0" },
 ]
-provides-extras = ["opt-einsum", "optree"]
+provides-extras = ["opt-einsum", "optree", "pyyaml"]
 
 [[package]]
 name = "torchaudio"
-version = "2.7.0+cu128"
-source = { url = "https://download.pytorch.org/whl/cu128/torchaudio-2.7.0%2Bcu128-cp311-cp311-win_amd64.whl" }
+version = "2.10.0+cu128"
+source = { url = "https://download.pytorch.org/whl/cu128/torchaudio-2.10.0%2Bcu128-cp311-cp311-win_amd64.whl" }
 dependencies = [
     { name = "torch", marker = "sys_platform == 'win32'" },
 ]
 wheels = [
-    { url = "https://download.pytorch.org/whl/cu128/torchaudio-2.7.0%2Bcu128-cp311-cp311-win_amd64.whl", hash = "sha256:f6c6c2c3a74225225b5d823db7e3910b581b3bb5fac891c0e7bf3549fb5d55b6" },
+    { url = "https://download.pytorch.org/whl/cu128/torchaudio-2.10.0%2Bcu128-cp311-cp311-win_amd64.whl", hash = "sha256:680fb8dd4e682ecb67c9465ffb3c08cf87926a08b2431eddfc527cc5facefdab" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "torch", specifier = "==2.7.0+cu128" }]
+requires-dist = [{ name = "torch", specifier = "==2.10.0" }]
 
 [[package]]
 name = "tqdm"
@@ -1571,9 +1557,9 @@ requires-dist = [
     { name = "pyworld", marker = "extra == 'rvc'", specifier = ">=0.3.3,<0.4" },
     { name = "scipy", marker = "extra == 'rvc'", specifier = ">=1.10.1,<2" },
     { name = "toml", specifier = ">=0.10.2,<0.11" },
-    { name = "torch", marker = "sys_platform == 'win32' and extra == 'rvc'", url = "https://download.pytorch.org/whl/cu128/torch-2.7.0%2Bcu128-cp311-cp311-win_amd64.whl" },
-    { name = "torch", marker = "sys_platform == 'win32' and extra == 'whisper'", url = "https://download.pytorch.org/whl/cu128/torch-2.7.0%2Bcu128-cp311-cp311-win_amd64.whl" },
-    { name = "torchaudio", marker = "sys_platform == 'win32' and extra == 'rvc'", url = "https://download.pytorch.org/whl/cu128/torchaudio-2.7.0%2Bcu128-cp311-cp311-win_amd64.whl" },
+    { name = "torch", marker = "sys_platform == 'win32' and extra == 'rvc'", url = "https://download.pytorch.org/whl/cu128/torch-2.10.0%2Bcu128-cp311-cp311-win_amd64.whl" },
+    { name = "torch", marker = "sys_platform == 'win32' and extra == 'whisper'", url = "https://download.pytorch.org/whl/cu128/torch-2.10.0%2Bcu128-cp311-cp311-win_amd64.whl" },
+    { name = "torchaudio", marker = "sys_platform == 'win32' and extra == 'rvc'", url = "https://download.pytorch.org/whl/cu128/torchaudio-2.10.0%2Bcu128-cp311-cp311-win_amd64.whl" },
     { name = "ttkbootstrap", marker = "extra == 'gui'", specifier = ">=1.10.1,<2" },
     { name = "voicevox-core", marker = "sys_platform == 'win32' and extra == 'voicevox'", url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl" },
     { name = "vstreamer-protos", url = "https://github.com/sondeko143/vstreamer-protos/releases/download/v0.1.1/vstreamer_protos-0.1.1-py3-none-any.whl" },
