@@ -4,6 +4,7 @@ import csv
 import io
 import json
 from dataclasses import dataclass
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -120,3 +121,35 @@ def build_cognitive_index(
         elif key not in index:
             index[key] = cog
     return index
+
+
+def join_metrics(
+    lizard_metrics: list[FunctionMetric],
+    cog_rows: list[tuple[str, str, int]],
+) -> list[FunctionMetric]:
+    index = build_cognitive_index(cog_rows)
+    lizard_keys = {(m.file, m.function) for m in lizard_metrics}
+
+    out = [
+        replace(m, cognitive=index.get((m.file, m.function)))
+        for m in lizard_metrics
+    ]
+
+    appended: set[tuple[str, str]] = set()
+    for path, name, _cog in cog_rows:
+        key = (path, name)
+        if key in lizard_keys or key in appended:
+            continue
+        appended.add(key)
+        out.append(
+            FunctionMetric(
+                file=path,
+                function=name,
+                line=None,
+                ccn=None,
+                nloc=None,
+                params=None,
+                cognitive=index.get(key),
+            )
+        )
+    return out

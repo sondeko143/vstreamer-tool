@@ -110,3 +110,21 @@ def test_build_cognitive_index_marks_conflicts_ambiguous():
     index = metrics.build_cognitive_index(rows)
     assert index[("a.py", "run")] is None  # conflicting -> ambiguous
     assert index[("b.py", "go")] == 7
+
+
+def test_join_fills_cognitive_and_appends_orphans():
+    lizard = metrics.parse_lizard_csv(LIZARD_CSV)
+    cog = metrics.parse_complexipy_json(COMPLEXIPY_JSON)
+    joined = metrics.join_metrics(lizard, cog)
+
+    pc = next(m for m in joined if m.function == "process_command")
+    assert pc.ccn == 21 and pc.cognitive == 28
+
+    orphan = next(m for m in joined if m.function == "orphan")
+    assert orphan.ccn is None
+    assert orphan.line is None
+    assert orphan.cognitive == 12
+    assert orphan.file == "vspeech/worker/vc.py"
+
+    # exactly one orphan appended (the 4 lizard rows + 1 complexipy-only)
+    assert len(joined) == 5
