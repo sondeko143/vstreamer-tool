@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -68,3 +70,29 @@ def load_pyproject(root: Path) -> dict:
 
     with (root / "pyproject.toml").open("rb") as fh:
         return tomllib.load(fh)
+
+
+def parse_lizard_csv(text: str) -> list[FunctionMetric]:
+    out: list[FunctionMetric] = []
+    for cols in csv.reader(io.StringIO(text)):
+        if len(cols) < 11:
+            continue
+        try:
+            nloc = int(cols[0])
+            ccn = int(cols[1])
+            params = int(cols[3])
+            line = int(cols[9])
+        except ValueError:
+            continue  # header / malformed row
+        out.append(
+            FunctionMetric(
+                file=normalize_path(cols[6]),
+                function=cols[7],
+                line=line,
+                ccn=ccn,
+                nloc=nloc,
+                params=params,
+                cognitive=None,
+            )
+        )
+    return out
