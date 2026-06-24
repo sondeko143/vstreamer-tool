@@ -250,7 +250,7 @@ def change_voice(
         feats = feats.float()
     if feats.dim() == 2:  # double channels
         feats = feats.mean(-1)
-    assert feats.dim() == 1, feats.dim()
+    assert feats.dim() == 1, feats.dim()  # nosec B101 - internal shape invariant
     feats = feats.view(1, -1)
 
     feats = extract_features(

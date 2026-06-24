@@ -44,9 +44,7 @@ class Telemetry:
         self._e2e: list[float] = []
         self._jsonl = None
 
-    def configure(
-        self, enabled: bool, max_samples: int, jsonl_path: str = ""
-    ) -> None:
+    def configure(self, enabled: bool, max_samples: int, jsonl_path: str = "") -> None:
         self.enabled = enabled
         self.max_samples = max_samples
         self._close_jsonl()
