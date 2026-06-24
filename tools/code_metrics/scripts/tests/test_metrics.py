@@ -148,3 +148,24 @@ def test_rank_orders_by_cognitive_then_ccn_none_last():
     c = metrics.FunctionMetric("f.py", "c", 1, 30, 9, 1, None)
     ranked = metrics.rank_metrics([c, b, a])
     assert [m.function for m in ranked] == ["a", "b", "c"]
+
+
+def test_render_summary_flags_and_explains():
+    lizard = metrics.parse_lizard_csv(LIZARD_CSV)
+    cog = metrics.parse_complexipy_json(COMPLEXIPY_JSON)
+    joined = metrics.join_metrics(lizard, cog)
+    out = metrics.render_summary(joined, metrics.Thresholds(), top=15)
+    assert "process_command" in out
+    assert "both-high" in out
+    assert "draw_text" in out  # high-cognitive
+    # de-prioritized flat dispatcher is named in the "likely fine" prose
+    assert "operation_to_event" in out
+
+
+def test_metrics_to_json_is_valid_and_has_bucket():
+    lizard = metrics.parse_lizard_csv(LIZARD_CSV)
+    cog = metrics.parse_complexipy_json(COMPLEXIPY_JSON)
+    joined = metrics.join_metrics(lizard, cog)
+    payload = json.loads(metrics.metrics_to_json(joined, metrics.Thresholds()))
+    assert payload[0]["function"] == "process_command"
+    assert payload[0]["bucket"] == "both-high"

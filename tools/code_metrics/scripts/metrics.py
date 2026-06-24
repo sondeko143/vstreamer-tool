@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+from dataclasses import asdict
 from dataclasses import dataclass
 from dataclasses import replace
 from pathlib import Path
@@ -182,3 +183,52 @@ def rank_metrics(metrics_list: list[FunctionMetric]) -> list[FunctionMetric]:
         )
 
     return sorted(metrics_list, key=key, reverse=True)
+
+
+def _fmt(value: int | None) -> str:
+    return "-" if value is None else str(value)
+
+
+def render_summary(
+    metrics_list: list[FunctionMetric], t: Thresholds, top: int
+) -> str:
+    ranked = rank_metrics(metrics_list)
+    flagged = [m for m in ranked if bucket(m, t) != "ok"]
+    shown = flagged if flagged else ranked
+    if top and len(shown) > top:
+        shown = shown[:top]
+
+    lines = [
+        "",
+        "=== code-metrics: refactor candidates ===",
+        f"{'cog':>4} {'ccn':>4} {'nloc':>5} {'par':>4}  function (file:line)  [bucket]",
+    ]
+    for m in shown:
+        loc = f"{m.file}:{m.line}" if m.line is not None else m.file
+        lines.append(
+            f"{_fmt(m.cognitive):>4} {_fmt(m.ccn):>4} {_fmt(m.nloc):>5} "
+            f"{_fmt(m.params):>4}  {m.function} ({loc})  [{bucket(m, t)}]"
+        )
+
+    both = [m.function for m in shown if bucket(m, t) == "both-high"]
+    cog_only = [m.function for m in shown if bucket(m, t) == "high-cognitive"]
+    ccn_only = [m.function for m in shown if bucket(m, t) == "high-ccn"]
+    lines.append("")
+    if both:
+        lines.append("Top targets (tangled AND branchy): " + ", ".join(both))
+    if cog_only:
+        lines.append("Sneaky (deep nesting, few paths): " + ", ".join(cog_only))
+    if ccn_only:
+        lines.append(
+            "Likely fine (wide but flat dispatch; de-prioritize): "
+            + ", ".join(ccn_only)
+        )
+    if not (both or cog_only or ccn_only):
+        lines.append("No functions exceed thresholds — within complexity bands.")
+    return "\n".join(lines)
+
+
+def metrics_to_json(metrics_list: list[FunctionMetric], t: Thresholds) -> str:
+    ranked = rank_metrics(metrics_list)
+    payload = [{**asdict(m), "bucket": bucket(m, t)} for m in ranked]
+    return json.dumps(payload, ensure_ascii=False, indent=2)
