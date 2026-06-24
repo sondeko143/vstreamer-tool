@@ -25,6 +25,13 @@ class Targets:
     project_name: str
 
 
+@dataclass
+class Thresholds:
+    ccn_warn: int = 10
+    ccn_high: int = 20
+    cog_warn: int = 15
+
+
 def normalize_path(p: str) -> str:
     return p.replace("\\", "/")
 
@@ -153,3 +160,25 @@ def join_metrics(
             )
         )
     return out
+
+
+def bucket(m: FunctionMetric, t: Thresholds) -> str:
+    ccn_flag = m.ccn is not None and m.ccn > t.ccn_warn
+    cog_flag = m.cognitive is not None and m.cognitive > t.cog_warn
+    if ccn_flag and cog_flag:
+        return "both-high"
+    if ccn_flag:
+        return "high-ccn"
+    if cog_flag:
+        return "high-cognitive"
+    return "ok"
+
+
+def rank_metrics(metrics_list: list[FunctionMetric]) -> list[FunctionMetric]:
+    def key(m: FunctionMetric) -> tuple[int, int]:
+        return (
+            m.cognitive if m.cognitive is not None else -1,
+            m.ccn if m.ccn is not None else -1,
+        )
+
+    return sorted(metrics_list, key=key, reverse=True)

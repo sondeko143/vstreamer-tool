@@ -128,3 +128,23 @@ def test_join_fills_cognitive_and_appends_orphans():
 
     # exactly one orphan appended (the 4 lizard rows + 1 complexipy-only)
     assert len(joined) == 5
+
+
+def test_bucket_classifies_each_case():
+    t = metrics.Thresholds()
+    both = metrics.FunctionMetric("f.py", "a", 1, 21, 60, 2, 28)
+    ccn_only = metrics.FunctionMetric("f.py", "b", 1, 13, 13, 1, 3)
+    cog_only = metrics.FunctionMetric("f.py", "c", 1, 3, 8, 1, 18)
+    ok = metrics.FunctionMetric("f.py", "d", 1, 2, 5, 1, 1)
+    assert metrics.bucket(both, t) == "both-high"
+    assert metrics.bucket(ccn_only, t) == "high-ccn"
+    assert metrics.bucket(cog_only, t) == "high-cognitive"
+    assert metrics.bucket(ok, t) == "ok"
+
+
+def test_rank_orders_by_cognitive_then_ccn_none_last():
+    a = metrics.FunctionMetric("f.py", "a", 1, 5, 5, 1, 28)
+    b = metrics.FunctionMetric("f.py", "b", 1, 9, 9, 1, 18)
+    c = metrics.FunctionMetric("f.py", "c", 1, 30, 9, 1, None)
+    ranked = metrics.rank_metrics([c, b, a])
+    assert [m.function for m in ranked] == ["a", "b", "c"]
