@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import argparse
 import csv
 import io
 import json
+import os
+import subprocess
+import tempfile
+from collections.abc import Callable
 from dataclasses import asdict
 from dataclasses import dataclass
 from dataclasses import replace
@@ -139,8 +144,7 @@ def join_metrics(
     lizard_keys = {(m.file, m.function) for m in lizard_metrics}
 
     out = [
-        replace(m, cognitive=index.get((m.file, m.function)))
-        for m in lizard_metrics
+        replace(m, cognitive=index.get((m.file, m.function))) for m in lizard_metrics
     ]
 
     appended: set[tuple[str, str]] = set()
@@ -189,9 +193,7 @@ def _fmt(value: int | None) -> str:
     return "-" if value is None else str(value)
 
 
-def render_summary(
-    metrics_list: list[FunctionMetric], t: Thresholds, top: int
-) -> str:
+def render_summary(metrics_list: list[FunctionMetric], t: Thresholds, top: int) -> str:
     ranked = rank_metrics(metrics_list)
     flagged = [m for m in ranked if bucket(m, t) != "ok"]
     shown = flagged if flagged else ranked
@@ -232,3 +234,98 @@ def metrics_to_json(metrics_list: list[FunctionMetric], t: Thresholds) -> str:
     ranked = rank_metrics(metrics_list)
     payload = [{**asdict(m), "bucket": bucket(m, t)} for m in ranked]
     return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+CommandRunner = Callable[[list[str], dict[str, str] | None], tuple[int, str, str]]
+
+
+def is_missing(rc: int, err: str) -> bool:
+    e = (err or "").lower()
+    return (
+        rc == 127
+        or "command not found" in e
+        or "failed to spawn" in e
+        or "no such file" in e
+    )
+
+
+def subprocess_runner(
+    cmd: list[str], env_extra: dict[str, str] | None = None
+) -> tuple[int, str, str]:
+    env = {**os.environ, **env_extra} if env_extra else None
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    except FileNotFoundError:
+        return 127, "", f"command not found: {cmd[0]}"
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def collect_lizard(run: CommandRunner, pkgs: list[str]) -> str | None:
+    rc, out, err = run(["uvx", "lizard", *pkgs, "--csv"], None)
+    if is_missing(rc, err):
+        return None
+    return out
+
+
+def collect_complexipy(
+    run: CommandRunner, pkgs: list[str], out_path: str
+) -> str | None:
+    rc, _out, err = run(
+        [
+            "uvx",
+            "complexipy",
+            *pkgs,
+            "-q",
+            "--output-format",
+            "json",
+            "--output",
+            out_path,
+        ],
+        {"PYTHONIOENCODING": "utf-8"},
+    )
+    if is_missing(rc, err):
+        return None
+    try:
+        return Path(out_path).read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="code-metrics")
+    parser.add_argument("--root", default=".")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--top", type=int, default=15)
+    parser.add_argument("--ccn-warn", type=int, default=10)
+    parser.add_argument("--ccn-high", type=int, default=20)
+    parser.add_argument("--cog-warn", type=int, default=15)
+    args = parser.parse_args(argv)
+
+    root = Path(args.root).resolve()
+    os.chdir(root)
+    targets = derive_targets(load_pyproject(root))
+    pkgs = targets.packages or ["."]
+    thresholds = Thresholds(args.ccn_warn, args.ccn_high, args.cog_warn)
+
+    lizard_text = collect_lizard(subprocess_runner, pkgs)
+    with tempfile.TemporaryDirectory() as td:
+        cx_path = os.path.join(td, "complexipy.json")
+        cx_text = collect_complexipy(subprocess_runner, pkgs, cx_path)
+
+    lizard_metrics = parse_lizard_csv(lizard_text) if lizard_text else []
+    cog_rows = parse_complexipy_json(cx_text) if cx_text else []
+    joined = join_metrics(lizard_metrics, cog_rows)
+
+    if args.json:
+        print(metrics_to_json(joined, thresholds))
+    else:
+        print(render_summary(joined, thresholds, args.top))
+        if lizard_text is None:
+            print("[SKIP] lizard unavailable — cyclomatic lens missing")
+        if cx_text is None:
+            print("[SKIP] complexipy unavailable — cognitive lens missing")
+    return 0  # advisory: never gate
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

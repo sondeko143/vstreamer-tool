@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from tools.code_metrics.scripts import metrics
 
@@ -72,7 +73,9 @@ def test_parse_lizard_csv_skips_non_numeric_rows():
 
 
 def test_normalize_path_converts_backslashes():
-    assert metrics.normalize_path("vspeech\\lib\\command.py") == "vspeech/lib/command.py"
+    assert (
+        metrics.normalize_path("vspeech\\lib\\command.py") == "vspeech/lib/command.py"
+    )
 
 
 def test_simple_name_strips_class_prefix():
@@ -169,3 +172,44 @@ def test_metrics_to_json_is_valid_and_has_bucket():
     payload = json.loads(metrics.metrics_to_json(joined, metrics.Thresholds()))
     assert payload[0]["function"] == "process_command"
     assert payload[0]["bucket"] == "both-high"
+
+
+def test_collect_complexipy_reads_file_despite_nonzero_exit(tmp_path):
+    out_file = tmp_path / "cx.json"
+
+    def fake_run(cmd, env_extra=None):
+        # complexipy exits 1 when it finds high-complexity functions
+        out_file.write_text(COMPLEXIPY_JSON, encoding="utf-8")
+        assert env_extra == {"PYTHONIOENCODING": "utf-8"}
+        return 1, "", ""
+
+    text = metrics.collect_complexipy(fake_run, ["vspeech"], str(out_file))
+    assert text is not None
+    assert "process_command" in text
+
+
+def test_collect_lizard_returns_none_when_missing():
+    def fake_run(cmd, env_extra=None):
+        return 127, "", "command not found: uvx"
+
+    assert metrics.collect_lizard(fake_run, ["vspeech"]) is None
+
+
+def test_main_runs_advisory_and_returns_zero(tmp_path, capsys, monkeypatch):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "demo"\n', encoding="utf-8"
+    )
+
+    def fake_runner(cmd, env_extra=None):
+        if "lizard" in cmd:
+            return 0, LIZARD_CSV, ""
+        if "complexipy" in cmd:
+            idx = cmd.index("--output") + 1
+            Path(cmd[idx]).write_text(COMPLEXIPY_JSON, encoding="utf-8")
+            return 1, "", ""
+        return 0, "", ""
+
+    monkeypatch.setattr(metrics, "subprocess_runner", fake_runner)
+    rc = metrics.main(["--root", str(tmp_path)])
+    assert rc == 0
+    assert "process_command" in capsys.readouterr().out
