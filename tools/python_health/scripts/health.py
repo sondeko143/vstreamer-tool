@@ -65,7 +65,8 @@ def derive_targets(pyproject: dict) -> Targets:
 def classify(returncode: int, stdout: str, stderr: str) -> str:
     if returncode == 0:
         return "pass"
-    if returncode == 127 or "command not found" in (stderr or "").lower():
+    err = (stderr or "").lower()
+    if returncode == 127 or "command not found" in err or "failed to spawn" in err:
         return "skipped"
     return "fail"
 

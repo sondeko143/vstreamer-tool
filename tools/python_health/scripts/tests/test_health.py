@@ -204,3 +204,9 @@ def test_apply_no_fix_strips_only_fixable():
     assert out[1].kind == "report"
     assert out[1].check == ["d"]
     assert out[1].fix is None
+
+
+def test_classify_skips_on_uv_failed_to_spawn():
+    assert health.classify(1, "", "error: Failed to spawn: `ruff`") == "skipped"
+    assert health.classify(2, "", "Failed to spawn: `ty`\n  Caused by: x") == "skipped"
+    assert health.classify(1, "", "E501 line too long") == "fail"
