@@ -1,11 +1,4 @@
-from __future__ import annotations
-
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import metrics  # noqa: E402
+from tools.code_metrics.scripts import metrics
 
 
 def test_normalize_path_converts_backslashes():
