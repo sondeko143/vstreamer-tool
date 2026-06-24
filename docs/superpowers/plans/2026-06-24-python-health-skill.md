@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **Python 3.11 only** (`requires-python = ">=3.11,<3.12"`). Use stdlib `tomllib` (3.11+) for TOML parsing.
-- **`health.py` MUST be stdlib-only** — no third-party imports — so it runs via `uv run python` (and bare `python`) in any project. Gate work is shelled out, never imported.
+- **`health.py` is stdlib-only on Python ≥3.11** — gate work is shelled out, never imported. The ONE allowed exception is a guarded `tomli` fallback for TOML parsing on Python <3.11 (`try: import tomllib / except ModuleNotFoundError: import tomli`), since stdlib `tomllib` is 3.11+. The skill is launched with `uv run --with tomli` so the fallback is available on older projects. (Validation discovered the orchestrator otherwise crashes on a 3.10 project.)
 - **The orchestrator dogfoods the repo's own gates:** `health.py` and its tests live under `tools/python_health/` and ARE scanned by `ruff check .` and `ty check`. They MUST pass: `ruff format`, ruff `I` + `UP`, **one import per line** (`force-single-line = true`), and `ty`.
 - **Dev tests are not in the default suite.** Project `pyproject.toml` has `testpaths = ["tests"]`, so the orchestrator's tests under `tools/python_health/scripts/tests/` are NOT collected by a bare `pytest`. Run them explicitly: `uv run pytest tools/python_health/scripts/tests/ -v`.
 - **Honor the target project's pytest config** — never override `addopts` (which excludes `voicevox_e2e`). The pytest gate appends only `--cov=...` / `--cov-report`.
@@ -24,14 +24,18 @@
 In-repo development home (mirrors the installed layout so SKILL.md's relative paths are correct):
 
 ```
+tools/__init__.py                       # empty — makes the chain a regular package for ty
+tools/python_health/__init__.py         # empty
+tools/python_health/scripts/__init__.py # empty
 tools/python_health/
   SKILL.md                       # skill manifest (frontmatter + procedure) — installed
   references/gate-catalog.md     # gate definitions, fix policy, FP tuning — installed
   scripts/health.py              # the orchestrator (stdlib-only) — installed
+  scripts/tests/__init__.py      # empty
   scripts/tests/test_health.py   # unit tests — NOT installed
 ```
 
-Tests import the orchestrator via namespace packages from the repo root (root is on `sys.path` because `pythonpath = "."`): `from tools.python_health.scripts import health`.
+Tests import the orchestrator as `from tools.python_health.scripts import health`. `pytest` resolves this via `pythonpath = "."`. **`ty` does NOT resolve implicit namespace packages here**, so the `__init__.py` files above (regular package chain) are required for the dogfood `ty check` to resolve the test import. The empty `__init__.py` files are not installed (only `SKILL.md`, `references/`, `scripts/health.py` ship).
 
 Installed layout (after Task 10):
 
@@ -273,11 +277,19 @@ def build_gates(targets: Targets) -> list[Gate]:
             "report",
             advisory=True,
         ),
-        Gate("bandit", "extra", ["uvx", "bandit", "-q", "-r", *pkgs], "report"),
+        # bandit/vulture run under the PROJECT interpreter (`uv run --with`),
+        # not `uvx` — uvx may pick a Python that can't parse project syntax
+        # (e.g. 3.11 `except*`), causing false syntax errors / silent skips.
+        Gate(
+            "bandit",
+            "extra",
+            ["uv", "run", "--with", "bandit", "bandit", "-q", "-r", *pkgs],
+            "report",
+        ),
         Gate(
             "vulture",
             "extra",
-            ["uvx", "vulture", *pkgs, "--min-confidence", "80"],
+            ["uv", "run", "--with", "vulture", "vulture", *pkgs, "--min-confidence", "80"],
             "report",
             advisory=True,
         ),
@@ -314,15 +326,20 @@ git commit -m "feat(python-health): gate model, classification, catalog"
 - [ ] **Step 1: Write the failing test**
 
 ```python
+class _ScriptedRunner:
+    # callable class (not a function with an attached attribute) so `ty`
+    # resolves `.calls` — a function-attribute assignment fails `ty check`.
+    def __init__(self, script):
+        self._script = list(script)
+        self.calls: list[list[str]] = []
+
+    def __call__(self, cmd):
+        self.calls.append(cmd)
+        return self._script.pop(0)
+
+
 def _scripted_runner(script):
-    calls = []
-
-    def run(cmd):
-        calls.append(cmd)
-        return script.pop(0)
-
-    run.calls = calls
-    return run
+    return _ScriptedRunner(script)
 
 
 def test_run_gate_pass():
@@ -567,7 +584,7 @@ git commit -m "feat(python-health): report rendering, coverage parse, exit aggre
 - Produces:
   - `subprocess_runner(cmd: list[str]) -> tuple[int, str, str]` (default real runner; `FileNotFoundError` ⇒ `(127, "", "command not found: <cmd0>")`).
   - `load_pyproject(root: Path) -> dict` (uses `tomllib`).
-  - `run_all(gates: list[Gate], run: CommandRunner, fail_fast: bool = False) -> list[GateResult]`.
+  - `run_all(gates: list[Gate], run: CommandRunner, fail_fast: bool = False) -> list[GateResult]`. Isolates gate exceptions: if `run_gate` raises, the gate is recorded as a `GateResult` with status `"error"` (spec §7 — one gate's crash must not abort the rest), and the loop continues (or breaks on `--fail-fast` for a non-advisory error).
   - `main(argv: list[str] | None = None) -> int` — flags: `--root PATH` (default `.`), `--fail-fast`, `--json`, `--no-fix` (treat fixable gates as report-only). Prints summary (or JSON) and returns `overall_exit(...)`.
 
 - [ ] **Step 1: Write the failing test**
@@ -591,6 +608,24 @@ def test_run_all_fail_fast_stops_after_first_hard_fail():
     run = _scripted_runner([(1, "boom", "")])
     results = health.run_all(gates, run, fail_fast=True)
     assert [r.status for r in results] == ["fail"]
+
+
+def test_run_all_isolates_gate_exception_as_error():
+    def boom(cmd):
+        raise OSError("kaboom")
+
+    gates = [
+        health.Gate("a", "static", ["a"], "report"),
+        health.Gate("b", "static", ["b"], "report"),
+    ]
+    results = health.run_all(gates, boom, fail_fast=False)
+    assert [r.status for r in results] == ["error", "error"]
+    assert "kaboom" in results[0].detail
+
+
+def test_overall_exit_error_status_hard_fails():
+    results = [health.GateResult("x", "error", "gate raised")]
+    assert health.overall_exit(results) == 1
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -630,7 +665,10 @@ def run_all(
 ) -> list[GateResult]:
     results: list[GateResult] = []
     for gate in gates:
-        result = run_gate(gate, run)
+        try:
+            result = run_gate(gate, run)
+        except Exception as exc:  # gate isolation (spec §7): a crash must not abort the rest
+            result = GateResult(gate.name, "error", "gate raised", str(exc), gate.advisory)
         results.append(result)
         if fail_fast and result.status in ("fail", "error") and not result.advisory:
             break
@@ -674,8 +712,10 @@ Expected: PASS (full file green).
 
 - [ ] **Step 5: Verify the orchestrator dogfoods clean, then commit**
 
-Run: `uv run ruff format tools/python_health/ && uv run ruff check --fix tools/python_health/ && uv run ty check`
-Expected: ruff reports formatted/clean; `ty` reports no errors in `tools/python_health/`.
+Run: `uv run ruff format tools/python_health/ && uv run ruff check --fix tools/python_health/ && uv run ty check tools/python_health`
+Expected: ruff reports formatted/clean; `ty check tools/python_health` → "All checks passed!".
+
+NOTE: scope the dogfood `ty` check to `tools/python_health` — a repo-wide `uv run ty check` reports ~48 PRE-EXISTING diagnostics in the existing `vspeech` code that are out of scope for this task (they are surfaced for triage in Task 8, not fixed here).
 
 ```bash
 git add tools/python_health/scripts/health.py tools/python_health/scripts/tests/test_health.py
@@ -807,6 +847,8 @@ Expected: a summary listing all 9 gates. Confirm `pytest-cov` used `--cov=vspeec
 - [ ] **Step 3: Triage the report**
 
 For each non-PASS gate, write down the finding. Auto-fixable drift (ruff) → proceed to Step 4. Substantive findings (ty errors, failing tests, CVEs, lock drift) → list them with a proposed fix; do NOT fix them as part of this task — surface to the user.
+
+EXPECTED pre-existing findings (this validates the premise — surface, do not fix): the `ty` gate will report ~48 diagnostics in the existing `vspeech` code; the `pytest-cov` gate runs the existing suite (some pre-existing failures/warnings possible). The skill's job here is to detect and report these accurately, NOT to clean up the pre-existing codebase. Only ruff format/lint drift is auto-fixed.
 
 - [ ] **Step 4: Run with auto-fix and review the diff**
 
