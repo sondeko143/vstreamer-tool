@@ -244,3 +244,68 @@ def test_derive_targets_from_poetry_packages():
     targets = health.derive_targets(pyproject)
     assert targets.packages == ["proj_pkg"]
     assert targets.project_name == "proj"
+
+
+def test_uv_extra_args_all():
+    assert health.uv_extra_args("all") == ["--all-extras"]
+
+
+def test_uv_extra_args_comma_list():
+    assert health.uv_extra_args("whisper,rvc") == [
+        "--extra",
+        "whisper",
+        "--extra",
+        "rvc",
+    ]
+
+
+def test_uv_extra_args_strips_whitespace_and_blanks():
+    assert health.uv_extra_args(" whisper , , rvc ") == [
+        "--extra",
+        "whisper",
+        "--extra",
+        "rvc",
+    ]
+
+
+def test_uv_extra_args_none_and_empty():
+    assert health.uv_extra_args(None) == []
+    assert health.uv_extra_args("") == []
+
+
+def test_apply_extras_injects_into_uv_run_check_fix_prepare():
+    gate = health.Gate(
+        "ty",
+        "static",
+        ["uv", "run", "ty", "check"],
+        "fixable",
+        fix=["uv", "run", "ruff", "format", "."],
+        prepare=[["uv", "export", "-o", "req.txt"]],
+    )
+    out = health.apply_extras([gate], ["--all-extras"])[0]
+    # injected right after `uv run`
+    assert out.check == ["uv", "run", "--all-extras", "ty", "check"]
+    assert out.fix == ["uv", "run", "--all-extras", "ruff", "format", "."]
+    # `uv export` is not a `uv run`, so it is left untouched
+    assert out.prepare == [["uv", "export", "-o", "req.txt"]]
+
+
+def test_apply_extras_leaves_non_uv_run_commands_untouched():
+    lock = health.Gate("uv-lock-check", "deps", ["uv", "lock", "--check"], "report")
+    audit = health.Gate("pip-audit", "deps", ["uvx", "pip-audit", "-r", "x"], "report")
+    out = health.apply_extras([lock, audit], ["--all-extras"])
+    assert out[0].check == ["uv", "lock", "--check"]  # `uv` but not `uv run`
+    assert out[1].check == ["uvx", "pip-audit", "-r", "x"]  # not `uv` at all
+
+
+def test_apply_extras_handles_none_fix():
+    gate = health.Gate("ty", "static", ["uv", "run", "ty", "check"], "report")
+    out = health.apply_extras([gate], ["--extra", "rvc"])[0]
+    assert out.check == ["uv", "run", "--extra", "rvc", "ty", "check"]
+    assert out.fix is None
+
+
+def test_apply_extras_noop_when_empty():
+    gate = health.Gate("ty", "static", ["uv", "run", "ty", "check"], "report")
+    out = health.apply_extras([gate], [])[0]
+    assert out.check == ["uv", "run", "ty", "check"]
