@@ -27,6 +27,7 @@ class Gate:
     fix: list[str] | None = None
     prepare: list[list[str]] = field(default_factory=list)
     advisory: bool = False
+    summarize: Callable[[str], str] | None = None
 
 
 @dataclass
@@ -40,8 +41,9 @@ class GateResult:
 
 def derive_targets(pyproject: dict) -> Targets:
     project = pyproject.get("project", {})
-    name = str(project.get("name", ""))
     tool = pyproject.get("tool", {})
+    poetry = tool.get("poetry", {})
+    name = str(project.get("name") or poetry.get("name") or "")
     module_name = tool.get("uv", {}).get("build-backend", {}).get("module-name")
 
     packages: list[str] = []
@@ -56,6 +58,12 @@ def derive_targets(pyproject: dict) -> Targets:
             if top and top not in packages:
                 packages.append(top)
 
+    if not packages:
+        for pkg in poetry.get("packages", []):
+            include = pkg.get("include") if isinstance(pkg, dict) else None
+            if include and str(include) not in packages:
+                packages.append(str(include))
+
     if not packages and name:
         packages = [name.replace("-", "_")]
 
@@ -66,7 +74,11 @@ def classify(returncode: int, stdout: str, stderr: str) -> str:
     if returncode == 0:
         return "pass"
     err = (stderr or "").lower()
-    if returncode == 127 or "command not found" in err or "failed to spawn" in err:
+    if (
+        returncode == 127
+        or "command not found" in err
+        or "error: failed to spawn" in err
+    ):
         return "skipped"
     return "fail"
 
@@ -96,6 +108,7 @@ def build_gates(targets: Targets) -> list[Gate]:
             "tests",
             ["uv", "run", "pytest", *cov_args, "--cov-report=term-missing"],
             "report",
+            summarize=_coverage_summary,
         ),
         Gate("uv-lock-check", "deps", ["uv", "lock", "--check"], "report"),
         Gate(
@@ -166,7 +179,8 @@ def run_gate(gate: Gate, run: CommandRunner) -> GateResult:
     status = classify(rc, out, err)
 
     if status == "pass":
-        return GateResult(gate.name, "pass", "ok", advisory=gate.advisory)
+        summary = gate.summarize(out) if gate.summarize else "ok"
+        return GateResult(gate.name, "pass", summary, advisory=gate.advisory)
     if status == "skipped":
         return GateResult(
             gate.name, "skipped", "tool unavailable", err.strip(), gate.advisory
@@ -222,6 +236,11 @@ def parse_coverage(stdout: str) -> float | None:
     return float(match.group(1)) if match else None
 
 
+def _coverage_summary(stdout: str) -> str:
+    cov = parse_coverage(stdout)
+    return f"coverage {cov:g}%" if cov is not None else "ok"
+
+
 def subprocess_runner(cmd: list[str]) -> tuple[int, str, str]:
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -250,6 +269,7 @@ def apply_no_fix(gates: list[Gate]) -> list[Gate]:
             None if g.kind == "fixable" else g.fix,
             g.prepare,
             g.advisory,
+            g.summarize,
         )
         for g in gates
     ]

@@ -208,5 +208,39 @@ def test_apply_no_fix_strips_only_fixable():
 
 def test_classify_skips_on_uv_failed_to_spawn():
     assert health.classify(1, "", "error: Failed to spawn: `ruff`") == "skipped"
-    assert health.classify(2, "", "Failed to spawn: `ty`\n  Caused by: x") == "skipped"
+    assert (
+        health.classify(2, "", "error: Failed to spawn: `ty`\n  Caused by: x")
+        == "skipped"
+    )
     assert health.classify(1, "", "E501 line too long") == "fail"
+
+
+def test_run_gate_reports_coverage_summary_on_pass():
+    gate = health.Gate(
+        "pytest-cov", "tests", ["pytest"], "report", summarize=health._coverage_summary
+    )
+    run = _scripted_runner([(0, "TOTAL  100  20  80%\n", "")])
+    result = health.run_gate(gate, run)
+    assert result.status == "pass"
+    assert "80%" in result.summary
+
+
+def test_apply_no_fix_preserves_summarize():
+    gate = health.Gate(
+        "pytest-cov", "tests", ["pytest"], "report", summarize=health._coverage_summary
+    )
+    out = health.apply_no_fix([gate])
+    assert out[0].summarize is health._coverage_summary
+
+
+def test_parse_coverage_decimal():
+    assert health.parse_coverage("TOTAL  1  2  84.5%\n") == 84.5
+
+
+def test_derive_targets_from_poetry_packages():
+    pyproject = {
+        "tool": {"poetry": {"name": "proj", "packages": [{"include": "proj_pkg"}]}}
+    }
+    targets = health.derive_targets(pyproject)
+    assert targets.packages == ["proj_pkg"]
+    assert targets.project_name == "proj"
