@@ -18,6 +18,8 @@ sneaky case: few paths, but deeply nested.
 
 Override with `--ccn-warn` / `--ccn-high` / `--cog-warn`.
 
+The report labels each function's cyclomatic band — `watch` (ccn > ccn_warn) or `high` (ccn > ccn_high) — surfaced as a `ccn_band` field in `--json` and a "Highest cyclomatic" line in the summary.
+
 ## Why these tools
 
 - **lizard** — actively maintained; own tokenizing parser, so it reads no `pyproject`

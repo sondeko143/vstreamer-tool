@@ -179,6 +179,16 @@ def bucket(m: FunctionMetric, t: Thresholds) -> str:
     return "ok"
 
 
+def ccn_band(m: FunctionMetric, t: Thresholds) -> str:
+    if m.ccn is None:
+        return "n/a"
+    if m.ccn > t.ccn_high:
+        return "high"
+    if m.ccn > t.ccn_warn:
+        return "watch"
+    return "ok"
+
+
 def rank_metrics(metrics_list: list[FunctionMetric]) -> list[FunctionMetric]:
     def key(m: FunctionMetric) -> tuple[int, int]:
         return (
@@ -227,12 +237,20 @@ def render_summary(metrics_list: list[FunctionMetric], t: Thresholds, top: int) 
         )
     if not (both or cog_only or ccn_only):
         lines.append("No functions exceed thresholds — within complexity bands.")
+    high_ccn = [m.function for m in shown if ccn_band(m, t) == "high"]
+    if high_ccn:
+        lines.append(
+            f"Highest cyclomatic (ccn > {t.ccn_high}): " + ", ".join(high_ccn)
+        )
     return "\n".join(lines)
 
 
 def metrics_to_json(metrics_list: list[FunctionMetric], t: Thresholds) -> str:
     ranked = rank_metrics(metrics_list)
-    payload = [{**asdict(m), "bucket": bucket(m, t)} for m in ranked]
+    payload = [
+        {**asdict(m), "bucket": bucket(m, t), "ccn_band": ccn_band(m, t)}
+        for m in ranked
+    ]
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 

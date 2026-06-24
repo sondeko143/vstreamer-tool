@@ -213,3 +213,24 @@ def test_main_runs_advisory_and_returns_zero(tmp_path, capsys, monkeypatch):
     rc = metrics.main(["--root", str(tmp_path)])
     assert rc == 0
     assert "process_command" in capsys.readouterr().out
+
+
+def test_ccn_band_classifies():
+    t = metrics.Thresholds()
+    high = metrics.FunctionMetric("f.py", "a", 1, 21, 1, 1, 5)
+    watch = metrics.FunctionMetric("f.py", "b", 1, 13, 1, 1, 5)
+    ok = metrics.FunctionMetric("f.py", "c", 1, 3, 1, 1, 5)
+    na = metrics.FunctionMetric("f.py", "d", 1, None, None, None, 5)
+    assert metrics.ccn_band(high, t) == "high"
+    assert metrics.ccn_band(watch, t) == "watch"
+    assert metrics.ccn_band(ok, t) == "ok"
+    assert metrics.ccn_band(na, t) == "n/a"
+
+
+def test_render_summary_surfaces_high_ccn_band():
+    lizard = metrics.parse_lizard_csv(LIZARD_CSV)
+    cog = metrics.parse_complexipy_json(COMPLEXIPY_JSON)
+    joined = metrics.join_metrics(lizard, cog)
+    out = metrics.render_summary(joined, metrics.Thresholds(), top=15)
+    assert "Highest cyclomatic (ccn > 20):" in out
+    assert "process_command" in out
