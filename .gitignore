@@ -13,3 +13,8 @@ config*.toml
 key.json
 /tests/assets/voicevox/
 /download-voicevox.exe
+
+# Claude Code: track project skills only; ignore local settings / worktrees / scratch
+.claude/*
+!.claude/skills/
+.superpowers/

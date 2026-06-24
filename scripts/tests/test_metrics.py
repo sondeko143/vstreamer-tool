@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from tools.code_metrics.scripts import metrics
+from scripts import metrics
 
 LIZARD_CSV = (
     '66,21,474,2,66,"process_command@30-95@vspeech\\lib\\command.py",'

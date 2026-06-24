@@ -141,7 +141,7 @@ deadcode = { cmd = "uv run --with vulture vulture vspeech --min-confidence 80", 
 # `code-metrics` skill. Shells out to `uvx lizard` + `uvx complexipy`:
 #   uv run poe metrics          → ranked refactor candidates (cyclomatic + cognitive)
 #   uv run poe metrics --json   → machine-readable
-metrics = { cmd = "python tools/code_metrics/scripts/metrics.py", help = "Rank refactor candidates: lizard CCN + complexipy cognitive (advisory)" }
+metrics = { cmd = "python scripts/metrics.py", help = "Rank refactor candidates: lizard CCN + complexipy cognitive (advisory)" }
 
 [tool.poe.tasks.fix]
 help = "Auto-apply mechanical fixes (ruff format + safe lint fixes)"
