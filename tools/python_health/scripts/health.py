@@ -275,6 +275,50 @@ def apply_no_fix(gates: list[Gate]) -> list[Gate]:
     ]
 
 
+def uv_extra_args(extras: str | None) -> list[str]:
+    """Map an --extras value to uv flags. 'all' -> --all-extras; a comma list
+    like 'whisper,rvc' -> repeated --extra. None/empty -> no flags."""
+    if not extras:
+        return []
+    if extras.strip().lower() == "all":
+        return ["--all-extras"]
+    args: list[str] = []
+    for name in extras.split(","):
+        name = name.strip()
+        if name:
+            args.extend(["--extra", name])
+    return args
+
+
+def _inject_uv_extras(cmd: list[str], extra_args: list[str]) -> list[str]:
+    # Only `uv run <tool>` invocations resolve project imports; inject right
+    # after `run`. `uv lock` / `uv export` / `uvx` don't take extras here.
+    if extra_args and cmd[:2] == ["uv", "run"]:
+        return [*cmd[:2], *extra_args, *cmd[2:]]
+    return cmd
+
+
+def apply_extras(gates: list[Gate], extra_args: list[str]) -> list[Gate]:
+    """Inject uv extras into every `uv run` command (check/fix/prepare) so
+    env-sensitive gates (ty, pytest) resolve optional/GPU backends instead of
+    reporting unresolved-import / collection errors. No-op when extra_args is empty."""
+    if not extra_args:
+        return gates
+    return [
+        Gate(
+            g.name,
+            g.phase,
+            _inject_uv_extras(g.check, extra_args),
+            g.kind,
+            _inject_uv_extras(g.fix, extra_args) if g.fix is not None else None,
+            [_inject_uv_extras(p, extra_args) for p in g.prepare],
+            g.advisory,
+            g.summarize,
+        )
+        for g in gates
+    ]
+
+
 def run_all(
     gates: list[Gate], run: CommandRunner, fail_fast: bool = False
 ) -> list[GateResult]:
@@ -300,12 +344,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--no-fix", action="store_true")
+    parser.add_argument(
+        "--extras",
+        default=None,
+        help=(
+            "uv extras to install for env-sensitive gates (ty, pytest): "
+            "'all' for --all-extras, or a comma list like 'whisper,rvc'. "
+            "Without this, optional/GPU imports surface as false "
+            "unresolved-import / collection errors."
+        ),
+    )
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
     os.chdir(root)
     targets = derive_targets(load_pyproject(root))
     gates = build_gates(targets)
+    if args.extras:
+        gates = apply_extras(gates, uv_extra_args(args.extras))
     if args.no_fix:
         gates = apply_no_fix(gates)
 

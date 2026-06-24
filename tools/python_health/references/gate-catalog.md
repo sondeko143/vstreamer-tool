@@ -14,6 +14,10 @@ Each gate is `(name, phase, check command, kind, advisory)`. `kind=fixable` gate
 | bandit | extra | `uv run --with bandit bandit -q -r <pkg>` | report | security lint; runs under project interpreter so version-specific syntax (e.g. `except*`) parses |
 | vulture | extra | `uv run --with vulture vulture <pkg> --min-confidence 80` | report (advisory) | dead-code; high min-confidence to cut false positives; runs under project interpreter so version-specific syntax (e.g. `except*`) parses |
 
+## Extras injection (`--extras`)
+
+`ty` and `pytest-cov` resolve project imports against the *installed* env, so on projects with optional/GPU extras they report false `unresolved-import` / collection errors unless the extras are present. Pass `--extras all` or `--extras whisper,rvc`; `apply_extras` injects the corresponding `--all-extras` / `--extra NAME` flags **after `uv run`** in every gate's check/fix/prepare command. `uv lock`, `uv export`, and `uvx` invocations are left untouched. Default (no `--extras`) is unchanged behavior — safe on platforms where the extras' wheels don't resolve.
+
 ## Target detection
 
 `derive_targets` discovers which packages to scan in this precedence order:
