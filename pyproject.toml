@@ -68,6 +68,7 @@ dev = [
     "pytest-httpx",
     "ruff>=0.15.17",
     "ty>=0.0.49",
+    "poethepoet>=0.46.0",
 ]
 
 [tool.uv]
@@ -118,3 +119,40 @@ extend-select = ["I", "UP"]
 
 [tool.ruff.lint.isort]
 force-single-line = true
+
+# Health gates, run via poethepoet. The `python-health` skill drives these:
+#   uv run poe check   → run every gate report-only (keeps going on failure)
+#   uv run poe fix     → apply only the mechanical fixes (ruff format + safe lint)
+# On GPU/ML projects, prefix with extras so ty/pytest resolve optional backends:
+#   uv run --all-extras poe check
+[tool.poe.tasks]
+fmt = { cmd = "ruff format .", help = "Apply ruff formatting" }
+fmt-check = { cmd = "ruff format --check .", help = "Check formatting (no writes)" }
+lint = { cmd = "ruff check .", help = "Lint (no writes)" }
+lint-fix = { cmd = "ruff check --fix .", help = "Apply safe lint fixes" }
+type = { cmd = "ty check", help = "Type-check (ty)" }
+test = { cmd = "pytest --cov=vspeech --cov-report=term-missing", help = "Tests + coverage (honors addopts)" }
+lock-check = { cmd = "uv lock --check", help = "Lockfile is in sync with pyproject" }
+audit = { cmd = "uv audit", help = "Dependency vulnerability audit" }
+security = { cmd = "uv run --with bandit bandit -q -r vspeech gui", help = "Security lint (bandit, project interpreter)" }
+deadcode = { cmd = "uv run --with vulture vulture vspeech --min-confidence 80", help = "Dead-code scan (advisory)" }
+
+[tool.poe.tasks.fix]
+help = "Auto-apply mechanical fixes (ruff format + safe lint fixes)"
+sequence = ["fmt", "lint-fix"]
+default_item_type = "ref"
+
+[tool.poe.tasks.check]
+help = "Run every health gate report-only; keeps going if one fails, exits non-zero if any did"
+sequence = [
+    "fmt-check",
+    "lint",
+    "type",
+    "test",
+    "lock-check",
+    "audit",
+    "security",
+    "deadcode",
+]
+default_item_type = "ref"
+ignore_fail = "return_non_zero"
