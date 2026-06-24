@@ -1,3 +1,5 @@
+import json
+
 from tools.code_metrics.scripts import metrics
 
 LIZARD_CSV = (
@@ -9,6 +11,46 @@ LIZARD_CSV = (
     '"vspeech\\worker\\subtitle.py","draw_text","draw_text( s )",41,70\n'
     '5,2,30,1,5,"helper@10-15@vspeech\\lib\\ami.py",'
     '"vspeech\\lib\\ami.py","helper","helper( x )",10,15\n'
+)
+
+COMPLEXIPY_JSON = json.dumps(
+    [
+        {
+            "complexity": 28,
+            "file_name": "command.py",
+            "function_name": "process_command",
+            "path": "vspeech/lib/command.py",
+            "refactor_plans": [],
+        },
+        {
+            "complexity": 3,
+            "file_name": "shared_context.py",
+            "function_name": "operation_to_event",
+            "path": "vspeech/shared_context.py",
+            "refactor_plans": [],
+        },
+        {
+            "complexity": 18,
+            "file_name": "subtitle.py",
+            "function_name": "draw_text",
+            "path": "vspeech/worker/subtitle.py",
+            "refactor_plans": [],
+        },
+        {
+            "complexity": 1,
+            "file_name": "ami.py",
+            "function_name": "helper",
+            "path": "vspeech/lib/ami.py",
+            "refactor_plans": [],
+        },
+        {
+            "complexity": 12,
+            "file_name": "vc.py",
+            "function_name": "RVCModel::orphan",
+            "path": "vspeech/worker/vc.py",
+            "refactor_plans": [],
+        },
+    ]
 )
 
 
@@ -51,3 +93,20 @@ def test_derive_targets_falls_back_to_normalized_name():
     pyproject = {"project": {"name": "my-app"}}
     targets = metrics.derive_targets(pyproject)
     assert targets.packages == ["my_app"]
+
+
+def test_parse_complexipy_json_strips_class_and_normalizes():
+    rows = metrics.parse_complexipy_json(COMPLEXIPY_JSON)
+    assert ("vspeech/worker/vc.py", "orphan", 12) in rows
+    assert ("vspeech/lib/command.py", "process_command", 28) in rows
+
+
+def test_build_cognitive_index_marks_conflicts_ambiguous():
+    rows = [
+        ("a.py", "run", 5),
+        ("a.py", "run", 9),
+        ("b.py", "go", 7),
+    ]
+    index = metrics.build_cognitive_index(rows)
+    assert index[("a.py", "run")] is None  # conflicting -> ambiguous
+    assert index[("b.py", "go")] == 7

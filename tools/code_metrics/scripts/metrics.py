@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -96,3 +97,26 @@ def parse_lizard_csv(text: str) -> list[FunctionMetric]:
             )
         )
     return out
+
+
+def parse_complexipy_json(text: str) -> list[tuple[str, str, int]]:
+    data = json.loads(text)
+    out: list[tuple[str, str, int]] = []
+    for item in data:
+        path = normalize_path(str(item["path"]))
+        name = simple_name(str(item["function_name"]))
+        out.append((path, name, int(item["complexity"])))
+    return out
+
+
+def build_cognitive_index(
+    rows: list[tuple[str, str, int]],
+) -> dict[tuple[str, str], int | None]:
+    index: dict[tuple[str, str], int | None] = {}
+    for path, name, cog in rows:
+        key = (path, name)
+        if key in index and index[key] != cog:
+            index[key] = None  # conflicting same-name entries -> ambiguous
+        elif key not in index:
+            index[key] = cog
+    return index
