@@ -1,0 +1,27 @@
+# Minimal config for startup profiling (used by scripts/startup_capture.py).
+#
+# Goal: reproduce the startup path that matters while stripping machine-specific
+# noise. All workers default to enable=false; this file:
+#   - keeps translation ON so the google-auth get_credentials -> metadata-server
+#     probe runs at worker startup (the known residual startup stall), with no
+#     [gcp] credentials so it falls through to google_auth_default(). No GPU or
+#     audio extras are needed for this.
+#   - leaves transcription OFF so the WHISPER GPU model load (which needs CUDA
+#     and would dominate the profile) is excluded.
+#   - disables telemetry and the log file so SMB/network shares do not skew it.
+#
+# Profile a real config instead with: startup_capture.py --config <path>.
+
+listen_address = "127.0.0.1"
+listen_port = "18099"
+log_file = ""
+log_level = "INFO"
+
+[transcription]
+enable = false
+
+[translation]
+enable = true
+
+[telemetry]
+enable = false

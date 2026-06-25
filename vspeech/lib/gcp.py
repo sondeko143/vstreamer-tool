@@ -54,8 +54,15 @@ def get_id_token_credentials(
         return IDTokenCredentials.from_service_account_info(
             info=decoded, target_audience=""
         )
-    else:
+    elif config.use_ce_credentials:
+        # Constructing CeIdTokenCredentials synchronously probes the GCE
+        # metadata server (metadata.google.internal). On non-GCE hosts that
+        # blocks for several seconds while DNS/connection retries exhaust
+        # before raising TransportError, stalling sender worker startup. Only
+        # pay that cost when the user has explicitly opted into CE credentials.
         try:
             return CeIdTokenCredentials(request=Request(), target_audience="")
         except TransportError:
             return None
+    else:
+        return None
