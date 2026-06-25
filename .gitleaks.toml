@@ -1,0 +1,44 @@
+# gitleaks configuration — secret + environment-PII scanning gate.
+#
+# gitleaks auto-loads this file from the repo root; the pre-commit hook also
+# passes it explicitly (see .pre-commit-config.yaml).
+#
+# WHY custom rules: stock secret scanners detect *credentials* (API keys,
+# tokens, private keys) — NOT the environment-specific identifiers that leaked
+# in this repo's plan/spec docs (private LAN IPs and Windows usernames embedded
+# in absolute paths). `useDefault` keeps the credential coverage; the [[rules]]
+# below add the env-PII coverage. See docs/secret-scanning.md.
+
+title = "vstreamer-tool gitleaks config"
+
+[extend]
+# Keep every built-in gitleaks rule (AWS/GCP keys, generic API tokens,
+# private keys, JWTs, …). Our custom rules are appended to these.
+useDefault = true
+
+[[rules]]
+id = "private-ipv4"
+description = "Private/RFC1918 IPv4 address (LAN topology / environment leak)"
+regex = '''\b(?:10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|172\.(?:1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3})\b'''
+tags = ["env", "pii", "network"]
+
+[[rules]]
+id = "windows-user-home-path"
+description = "Windows home path that reveals a local username (C:\\Users\\<name>, c:/Users/<name>, /c/Users/<name>)"
+regex = '''(?i)(?:[a-z]:[\\/]{1,2}|/[a-z]/)users[\\/]{1,2}[a-z0-9._-]+'''
+tags = ["env", "pii"]
+
+[[rules]]
+id = "amivoice-appkey-inline"
+description = "AmiVoice appkey assigned inline (secrets belong in gitignored config, never committed)"
+regex = '''(?i)appkey\s*[:=]\s*['"][A-Za-z0-9._\-+/=]{20,}['"]'''
+tags = ["secret", "amivoice"]
+
+[allowlist]
+description = "Redaction placeholders and standard Windows accounts that are not leaks"
+# A finding is dropped if its matched value matches any of these.
+regexes = [
+  '''<USER>''',
+  '''<NAS_HOST>''',
+  '''(?i)users[\\/]{1,2}(?:public|default|defaultuser|default user|all users)''',
+]

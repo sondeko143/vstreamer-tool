@@ -42,6 +42,8 @@ make
 
 `config.toml.example` documents every setting; `vspeech/config.py` is the source of truth for defaults and shapes. Config files (`config*.toml`, `config*.json`, `key.json`, `*.log`, `*.wav`) are gitignored.
 
+A **gitleaks pre-commit gate** ([`.gitleaks.toml`](.gitleaks.toml), [`.pre-commit-config.yaml`](.pre-commit-config.yaml)) scans staged changes for secrets **and** environment-PII (private LAN IPs, `C:\Users\<name>` paths, AmiVoice `appkey`). It is local-only; activate with `uv tool install pre-commit && pre-commit install` plus a `gitleaks` binary on PATH. Use `<USER>`/`<NAS_HOST>` placeholders for machine-specific paths/hosts in committed docs. See [docs/secret-scanning.md](docs/secret-scanning.md).
+
 ## Architecture
 
 The system is an **event-driven graph of asyncio workers** connected by queues and a gRPC transport. There are no direct calls between workers — they are wired together only by `EventType` and routing chains.

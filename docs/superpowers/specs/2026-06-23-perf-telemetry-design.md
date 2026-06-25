@@ -47,7 +47,7 @@ message Operand {
 3. push to `main` → GitHub Actions CI が wheel をビルドしリリース（prerelease, tag `main-<sha>`）。
 4. vstreamer-tool の `pyproject.toml:89` の pin URL を新リリースへ更新 → `uv lock`。
 
-> 実装は protos のローカル clone（`c:\Users\me_my\vstreamer\vstreamer-protos`）で行う。`.pyi` も再生成されるので ty は新フィールドを認識する。
+> 実装は protos のローカル clone（`c:\Users\<USER>\vstreamer\vstreamer-protos`）で行う。`.pyi` も再生成されるので ty は新フィールドを認識する。
 
 ## 5. vstreamer-tool 側 設計
 

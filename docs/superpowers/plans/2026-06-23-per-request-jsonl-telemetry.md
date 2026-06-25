@@ -298,7 +298,7 @@ class TelemetryConfig(BaseModel):
 # 1発話ごとの各段所要時間+E2Eを JSONL で記録する出力先。空=無効（既定）。
 # %%Y 等の日付パターン可。Windows/UNC ネットワークパスは TOML の
 # シングルクォート(リテラル文字列)で書くこと（ダブルクォートだと \d 等が壊れる）:
-#   jsonl_path = '\\192.168.138.150\d\vs\tel_%%Y%%m%%d.jsonl'
+#   jsonl_path = '\\<NAS_HOST>\d\vs\tel_%%Y%%m%%d.jsonl'
 jsonl_path = ""
 ```
 
