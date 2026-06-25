@@ -69,6 +69,7 @@ dev = [
     "ruff>=0.15.17",
     "ty>=0.0.49",
     "poethepoet>=0.46.0",
+    "beniget>=0.5.0",
 ]
 
 [tool.uv]
@@ -138,10 +139,11 @@ security = { cmd = "uv run --with bandit bandit -q -r vspeech gui", help = "Secu
 deadcode = { cmd = "uv run --with vulture vulture vspeech --min-confidence 80", help = "Dead-code scan (advisory)" }
 
 # Complexity insight (advisory; separate from the health gates above) — driven by the
-# `code-metrics` skill. Shells out to `uvx lizard` + `uvx complexipy`:
-#   uv run poe metrics          → ranked refactor candidates (cyclomatic + cognitive)
+# `code-metrics` skill. Shells out to `uvx lizard` + `uvx complexipy`, plus an in-process
+# beniget DepDegree (def-use coupling) lens that catches entangled mutable state:
+#   uv run poe metrics          → ranked refactor candidates (cyclomatic + cognitive + dep)
 #   uv run poe metrics --json   → machine-readable
-metrics = { cmd = "python scripts/metrics.py", help = "Rank refactor candidates: lizard CCN + complexipy cognitive (advisory)" }
+metrics = { cmd = "python scripts/metrics.py", help = "Rank refactor candidates: lizard CCN + complexipy cognitive + beniget DepDegree (advisory)" }
 
 # Startup profiling (advisory) — driven by the `startup-profile` skill. Shells out to
 # `uvx py-spy`; the analyzer is pure stdlib. Capture auto-analyzes inline:
