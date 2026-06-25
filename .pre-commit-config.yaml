@@ -1,0 +1,22 @@
+# Local pre-commit gate. See docs/secret-scanning.md for full setup/rationale.
+#
+# One-time activation per clone:
+#   uv tool install pre-commit         # pre-commit is a Python tool (or: pipx install pre-commit)
+#   pre-commit install                 # writes .git/hooks/pre-commit
+#
+# Requires the gitleaks binary on PATH (>= 8.18). No Go/Docker build needed:
+#   winget install gitleaks            # or: scoop install gitleaks
+#
+# NOTE: this is a LOCAL gate only. `git commit --no-verify` bypasses it and
+# there is no server-side enforcement. Treat it as a fast safety net, not a wall.
+#
+# Manual full-tree scan (audit everything, not just staged changes):
+#   gitleaks dir . --config .gitleaks.toml --redact --verbose
+repos:
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: gitleaks (secrets + env-PII scan of staged changes)
+        entry: gitleaks git --pre-commit --redact --staged --verbose --config .gitleaks.toml
+        language: system
+        pass_filenames: false
