@@ -239,9 +239,7 @@ def render_summary(metrics_list: list[FunctionMetric], t: Thresholds, top: int) 
         lines.append("No functions exceed thresholds — within complexity bands.")
     high_ccn = [m.function for m in shown if ccn_band(m, t) == "high"]
     if high_ccn:
-        lines.append(
-            f"Highest cyclomatic (ccn > {t.ccn_high}): " + ", ".join(high_ccn)
-        )
+        lines.append(f"Highest cyclomatic (ccn > {t.ccn_high}): " + ", ".join(high_ccn))
     return "\n".join(lines)
 
 
