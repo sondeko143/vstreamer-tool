@@ -1,0 +1,16 @@
+# Sweep fixture: transcription worker only, worker_type=GCP (the light default).
+# Startup cost = google-cloud-speech + grpc import + google-auth credential
+# resolution (which shells out to `gcloud config get project`).
+# WHISPER would instead pay faster_whisper import + CUDA model load + warmup —
+# far heavier and asset-dependent; switch worker_type to "WHISPER" to measure it.
+listen_address = "127.0.0.1"
+listen_port = "18099"
+log_file = ""
+log_level = "INFO"
+
+[telemetry]
+enable = false
+
+[transcription]
+enable = true
+worker_type = "GCP"

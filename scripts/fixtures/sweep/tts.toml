@@ -1,0 +1,17 @@
+# Sweep fixture: tts worker only, worker_type=VR2 (the default).
+# Startup cost = initializing the VOICEROID2 engine via pyvcroid2
+# (loadLanguage + loadVoice). Requires VOICEROID2 installed locally; without it
+# this config exits early at engine init (still a valid data point).
+# Switch worker_type to "VOICEVOX" to measure the voicevox-core path instead
+# (needs openjtalk_dir / model_dir / onnxruntime_path assets).
+listen_address = "127.0.0.1"
+listen_port = "18099"
+log_file = ""
+log_level = "INFO"
+
+[telemetry]
+enable = false
+
+[tts]
+enable = true
+worker_type = "VR2"

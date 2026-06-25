@@ -1,0 +1,14 @@
+# Sweep fixture: recording worker only (pyaudio input device).
+# Startup cost = pyaudio import + PyAudio() init + opening the default input
+# device. NOTE: once started the worker blocks in stream.read capturing audio;
+# that running cost is not startup (it shows as a long `read` self-time).
+listen_address = "127.0.0.1"
+listen_port = "18099"
+log_file = ""
+log_level = "INFO"
+
+[telemetry]
+enable = false
+
+[recording]
+enable = true

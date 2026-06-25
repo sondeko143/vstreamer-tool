@@ -1,0 +1,14 @@
+# Sweep fixture: translation worker only (google-cloud-translate).
+# Startup cost = google-cloud-translate_v3 + grpc import + google-auth credential
+# resolution (shells out to `gcloud config get project`). This is the canonical
+# "credential subprocess stall" case the skill hunts for.
+listen_address = "127.0.0.1"
+listen_port = "18099"
+log_file = ""
+log_level = "INFO"
+
+[telemetry]
+enable = false
+
+[translation]
+enable = true
