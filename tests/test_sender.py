@@ -192,17 +192,17 @@ def test_dispatch_routes_each_remote_to_own_sender():
     spawned: list[RemoteSender] = []
     output = make_output(
         [
-            [EventAddress(event=EventType.subtitle, remote="//windesk:8080")],
+            [EventAddress(event=EventType.subtitle, remote="//playback-host:8080")],
             [
                 EventAddress(event=EventType.vc, remote="//localhost:8084"),
-                EventAddress(event=EventType.playback, remote="//windesk:8083"),
+                EventAddress(event=EventType.playback, remote="//playback-host:8083"),
             ],
         ]
     )
     _dispatch_output(context, senders, None, spawned.append, output)
-    assert set(senders) == {"//windesk:8080", "//localhost:8084"}
+    assert set(senders) == {"//playback-host:8080", "//localhost:8084"}
     assert len(spawned) == 2
-    sub_cmd = senders["//windesk:8080"].queue.get_nowait()
+    sub_cmd = senders["//playback-host:8080"].queue.get_nowait()
     vc_cmd = senders["//localhost:8084"].queue.get_nowait()
     assert sub_cmd.chains[0].operations[0].operation == SUBTITLE
     assert vc_cmd.chains[0].operations[0].operation == VC

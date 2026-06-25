@@ -17,7 +17,7 @@
 - imports は**一行ずつ**（ruff `force-single-line`）。
 - テストは `tests/`、pytest `asyncio_mode="auto"`（`async def test_...` に装飾不要）。
 - 静的検査: `uv run ruff format .` / `uv run ruff check .` / `uv run ty check` を全 green に保つ。
-- `vstreamer-protos` は外部 wheel。本計画では**ローカル clone**（`c:\Users\me_my\vstreamer\vstreamer-protos`）を編集し、開発中は uv の path source で tool venv に入れる。最終タスクで正式リリース＋pin更新に戻す。
+- `vstreamer-protos` は外部 wheel。本計画では**ローカル clone**（`c:\Users\<USER>\vstreamer\vstreamer-protos`）を編集し、開発中は uv の path source で tool venv に入れる。最終タスクで正式リリース＋pin更新に戻す。
 - `tests/test_event_chains.py` / `tests/test_worker_input.py` はルーティングの load-bearing テスト。trace 追加で**green を維持**すること。
 
 ---
@@ -26,7 +26,7 @@
 
 ### Task 1: protos に trace_id / origin_ts フィールド追加＋スタブ再生成
 
-**Files (リポジトリ `c:\Users\me_my\vstreamer\vstreamer-protos`):**
+**Files (リポジトリ `c:\Users\<USER>\vstreamer\vstreamer-protos`):**
 - Modify: `protos/vstreamer_protos/commander/commander.proto:31-36`
 - Regenerate: `python/vstreamer_protos/commander/commander_pb2.py` / `commander_pb2.pyi` / `commander_pb2_grpc.py`
 
@@ -53,7 +53,7 @@ message Operand {
 protos リポジトリのルートで（grpc_tools を ephemeral に使う）:
 
 ```bash
-cd /c/Users/me_my/vstreamer/vstreamer-protos
+cd /c/Users/<USER>/vstreamer/vstreamer-protos
 uv run --with grpcio-tools==1.* --with protobuf python -m grpc_tools.protoc \
   -Iprotos --python_out=python --pyi_out=python --grpc_python_out=python \
   protos/vstreamer_protos/commander/commander.proto
@@ -64,7 +64,7 @@ Expected: `python/vstreamer_protos/commander/commander_pb2.py` と `commander_pb
 - [ ] **Step 3: フィールド存在を確認**
 
 ```bash
-cd /c/Users/me_my/vstreamer/vstreamer-protos/python
+cd /c/Users/<USER>/vstreamer/vstreamer-protos/python
 uv run --with protobuf python -c "from vstreamer_protos.commander.commander_pb2 import Operand; o=Operand(trace_id='x', origin_ts=1.5); print(o.trace_id, o.origin_ts)"
 ```
 Expected: `x 1.5`
@@ -72,7 +72,7 @@ Expected: `x 1.5`
 - [ ] **Step 4: protos リポジトリでコミット**
 
 ```bash
-cd /c/Users/me_my/vstreamer/vstreamer-protos
+cd /c/Users/<USER>/vstreamer/vstreamer-protos
 git checkout -b feat/trace-fields
 git add protos/ python/
 git commit -m "feat: add trace_id/origin_ts to Operand for telemetry E2E"
@@ -104,7 +104,7 @@ vstreamer-protos = { path = "../vstreamer-protos/python" }
 - [ ] **Step 2: 反映**
 
 ```bash
-cd /c/Users/me_my/vstreamer/vstreamer-tool
+cd /c/Users/<USER>/vstreamer/vstreamer-tool
 uv lock
 uv sync
 ```
@@ -979,7 +979,7 @@ git commit -m "feat(telemetry): emit summary on shutdown; document telemetry con
 - [ ] **Step 1: protos を main へ反映（要ユーザ確認）**
 
 ```bash
-cd /c/Users/me_my/vstreamer/vstreamer-protos
+cd /c/Users/<USER>/vstreamer/vstreamer-protos
 git checkout main && git merge --no-ff feat/trace-fields -m "feat: trace fields for telemetry E2E"
 git push origin main
 ```
@@ -993,7 +993,7 @@ vstreamer-protos = { url = "https://github.com/sondeko143/vstreamer-protos/relea
 ```
 
 ```bash
-cd /c/Users/me_my/vstreamer/vstreamer-tool
+cd /c/Users/<USER>/vstreamer/vstreamer-tool
 uv lock
 # extra も同時に復元（Task 2 の素の uv sync で prune されたため）
 uv sync --extra audio --extra whisper --extra vroid2 --extra voicevox --extra rvc --extra gui

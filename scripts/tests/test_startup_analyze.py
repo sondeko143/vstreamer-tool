@@ -54,7 +54,7 @@ def test_classify_frame_buckets():
 
 def test_classify_unc_path_is_blocking_io():
     assert (
-        sa.classify_frame("write", "\\\\192.168.138.150\\d\\vs\\out.log")
+        sa.classify_frame("write", "\\\\<NAS_HOST>\\d\\vs\\out.log")
         == "blocking-io"
     )
 
