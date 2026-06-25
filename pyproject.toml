@@ -143,6 +143,13 @@ deadcode = { cmd = "uv run --with vulture vulture vspeech --min-confidence 80", 
 #   uv run poe metrics --json   → machine-readable
 metrics = { cmd = "python scripts/metrics.py", help = "Rank refactor candidates: lizard CCN + complexipy cognitive (advisory)" }
 
+# Startup profiling (advisory) — driven by the `startup-profile` skill. Shells out to
+# `uvx py-spy`; the analyzer is pure stdlib:
+#   uv run poe startup-profile                    → capture a speedscope profile of vspeech startup
+#   uv run poe startup-analyze -- --input <file>  → rank where startup time goes (by bucket)
+startup-profile = { cmd = "python scripts/startup_capture.py", help = "Capture a py-spy startup profile of vspeech (advisory)" }
+startup-analyze = { cmd = "python scripts/startup_analyze.py", help = "Rank startup time by bucket from a speedscope profile (advisory)" }
+
 [tool.poe.tasks.fix]
 help = "Auto-apply mechanical fixes (ruff format + safe lint fixes)"
 sequence = ["fmt", "lint-fix"]
