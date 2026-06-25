@@ -1,0 +1,13 @@
+# Sweep fixture: playback worker only (pyaudio output device).
+# Startup cost = pyaudio import + PyAudio() init + resolving the default output
+# device. Needs an output device.
+listen_address = "127.0.0.1"
+listen_port = "18099"
+log_file = ""
+log_level = "INFO"
+
+[telemetry]
+enable = false
+
+[playback]
+enable = true

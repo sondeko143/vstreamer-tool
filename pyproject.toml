@@ -144,10 +144,13 @@ deadcode = { cmd = "uv run --with vulture vulture vspeech --min-confidence 80", 
 metrics = { cmd = "python scripts/metrics.py", help = "Rank refactor candidates: lizard CCN + complexipy cognitive (advisory)" }
 
 # Startup profiling (advisory) — driven by the `startup-profile` skill. Shells out to
-# `uvx py-spy`; the analyzer is pure stdlib:
-#   uv run poe startup-profile                    → capture a speedscope profile of vspeech startup
-#   uv run poe startup-analyze -- --input <file>  → rank where startup time goes (by bucket)
-startup-profile = { cmd = "python scripts/startup_capture.py", help = "Capture a py-spy startup profile of vspeech (advisory)" }
+# `uvx py-spy`; the analyzer is pure stdlib. Capture auto-analyzes inline:
+#   uv run poe startup-profile                    → profile the baseline (all workers off) + rank buckets
+#   uv run poe startup-profile --config <file>    → profile a real config instead
+#   uv run poe startup-sweep                      → baseline + one config per worker, with a comparison table
+#   uv run poe startup-analyze -- --input <file>  → re-rank an existing speedscope profile (by bucket)
+startup-profile = { cmd = "python scripts/startup_capture.py", help = "Capture+analyze a py-spy startup profile of vspeech (advisory)" }
+startup-sweep = { cmd = "python scripts/startup_capture.py --sweep", help = "Profile baseline + each worker and compare startup cost (advisory)" }
 startup-analyze = { cmd = "python scripts/startup_analyze.py", help = "Rank startup time by bucket from a speedscope profile (advisory)" }
 
 [tool.poe.tasks.fix]

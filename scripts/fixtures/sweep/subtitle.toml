@@ -1,0 +1,13 @@
+# Sweep fixture: subtitle worker only (Tkinter overlay window).
+# Startup cost = tkinter import + Tk() root window creation (done synchronously
+# at task-creation time). Needs a display/window station.
+listen_address = "127.0.0.1"
+listen_port = "18099"
+log_file = ""
+log_level = "INFO"
+
+[telemetry]
+enable = false
+
+[subtitle]
+enable = true

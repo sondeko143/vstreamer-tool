@@ -48,8 +48,81 @@ def test_build_pyspy_cmd_native_flag():
     assert "--native" in cmd
 
 
-def test_default_config_is_bundled_fixture():
+def test_default_config_is_baseline_fixture():
     cfg = sc.default_config()
-    assert cfg.name == "minimal_startup.toml"
+    assert cfg.name == "baseline_startup.toml"
     assert cfg.parent.name == "fixtures"
     assert cfg.exists()
+
+
+def test_sweep_fixtures_cover_baseline_plus_six_workers():
+    fixtures = sc.sweep_fixtures()
+    labels = [label for label, _ in fixtures]
+    # baseline first (the reference floor), then the six non-vc workers; vc is
+    # intentionally excluded.
+    assert labels == [
+        "baseline",
+        "recording",
+        "transcription",
+        "subtitle",
+        "translation",
+        "tts",
+        "playback",
+    ]
+    assert "vc" not in labels
+    # every bundled fixture must exist on disk
+    for _label, path in fixtures:
+        assert path.exists(), path
+
+
+def test_dominant_bucket_picks_largest_active_bucket():
+    row = {
+        "active": 3.0,
+        "blocking-io": 2.0,
+        "import": 1.0,
+        "compute": 0.0,
+        "other": 0.0,
+    }
+    assert sc._dominant_bucket(row) == "blocking-io"
+
+
+def test_dominant_bucket_dash_when_no_active_time():
+    row = {
+        "active": 0.0,
+        "blocking-io": 0.0,
+        "import": 0.0,
+        "compute": 0.0,
+        "other": 0.0,
+    }
+    assert sc._dominant_bucket(row) == "-"
+
+
+def test_render_comparison_sorts_by_active_and_lists_configs():
+    rows = [
+        {
+            "label": "baseline",
+            "active": 0.9,
+            "unit": "seconds",
+            "blocking-io": 0.0,
+            "import": 0.7,
+            "compute": 0.0,
+            "other": 0.2,
+        },
+        {
+            "label": "translation",
+            "active": 4.1,
+            "unit": "seconds",
+            "blocking-io": 1.6,
+            "import": 1.9,
+            "compute": 0.0,
+            "other": 0.6,
+        },
+    ]
+    out = sc.render_comparison(rows)
+    assert "translation" in out and "baseline" in out
+    # heaviest config (translation) is listed before the lighter baseline
+    assert out.index("translation") < out.index("baseline")
+
+
+def test_render_comparison_handles_empty():
+    assert "no profiles" in sc.render_comparison([])

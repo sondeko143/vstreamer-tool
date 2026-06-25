@@ -1,0 +1,16 @@
+# Startup-profile BASELINE fixture: every optional worker disabled.
+#
+# Only the always-on infrastructure workers run — `sender` (gRPC client + local
+# dispatcher) and `receiver` (gRPC server). No audio devices, no credentials, no
+# models, no network shares. This is the pure import/infra floor of vspeech
+# startup: whatever time shows up here is paid by *every* configuration.
+#
+# `uv run poe startup-profile` profiles this by default; `uv run poe startup-sweep`
+# uses it as the reference row to subtract from each single-worker config.
+listen_address = "127.0.0.1"
+listen_port = "18099"
+log_file = ""
+log_level = "INFO"
+
+[telemetry]
+enable = false
