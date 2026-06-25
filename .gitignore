@@ -13,6 +13,7 @@ config*.toml
 key.json
 .startup-profiles/
 /tests/assets/voicevox/
+/tests/assets/rvc_golden/
 /download-voicevox.exe
 
 # Claude Code: track project skills only; ignore local settings / worktrees / scratch

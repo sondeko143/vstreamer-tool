@@ -204,6 +204,106 @@ def load_hubert_model(
     return cast(HubertModel, model)
 
 
+def _pad_input_to_block(voice_frames: bytes) -> np.ndarray:
+    input_sound = np.frombuffer(voice_frames, dtype="int16")
+    input_size = input_sound.shape[0]
+    if input_size % 128 != 0:
+        input_size = input_size + (128 - (input_size % 128))
+    audio = input_sound.astype(np.float32) / 32768.0
+    if audio.shape[0] < input_size:
+        audio = np.concatenate([np.zeros([input_size]), audio])
+    return audio
+
+
+def _quality_padding(
+    audio: torch.Tensor,
+    rvc_config: RvcConfig,
+    voice_sample_rate: int,
+    target_sample_rate: int,
+) -> tuple[torch.Tensor, int]:
+    repeat = rvc_config.quality.value
+    quality_padding_sec = (repeat * (audio.shape[1] - 1)) / voice_sample_rate
+    t_pad = round(voice_sample_rate * quality_padding_sec)
+    t_pad_tgt = round(target_sample_rate * quality_padding_sec)
+    audio_pad = functional.pad(audio, (t_pad, t_pad), mode="reflect").squeeze(0)
+    return audio_pad, t_pad_tgt
+
+
+def _extract_hubert_feats(
+    hubert_model: HubertModel,
+    audio_pad: torch.Tensor,
+    device: torch.device,
+    half_available: bool,
+    emb_output_layer: int,
+    use_final_proj: bool,
+) -> torch.Tensor:
+    feats = audio_pad
+    if half_available:
+        feats = feats.half()
+    else:
+        feats = feats.float()
+    if feats.dim() == 2:  # double channels
+        feats = feats.mean(-1)
+    assert feats.dim() == 1, feats.dim()  # nosec B101 - internal shape invariant
+    feats = feats.view(1, -1)
+    feats = extract_features(
+        model=hubert_model,
+        feats=feats,
+        dev=device,
+        emb_output_layer=emb_output_layer,
+        use_final_proj=use_final_proj,
+    )
+    return functional.interpolate(feats.permute(0, 2, 1), scale_factor=2).permute(
+        0, 2, 1
+    )
+
+
+def _select_pitch(
+    audio_pad: torch.Tensor,
+    rvc_config: RvcConfig,
+    f0_enabled: bool,
+    p_len: int,
+    device: torch.device,
+    rmvpe_session: InferenceSession | None,
+) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+    if not f0_enabled:
+        return None, None
+    pitch, pitchf = pitch_extract(
+        audio_pad,
+        rvc_config.f0_up_key,
+        16000,
+        rvc_config.window,
+        f0_extractor=rvc_config.f0_extractor_type,
+        rmvpe_session=rmvpe_session,
+        silence_front=0,
+    )
+    pitch = pitch[:p_len]
+    pitchf = pitchf[:p_len]
+    pitch_t = torch.tensor(pitch, device=device).unsqueeze(0).long()
+    pitchf_t = torch.tensor(pitchf, device=device, dtype=torch.float).unsqueeze(0)
+    return pitch_t, pitchf_t
+
+
+def _is_model_half(session: InferenceSession) -> bool:
+    return session.get_inputs()[0].type != "tensor(float)"
+
+
+def _align_pitch_to_feats(
+    pitch: torch.Tensor | None,
+    pitchf: torch.Tensor | None,
+    feats_len: int,
+) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+    if pitch is not None and pitchf is not None:
+        return pitch[:, -feats_len:], pitchf[:, -feats_len:]
+    return pitch, pitchf
+
+
+def _postprocess(audio1: torch.Tensor, t_pad_tgt: int) -> NDArray[np.int16]:
+    if t_pad_tgt != 0:
+        audio1 = audio1[t_pad_tgt : -1 * t_pad_tgt]
+    return audio1.detach().cpu().numpy()
+
+
 def change_voice(
     voice_frames: bytes,
     half_available: bool,
@@ -219,91 +319,46 @@ def change_voice(
     rmvpe_session: InferenceSession | None,
 ) -> NDArray[np.int16]:
     vc_start_time = time.time()
-    input_sound = np.frombuffer(voice_frames, dtype="int16")
-    input_size = input_sound.shape[0]
-    if input_size % 128 != 0:
-        input_size = input_size + (128 - (input_size % 128))
-
-    audio = input_sound.astype(np.float32) / 32768.0
-    if audio.shape[0] < input_size:
-        audio = np.concatenate([np.zeros([input_size]), audio])
-    audio = torch.from_numpy(audio).to(device=device, dtype=torch.float32)
+    audio_np = _pad_input_to_block(voice_frames)
+    audio = torch.from_numpy(audio_np).to(device=device, dtype=torch.float32)
 
     resampler = get_resampler(voice_sample_rate, 16000, device)
-    audio = resampler(audio)
-    audio = audio.unsqueeze(0)
+    audio = resampler(audio).unsqueeze(0)
 
-    repeat = rvc_config.quality.value
-    quality_padding_sec = (repeat * (audio.shape[1] - 1)) / voice_sample_rate
-    t_pad = round(voice_sample_rate * quality_padding_sec)
-    t_pad_tgt = round(target_sample_rate * quality_padding_sec)
-    audio_pad = functional.pad(audio, (t_pad, t_pad), mode="reflect").squeeze(0)
-    sid = 0
-    sid = torch.tensor(sid, device=device).unsqueeze(0).long()
+    audio_pad, t_pad_tgt = _quality_padding(
+        audio, rvc_config, voice_sample_rate, target_sample_rate
+    )
+    sid = torch.tensor(0, device=device).unsqueeze(0).long()
 
-    f0_up_key = rvc_config.f0_up_key
-
-    feats = audio_pad
-    if half_available:
-        feats = feats.half()
-    else:
-        feats = feats.float()
-    if feats.dim() == 2:  # double channels
-        feats = feats.mean(-1)
-    assert feats.dim() == 1, feats.dim()  # nosec B101 - internal shape invariant
-    feats = feats.view(1, -1)
-
-    feats = extract_features(
-        model=hubert_model,
-        feats=feats,
-        dev=device,
+    feats = _extract_hubert_feats(
+        hubert_model=hubert_model,
+        audio_pad=audio_pad,
+        device=device,
+        half_available=half_available,
         emb_output_layer=emb_output_layer,
         use_final_proj=use_final_proj,
     )
 
-    feats = cast(
-        torch.Tensor,
-        functional.interpolate(feats.permute(0, 2, 1), scale_factor=2).permute(0, 2, 1),
-    )
-
-    # ピッチサイズ調整
     p_len = audio_pad.shape[0] // rvc_config.window
     if feats.shape[1] < p_len:
         p_len = feats.shape[1]
-    if f0_enabled:
-        pitch, pitchf = pitch_extract(
-            audio_pad,
-            f0_up_key,
-            16000,
-            rvc_config.window,
-            f0_extractor=rvc_config.f0_extractor_type,
-            rmvpe_session=rmvpe_session,
-            silence_front=0,
-        )
-        pitch = pitch[:p_len]
-        pitchf = pitchf[:p_len]
-        pitch = torch.tensor(pitch, device=device).unsqueeze(0).long()
-        pitchf = torch.tensor(pitchf, device=device, dtype=torch.float).unsqueeze(0)
-    else:
-        pitch, pitchf = None, None
-    p_len_tensor = torch.tensor([p_len], device=device).long()
+    pitch, pitchf = _select_pitch(
+        audio_pad=audio_pad,
+        rvc_config=rvc_config,
+        f0_enabled=f0_enabled,
+        p_len=p_len,
+        device=device,
+        rmvpe_session=rmvpe_session,
+    )
 
     vc_end_time = time.time()
     logger.info(
         "rvc: pitch size adjusted: elapsed time: %s", vc_end_time - vc_start_time
     )
 
-    # check half-precision
-    first_input_type = session.get_inputs()[0].type
-    if first_input_type == "tensor(float)":
-        is_model_half = False
-    else:
-        is_model_half = True
-
+    is_model_half = _is_model_half(session)
     feats_len = feats.shape[1]
-    if pitch is not None and pitchf is not None:
-        pitch = pitch[:, -feats_len:]
-        pitchf = pitchf[:, -feats_len:]
+    pitch, pitchf = _align_pitch_to_feats(pitch, pitchf, feats_len)
     p_len_tensor = torch.tensor([feats_len], device=device).long()
 
     # 推論実行
@@ -327,11 +382,7 @@ def change_voice(
     vc_end_time = time.time()
     logger.info("rvc: inferred: elapsed time: %s", vc_end_time - vc_start_time)
 
-    if t_pad_tgt != 0:
-        offset = t_pad_tgt
-        end = -1 * t_pad_tgt
-        audio1 = audio1[offset:end]
-
+    result = _postprocess(audio1, t_pad_tgt)
     del pitch, pitchf, sid
     # torch.cuda.empty_cache()
-    return audio1.detach().cpu().numpy()
+    return result
