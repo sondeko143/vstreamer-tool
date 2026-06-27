@@ -152,9 +152,11 @@ def pitch_extract(
         raise ValueError("unknown f0 extractor type")
 
     f0 *= pow(2, f0_up_key / 12)
-    p_len = audio.shape[0] // window
-    pitchf = np.zeros(p_len)
-    pitchf[-f0.shape[0] :] = f0[: pitchf.shape[0]]
+    # f0 is returned raw (f0bak); the caller (_select_pitch) truncates it to
+    # p_len and aligns it to the feature length. rmvpe/harvest/dio all return
+    # >= p_len frames, so the zero-padded right-aligned `pitchf` that used to be
+    # built here was dead code (computed, never returned) and identical to
+    # f0bak[:p_len] for every real input.
     f0bak = f0.copy()
     f0_mel = 1127.0 * np.log(1.0 + f0bak / 700.0)
     f0_mel = np.clip(
