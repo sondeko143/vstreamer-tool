@@ -1,4 +1,7 @@
+import logging
 from uuid import uuid4
+
+from pytest import approx
 
 from vspeech.config import EventType
 from vspeech.config import SampleFormat
@@ -48,3 +51,40 @@ def test_no_origin_skipped():
     cfg = TelemetryConfig()
     e2e = record_playback_e2e(_speech(origin_ts=0.0), now=100.0, cfg=cfg)
     assert e2e is None
+
+
+def test_backlog_above_threshold_is_recorded():
+    # e2e above skew_warn_threshold (10s) but below the hard skew ceiling (60s)
+    # is a playback-backlog / long-utterance tail, NOT clock skew. It must be
+    # recorded so telemetry reflects the real tail latency.
+    telemetry.reset()
+    telemetry.configure(enabled=True, max_samples=100)
+    cfg = TelemetryConfig()
+    e2e = record_playback_e2e(_speech(origin_ts=100.0), now=116.4, cfg=cfg)
+    assert e2e == approx(16.4)
+    assert telemetry.summary()["e2e"]["count"] == 1
+    assert telemetry.summary()["e2e"]["max"] == approx(16.4)
+
+
+def test_backlog_warning_not_labeled_clock_skew(caplog):
+    telemetry.reset()
+    telemetry.configure(enabled=True, max_samples=100)
+    cfg = TelemetryConfig()
+    with caplog.at_level(logging.WARNING):
+        record_playback_e2e(_speech(origin_ts=100.0), now=116.4, cfg=cfg)
+    text = caplog.text
+    assert "clock skew" not in text
+    assert "backlog" in text
+
+
+def test_gross_positive_skew_above_ceiling_not_recorded(caplog):
+    # A huge positive e2e (clock jumped forward) IS skew: drop it and keep
+    # telemetry clean.
+    telemetry.reset()
+    telemetry.configure(enabled=True, max_samples=100)
+    cfg = TelemetryConfig()
+    with caplog.at_level(logging.WARNING):
+        e2e = record_playback_e2e(_speech(origin_ts=100.0), now=170.0, cfg=cfg)
+    assert e2e is None
+    assert "e2e" not in telemetry.summary()
+    assert "clock skew" in caplog.text

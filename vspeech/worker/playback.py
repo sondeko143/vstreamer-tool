@@ -38,13 +38,23 @@ def record_playback_e2e(
     if speech.origin_ts <= 0.0:
         return None
     e2e = now - speech.origin_ts
-    if e2e < 0.0 or e2e > cfg.skew_warn_threshold:
+    if e2e < 0.0 or e2e > cfg.skew_hard_ceiling_sec:
+        # Negative (clock went backwards) or implausibly large: genuine skew.
         logger.warning(
             "clock skew suspected: e2e=%.3fs trace=%s (NTP同期を確認)",
             e2e,
             speech.trace_id,
         )
         return None
+    if e2e > cfg.skew_warn_threshold:
+        # Above the warn threshold but plausible: a long utterance or playback
+        # backlog tail, not skew. Warn, but still record so the telemetry tail
+        # reflects real viewer latency.
+        logger.warning(
+            "high e2e (playback backlog/long utterance): e2e=%.3fs trace=%s",
+            e2e,
+            speech.trace_id,
+        )
     telemetry.record_e2e(e2e, trace_id=speech.trace_id)
     if cfg.log_raw_e2e:
         logger.info("e2e trace=%s %.3fs", speech.trace_id, e2e)
