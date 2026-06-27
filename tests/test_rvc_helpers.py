@@ -36,7 +36,7 @@ def test_pad_input_to_block_already_aligned_no_pad():
 def test_quality_padding_zero_is_noop():
     audio = torch.arange(10, dtype=torch.float32).view(1, -1)
     cfg = RvcConfig(quality=RvcQuality.zero)
-    audio_pad, t_pad_tgt = _quality_padding(audio, cfg, 16000, 40000)
+    audio_pad, t_pad_tgt = _quality_padding(audio, cfg, 40000)
     assert t_pad_tgt == 0
     assert audio_pad.shape == (10,)
     np.testing.assert_array_equal(audio_pad.numpy(), audio.squeeze(0).numpy())
@@ -45,13 +45,23 @@ def test_quality_padding_zero_is_noop():
 def test_quality_padding_positive_reflects():
     audio = torch.arange(10, dtype=torch.float32).view(1, -1)
     cfg = RvcConfig(quality=RvcQuality.one)
-    vsr, tsr = 16000, 40000
-    audio_pad, t_pad_tgt = _quality_padding(audio, cfg, vsr, tsr)
-    sec = (1 * (10 - 1)) / vsr  # repeat=1
-    assert t_pad_tgt == round(tsr * sec)
+    tsr = 40000
+    audio_pad, t_pad_tgt = _quality_padding(audio, cfg, tsr)
+    # input pad is repeat*(N-1) samples at the 16k internal rate
+    assert t_pad_tgt == round(9 * tsr / 16000)
     expected = functional.pad(audio, (9, 9), mode="reflect").squeeze(0)
     np.testing.assert_array_equal(audio_pad.numpy(), expected.numpy())
     assert audio_pad.shape[0] == 10 + 2 * 9
+
+
+def test_quality_padding_output_pad_independent_of_original_rate():
+    # The audio reaching _quality_padding is already resampled to the 16k
+    # internal rate, so the output-side pad must scale by target_sr / 16000 --
+    # the remote's original capture rate must not change it.
+    audio = torch.arange(10, dtype=torch.float32).view(1, -1)
+    cfg = RvcConfig(quality=RvcQuality.one)
+    _, t_pad_tgt = _quality_padding(audio, cfg, 48000)
+    assert t_pad_tgt == round(9 * 48000 / 16000)  # 27, not 54
 
 
 class _FakeInput:

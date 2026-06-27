@@ -20,6 +20,11 @@ from vspeech.config import RvcConfig
 from vspeech.lib.pitch_extract import pitch_extract
 from vspeech.logger import logger
 
+# RVC runs HuBERT and pitch extraction on a fixed 16kHz mono signal; the input
+# is resampled to this rate before feature extraction, so any pad math must use
+# it -- not the remote's original capture rate.
+HUBERT_SAMPLE_RATE = 16000
+
 
 def create_session(model_file: Path, gpu_id: int) -> InferenceSession:
     sess_options = SessionOptions()
@@ -218,13 +223,14 @@ def _pad_input_to_block(voice_frames: bytes) -> np.ndarray:
 def _quality_padding(
     audio: torch.Tensor,
     rvc_config: RvcConfig,
-    voice_sample_rate: int,
     target_sample_rate: int,
 ) -> tuple[torch.Tensor, int]:
+    # `audio` is already at HUBERT_SAMPLE_RATE; pad each side by `repeat` whole
+    # reflections for extra model context and report the matching output-side
+    # pad (at target_sample_rate) for _postprocess to trim.
     repeat = rvc_config.quality.value
-    quality_padding_sec = (repeat * (audio.shape[1] - 1)) / voice_sample_rate
-    t_pad = round(voice_sample_rate * quality_padding_sec)
-    t_pad_tgt = round(target_sample_rate * quality_padding_sec)
+    t_pad = repeat * (audio.shape[1] - 1)
+    t_pad_tgt = round(t_pad * target_sample_rate / HUBERT_SAMPLE_RATE)
     audio_pad = functional.pad(audio, (t_pad, t_pad), mode="reflect").squeeze(0)
     return audio_pad, t_pad_tgt
 
@@ -322,12 +328,10 @@ def change_voice(
     audio_np = _pad_input_to_block(voice_frames)
     audio = torch.from_numpy(audio_np).to(device=device, dtype=torch.float32)
 
-    resampler = get_resampler(voice_sample_rate, 16000, device)
+    resampler = get_resampler(voice_sample_rate, HUBERT_SAMPLE_RATE, device)
     audio = resampler(audio).unsqueeze(0)
 
-    audio_pad, t_pad_tgt = _quality_padding(
-        audio, rvc_config, voice_sample_rate, target_sample_rate
-    )
+    audio_pad, t_pad_tgt = _quality_padding(audio, rvc_config, target_sample_rate)
     sid = torch.tensor(0, device=device).unsqueeze(0).long()
 
     feats = _extract_hubert_feats(
