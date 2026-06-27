@@ -53,10 +53,7 @@ def test_classify_frame_buckets():
 
 
 def test_classify_unc_path_is_blocking_io():
-    assert (
-        sa.classify_frame("write", "\\\\<NAS_HOST>\\d\\vs\\out.log")
-        == "blocking-io"
-    )
+    assert sa.classify_frame("write", "\\\\<NAS_HOST>\\d\\vs\\out.log") == "blocking-io"
 
 
 def test_classify_idle_event_loop_wait():
