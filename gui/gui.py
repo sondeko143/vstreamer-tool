@@ -5,8 +5,8 @@ from logging import Handler
 from logging import LogRecord
 from math import floor
 from pathlib import Path
-from subprocess import Popen
-from subprocess import TimeoutExpired
+from subprocess import Popen  # nosec B404 - launches local vspeech with fixed argv
+from subprocess import TimeoutExpired  # nosec B404 - see Popen import
 from tempfile import NamedTemporaryFile
 from time import sleep
 from tkinter import BOTTOM
@@ -1299,7 +1299,7 @@ class VspeechGUI(Frame):
         temp_config_file_path = Path(temp_config_file.name)
         try:
             self.disable_buttons()
-            self.thread = Popen(
+            self.thread = Popen(  # nosec B603 - fixed argv, no shell, self-created temp config path
                 [
                     sys.executable,
                     "-m",
