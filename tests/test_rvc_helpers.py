@@ -16,14 +16,14 @@ from vspeech.lib.rvc import _select_pitch
 
 
 def test_pad_input_to_block_rounds_up_to_128_and_left_pads():
-    raw = np.arange(1, 201, dtype=np.int16)  # 200 samples; block target is 256
+    raw = np.arange(1, 201, dtype=np.int16)  # 200 samples; next 128-multiple is 256
     out = _pad_input_to_block(raw.tobytes())
-    # Preserved original quirk: when unaligned it PREPENDS `input_size` (256)
-    # zeros to the FULL signal, so the result is 256 + 200 = 456 (it does not
-    # pad *to* 256). The tail holds the original normalized samples.
-    assert out.shape[0] == 456
+    # Left-pads UP TO the next multiple of 128 (256): prepends only the
+    # remainder (56) zeros, NOT a full extra block. Padding more than the
+    # remainder roughly doubles the signal duration (the RVC backlog bug).
+    assert out.shape[0] == 256
+    np.testing.assert_array_equal(out[:56], np.zeros(56))
     np.testing.assert_allclose(out[-200:], raw.astype(np.float32) / 32768.0, rtol=1e-6)
-    np.testing.assert_array_equal(out[:256], np.zeros(256))
 
 
 def test_pad_input_to_block_already_aligned_no_pad():

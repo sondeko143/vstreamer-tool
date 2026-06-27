@@ -211,7 +211,7 @@ def _pad_input_to_block(voice_frames: bytes) -> np.ndarray:
         input_size = input_size + (128 - (input_size % 128))
     audio = input_sound.astype(np.float32) / 32768.0
     if audio.shape[0] < input_size:
-        audio = np.concatenate([np.zeros([input_size]), audio])
+        audio = np.concatenate([np.zeros([input_size - audio.shape[0]]), audio])
     return audio
 
 
