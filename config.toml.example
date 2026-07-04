@@ -71,6 +71,16 @@ target_language_code = "en"
 
 [vc]
 enable = true
+# 入力音声の音量変化（抑揚）を出力へ転写する。既定 true。
+adjust_output_vol_to_input_voice = true
+# 転写の深さ 0(無効)..1(フル)。
+envelope_strength = 1.0
+# 適用ゲインのクランプ（ダック）。RVC 出力は既にフルスケールなので gain は 1.0 以下推奨:
+# max_gain>1 は音の大きい部分を持ち上げて音割れ(クリップ)する。min_gain は無音時の下限。
+min_gain = 0.1
+max_gain = 1.0
+# RMS エンベロープのフレーム長(ms)。小さいほど追従は速いが粗い。
+volume_adjust_window_ms = 25.0
 
 [ami]
 appkey = ""

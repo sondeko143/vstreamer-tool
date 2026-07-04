@@ -1,4 +1,3 @@
-import audioop
 import json
 import time
 from asyncio import CancelledError
@@ -6,12 +5,12 @@ from asyncio import Queue
 from asyncio import TaskGroup
 from asyncio import to_thread
 from audioop import mul
-from collections.abc import Generator
 from collections.abc import Sequence
 from functools import partial
-from math import floor
-from math import sqrt
 from typing import Any
+
+import numpy as np
+from numpy.typing import NDArray
 
 from vspeech.config import EventType
 from vspeech.config import F0ExtractorType
@@ -33,11 +32,6 @@ def record_vc_elapsed(seconds: float, trace_id: str = "") -> None:
     logger.info("rvc elapsed time: %s", seconds)
 
 
-def chunks(data: bytes, chunk_size: int) -> Generator[bytes, bytes, None]:
-    for i in range(0, len(data), chunk_size):
-        yield data[i : i + chunk_size]
-
-
 def check_cuda_provider(providers: Sequence[str]) -> None:
     """Fail loudly if the RVC onnxruntime session fell back to CPU.
 
@@ -52,6 +46,91 @@ def check_cuda_provider(providers: Sequence[str]) -> None:
             "`uv sync --extra rvc` (onnxruntime-gpu); running RVC on CPU is "
             "unusably slow."
         )
+
+
+def _dtype_for_width(width: int) -> np.dtype[Any]:
+    """Signed-integer numpy dtype for a PCM byte-width.
+
+    Matches the integer-PCM assumption of the old audioop path; vc input is
+    INT16 in practice. Note: width==1 is treated as signed int8; unsigned
+    8-bit WAV (bias 128) is not handled (never exercised here).
+    """
+    if width == 1:
+        return np.dtype(np.int8)
+    if width == 2:
+        return np.dtype(np.int16)
+    if width == 4:
+        return np.dtype(np.int32)
+    raise ValueError(f"unsupported input sample width: {width}")
+
+
+def _framewise_rms(samples: NDArray[np.float32], n_frames: int) -> NDArray[np.float64]:
+    """RMS of each of n_frames near-equal contiguous segments of samples."""
+    bounds = np.linspace(0, samples.shape[0], n_frames + 1).astype(np.int64)
+    rms = np.zeros(n_frames, dtype=np.float64)
+    for i in range(n_frames):
+        seg = samples[bounds[i] : bounds[i + 1]]
+        if seg.shape[0]:
+            rms[i] = np.sqrt(np.mean(seg.astype(np.float64) ** 2))
+    return rms
+
+
+def apply_input_envelope(
+    output_i16: NDArray[np.int16],
+    input_pcm: bytes,
+    input_sample_width: int,
+    input_rate: int,
+    window_ms: float,
+    strength: float,
+    min_gain: float,
+    max_gain: float,
+) -> NDArray[np.int16]:
+    """Modulate the RVC output by the input voice's relative loudness envelope.
+
+    The input PCM is reduced to a per-frame RMS envelope normalized by its own
+    mean, so only the *relative* shape survives (mean 1, independent of mic
+    gain). That shape is linearly interpolated to sample resolution and
+    multiplied onto the RVC output as a clamped gain -- overlaying how the
+    speaker's volume rose and fell. It deliberately does NOT divide by the
+    output's own envelope: doing so saturates the gain wherever the output is
+    quiet (pumping the noise floor into "silent" sections) and inverse-weights
+    by output loudness (an audible compressor when max_gain > 1).
+
+    The RVC output is already a full-level int16 signal, so the gain acts as a
+    downward *duck*: with max_gain <= 1 (the default) it can only attenuate,
+    which is clip-free (|out * gain| <= |out|). A max_gain > 1 boosts the loud
+    parts past int16 range and hard-clips them (audible distortion) -- only use
+    it if the RVC output has headroom. Returns the RVC output unchanged when
+    disabled (strength <= 0), when either side is empty, or when the input is
+    effectively silent.
+    """
+    out_len = int(output_i16.shape[0])
+    if out_len == 0 or not input_pcm or strength <= 0.0:
+        return output_i16
+
+    in_i = np.frombuffer(input_pcm, dtype=_dtype_for_width(input_sample_width))
+    if in_i.shape[0] == 0:
+        return output_i16
+    # Absolute scale is irrelevant -- it cancels in the mean-normalization below.
+    in_f = in_i.astype(np.float32)
+
+    frame_len = max(1, round(window_ms * input_rate / 1000.0))
+    n_frames = max(1, in_f.shape[0] // frame_len)
+
+    rms_in = _framewise_rms(in_f, n_frames)
+    mean_in = float(rms_in.mean())
+    if mean_in < 1e-8:
+        return output_i16
+
+    # Input's relative loudness envelope (mean 1), stretched to the output
+    # sample grid by linear interpolation (smooth gain, no per-frame steps).
+    src_x = (np.arange(n_frames) + 0.5) / n_frames
+    dst_x = (np.arange(out_len) + 0.5) / out_len
+    shape_in = np.interp(dst_x, src_x, rms_in / mean_in)
+
+    gain = np.clip(np.power(shape_in, strength), min_gain, max_gain)
+    out_f = output_i16.astype(np.float32)
+    return np.clip(out_f * gain, -32768.0, 32767.0).astype(np.int16)
 
 
 async def rvc_worker(
@@ -112,26 +191,6 @@ async def rvc_worker(
         try:
             logger.debug("voice changing...")
             input_sample_width = get_sample_size(speech.sound.format)
-            if vc_config.adjust_output_vol_to_input_voice:
-                max_possible_val = (2 ** (input_sample_width * 8)) / 2
-                input_vols = [
-                    min(
-                        max(
-                            sqrt(
-                                audioop.rms(chunk, input_sample_width)
-                                / max_possible_val
-                            ),
-                            vc_config.min_volume,
-                        ),
-                        vc_config.max_volume,
-                    )
-                    for chunk in chunks(
-                        speech.sound.data,
-                        chunk_size=floor(vc_config.volume_adjust_window),
-                    )
-                ]
-            else:
-                input_vols = []
             vc_start_time = time.perf_counter()
             audio = await to_thread(
                 change_voice,
@@ -152,28 +211,21 @@ async def rvc_worker(
                 f0_enabled=f0_enabled,
                 rmvpe_session=rmvpe_session,
             )
-            worker_output = WorkerOutput.from_input(speech)
-            if vc_config.adjust_output_vol_to_input_voice and input_vols:
-                raw_frames = audio.tobytes()
-                output_data = b""
-                chunk_size = floor(len(raw_frames) / len(input_vols))
-                if chunk_size % 2 == 1:
-                    chunk_size -= 1
-                output_sample_size = get_sample_size(SampleFormat.INT16)
-                for idx, chunk in enumerate(chunks(raw_frames, chunk_size=chunk_size)):
-                    volume = (
-                        input_vols[idx] if idx < len(input_vols) else input_vols[-1]
-                    )
-                    logger.debug("chunk size: %s x %s", len(chunk), volume)
-                    output_data += audioop.mul(
-                        chunk,
-                        output_sample_size,
-                        volume,
-                    )
-            else:
-                output_data = audio.tobytes()
+            if vc_config.adjust_output_vol_to_input_voice:
+                audio = apply_input_envelope(
+                    audio,
+                    speech.sound.data,
+                    input_sample_width,
+                    input_rate=speech.sound.rate,
+                    window_ms=vc_config.volume_adjust_window_ms,
+                    strength=vc_config.envelope_strength,
+                    min_gain=vc_config.min_gain,
+                    max_gain=vc_config.max_gain,
+                )
+            output_data = audio.tobytes()
             vc_end_time = time.perf_counter()
             record_vc_elapsed(vc_end_time - vc_start_time, trace_id=speech.trace_id)
+            worker_output = WorkerOutput.from_input(speech)
             worker_output.sound = SoundOutput(
                 data=output_data,
                 rate=target_sample_rate,

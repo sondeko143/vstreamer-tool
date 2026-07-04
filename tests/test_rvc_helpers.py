@@ -13,6 +13,7 @@ from vspeech.lib.rvc import _pad_input_to_block
 from vspeech.lib.rvc import _postprocess
 from vspeech.lib.rvc import _quality_padding
 from vspeech.lib.rvc import _select_pitch
+from vspeech.lib.rvc import _to_int16
 
 
 def test_pad_input_to_block_rounds_up_to_128_and_left_pads():
@@ -112,6 +113,22 @@ def test_postprocess_trims_both_ends():
     audio1 = torch.arange(10, dtype=torch.int16)
     out = _postprocess(audio1, 2)
     np.testing.assert_array_equal(out, np.arange(10, dtype=np.int16)[2:-2])
+
+
+def test_to_int16_saturates_out_of_range():
+    # RVC/vocoder output can overshoot +-1.0; the int16 cast MUST clamp first.
+    # An unclamped cast wraps modulo 2**16 (e.g. 1.05 -> -31131), flipping a
+    # peak's sign into a loud click. Clamping saturates to the rail instead.
+    vals = torch.tensor([-1.5, -1.0, 0.0, 1.0, 1.05, 1.5])
+    out = _to_int16(vals)
+    assert out.dtype == torch.int16
+    assert out[2].item() == 0
+    assert out[3].item() == 32767  # 1.0 * 32767.5 -> clamp 32767
+    assert out[4].item() == 32767  # 1.05 would WRAP to -31131 unclamped
+    assert out[5].item() == 32767  # 1.5 saturates high
+    assert out[0].item() == -32768  # -1.5 saturates low
+    # a full block of overshoot must all saturate high, never sign-flip negative
+    assert int(_to_int16(torch.full((64,), 1.3)).min().item()) == 32767
 
 
 def test_select_pitch_disabled_returns_none():

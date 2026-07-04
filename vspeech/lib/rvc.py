@@ -304,6 +304,17 @@ def _align_pitch_to_feats(
     return pitch, pitchf
 
 
+def _to_int16(audio: torch.Tensor) -> torch.Tensor:
+    """Scale a decoder waveform (~[-1, 1]) to int16, saturating out of range.
+
+    RVC/vocoder output is not guaranteed to stay within [-1, 1] (pitch-shifted
+    or loud segments overshoot). Clamp BEFORE the int16 cast: an unclamped cast
+    wraps modulo 2**16, turning a >+1.0 peak into a large negative sample -- a
+    loud click. Clamping saturates to the rail instead.
+    """
+    return torch.clamp(audio * 32767.5, -32768.0, 32767.0).to(dtype=torch.int16)
+
+
 def _postprocess(audio1: torch.Tensor, t_pad_tgt: int) -> NDArray[np.int16]:
     if t_pad_tgt != 0:
         audio1 = audio1[t_pad_tgt : -1 * t_pad_tgt]
@@ -367,7 +378,7 @@ def change_voice(
 
     # 推論実行
     with torch.inference_mode():
-        audio1 = (
+        audio1 = _to_int16(
             infer(
                 session=session,
                 is_half=is_model_half,
@@ -377,8 +388,7 @@ def change_voice(
                 pitchf=pitchf,
                 sid=sid,
             )[0]
-            * 32767.5
-        ).data.to(dtype=torch.int16)
+        )
 
     del feats, p_len_tensor
     # torch.cuda.empty_cache()

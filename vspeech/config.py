@@ -234,9 +234,10 @@ class TranslationConfig(BaseModel):
 class VcConfig(BaseModel):
     enable: bool = False
     adjust_output_vol_to_input_voice: bool = True
-    min_volume: float = 0.1
-    max_volume: float = 1.0
-    volume_adjust_window: int = 160
+    envelope_strength: float = 1.0
+    min_gain: float = 0.1
+    max_gain: float = 1.0
+    volume_adjust_window_ms: float = 25.0
 
 
 class AmiConfig(BaseModel):
