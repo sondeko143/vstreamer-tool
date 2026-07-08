@@ -16,8 +16,9 @@ from numpy.typing import NDArray
 if TYPE_CHECKING:
     from onnxruntime import InferenceSession
 
-# Silero VAD v5 operates on 16kHz mono, 512-sample (32ms) windows, with a
-# 64-sample context carried between windows and a (2, 1, 128) recurrent state.
+# Silero VAD v5/v6 share this contract: 16kHz mono, 512-sample (32ms) windows,
+# with a 64-sample context carried between windows and a (2, 1, 128) recurrent
+# state. This module pins the v6.2.1 model.
 VAD_SAMPLE_RATE = 16000
 VAD_WINDOW_SAMPLES = 512
 _CONTEXT_SAMPLES = 64
@@ -77,12 +78,12 @@ def apply_vad_gate(
 
 
 def create_vad_session(model_file: Path) -> "InferenceSession":
-    """Build a CPU onnxruntime session for the Silero VAD v5 model.
+    """Build a CPU onnxruntime session for the Silero VAD model (v6.2.1).
 
-    Fails loudly on a missing file or a non-v5 model: silently passing audio
-    through would mean the noise the gate exists to stop comes back unnoticed.
-    CPU is deliberate -- the model is ~2MB and must not contend with RVC for
-    the GPU.
+    Fails loudly on a missing file or a model lacking the shared v5/v6
+    state-input contract: silently passing audio through would mean the noise
+    the gate exists to stop comes back unnoticed. CPU is deliberate -- the
+    model is ~2MB and must not contend with RVC for the GPU.
     """
     from onnxruntime import GraphOptimizationLevel
     from onnxruntime import InferenceSession
@@ -92,7 +93,7 @@ def create_vad_session(model_file: Path) -> "InferenceSession":
     if not path.is_file():
         raise FileNotFoundError(
             f"Silero VAD model not found: {path}. Download silero_vad.onnx"
-            " (v5) from the snakers4/silero-vad repository and set"
+            " (v6.2.1) from the snakers4/silero-vad repository and set"
             " vc.vad_model_file."
         )
     sess_options = SessionOptions()
@@ -105,7 +106,7 @@ def create_vad_session(model_file: Path) -> "InferenceSession":
     input_names = {i.name for i in session.get_inputs()}
     if "state" not in input_names:
         raise ValueError(
-            f"{path} does not look like a Silero VAD v5 model (inputs:"
+            f"{path} does not look like a Silero VAD v5/v6 model (inputs:"
             f" {sorted(input_names)}); v4 models (h/c inputs) are unsupported."
         )
     return session
@@ -114,7 +115,7 @@ def create_vad_session(model_file: Path) -> "InferenceSession":
 def speech_probs(session: Any, audio_16k: NDArray[np.float32]) -> NDArray[np.float64]:
     """Per-window speech probabilities for a 16kHz float32 chunk.
 
-    Replicates the silero-vad v5 wrapper: 512-sample windows, each prefixed
+    Replicates the silero-vad v5/v6 wrapper: 512-sample windows, each prefixed
     with the previous window's last 64 samples (zeros for the first), with
     the recurrent state threaded through and reset per chunk. The tail
     window is zero-padded. `session` is an onnxruntime InferenceSession

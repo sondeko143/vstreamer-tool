@@ -84,7 +84,7 @@ volume_adjust_window_ms = 25.0
 # Silero VAD ノイズゲート (opt-in)。非音声チャンクは RVC 推論ごとスキップし、
 # 発話内の非音声区間 (ブレス・環境音) は出力をダックする。
 vad_gate = false
-# snakers4/silero-vad リポジトリの silero_vad.onnx (v5) を取得してパスを指定する。
+# snakers4/silero-vad リポジトリの silero_vad.onnx (v6.2.1) を取得してパスを指定する。
 # vad_model_file = "./silero_vad.onnx"
 # speech 確率の閾値。窓 (32ms) ごとにこれ以上で speech 扱い。
 vad_threshold = 0.5
