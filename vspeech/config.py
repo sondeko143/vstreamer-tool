@@ -238,6 +238,12 @@ class VcConfig(BaseModel):
     min_gain: float = 0.1
     max_gain: float = 1.0
     volume_adjust_window_ms: float = 25.0
+    vad_gate: bool = False
+    vad_model_file: Path = Field(default=Path())
+    vad_threshold: float = 0.5
+    vad_min_speech_ratio: float = 0.1
+    vad_speech_pad_ms: float = 100.0
+    vad_min_gain: float = 0.0
 
 
 class AmiConfig(BaseModel):

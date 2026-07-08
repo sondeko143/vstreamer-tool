@@ -81,6 +81,19 @@ min_gain = 0.1
 max_gain = 1.0
 # RMS エンベロープのフレーム長(ms)。小さいほど追従は速いが粗い。
 volume_adjust_window_ms = 25.0
+# Silero VAD ノイズゲート (opt-in)。非音声チャンクは RVC 推論ごとスキップし、
+# 発話内の非音声区間 (ブレス・環境音) は出力をダックする。
+vad_gate = false
+# snakers4/silero-vad リポジトリの silero_vad.onnx (v5) を取得してパスを指定する。
+# vad_model_file = "./silero_vad.onnx"
+# speech 確率の閾値。窓 (32ms) ごとにこれ以上で speech 扱い。
+vad_threshold = 0.5
+# speech 窓の割合がこれ未満のチャンクは RVC をスキップ (playback に何も流れない)。
+vad_min_speech_ratio = 0.1
+# speech 区間の前後をこの ms だけ開けておく (子音の頭・語尾の食われ防止)。
+vad_speech_pad_ms = 100.0
+# 非音声区間の出力ゲイン。0.0 = 完全ミュート。
+vad_min_gain = 0.0
 
 [ami]
 appkey = ""

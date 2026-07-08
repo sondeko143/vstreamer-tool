@@ -20,6 +20,12 @@ from vspeech.config import VcConfig
 from vspeech.config import get_sample_size
 from vspeech.exceptions import shutdown_worker
 from vspeech.lib.telemetry import telemetry
+from vspeech.lib.vad import VAD_SAMPLE_RATE
+from vspeech.lib.vad import apply_vad_gate
+from vspeech.lib.vad import create_vad_session
+from vspeech.lib.vad import should_skip_vc
+from vspeech.lib.vad import speech_gate_mask
+from vspeech.lib.vad import speech_probs
 from vspeech.logger import logger
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import SoundOutput
@@ -133,6 +139,30 @@ def apply_input_envelope(
     return np.clip(out_f * gain, -32768.0, 32767.0).astype(np.int16)
 
 
+def _input_as_float32_16k(
+    data: bytes, sample_width: int, rate: int
+) -> NDArray[np.float32]:
+    """Decode integer PCM to float32 in [-1, 1] at the VAD rate.
+
+    torch/torchaudio are imported only on the resample path so this stays
+    usable (and testable) in environments without the rvc extra when the
+    input is already 16kHz.
+    """
+    scale = float(2 ** (8 * sample_width - 1))
+    audio = (
+        np.frombuffer(data, dtype=_dtype_for_width(sample_width)).astype(np.float32)
+        / scale
+    )
+    if rate == VAD_SAMPLE_RATE:
+        return audio
+    import torch
+
+    from vspeech.lib.rvc import get_resampler
+
+    resampler = get_resampler(rate, VAD_SAMPLE_RATE, torch.device("cpu"))
+    return resampler(torch.from_numpy(audio)).numpy()
+
+
 async def rvc_worker(
     rvc_config: RvcConfig,
     vc_config: VcConfig,
@@ -159,6 +189,11 @@ async def rvc_worker(
         rmvpe_session = create_rmvpe_session(rvc_config.rmvpe_model_file, device.index)
     else:
         rmvpe_session = None
+    if vc_config.vad_gate:
+        vad_session = create_vad_session(vc_config.vad_model_file)
+        logger.info("vad gate enabled: %s", vc_config.vad_model_file)
+    else:
+        vad_session = None
     modelmeta: Any = session.get_modelmeta()
     metadata: dict[str, Any] = json.loads(modelmeta.custom_metadata_map["metadata"])
     target_sample_rate = metadata["samplingRate"]
@@ -191,6 +226,37 @@ async def rvc_worker(
         try:
             logger.debug("voice changing...")
             input_sample_width = get_sample_size(speech.sound.format)
+            vad_gains: NDArray[np.float64] | None = None
+            if vad_session is not None:
+                try:
+                    audio_16k = _input_as_float32_16k(
+                        speech.sound.data, input_sample_width, speech.sound.rate
+                    )
+                    probs = await to_thread(speech_probs, vad_session, audio_16k)
+                    skip, speech_ratio = should_skip_vc(
+                        probs,
+                        vc_config.vad_threshold,
+                        vc_config.vad_min_speech_ratio,
+                    )
+                    if skip:
+                        telemetry.record(
+                            "vc_skip", speech_ratio, trace_id=speech.trace_id
+                        )
+                        logger.info(
+                            "vc skipped: speech ratio %.3f < %.3f",
+                            speech_ratio,
+                            vc_config.vad_min_speech_ratio,
+                        )
+                        continue
+                    vad_gains = speech_gate_mask(
+                        probs,
+                        vc_config.vad_threshold,
+                        vc_config.vad_speech_pad_ms,
+                        vc_config.vad_min_gain,
+                    )
+                except Exception as e:
+                    logger.warning("vad gate failed; passing chunk ungated: %s", e)
+                    vad_gains = None
             vc_start_time = time.perf_counter()
             audio = await to_thread(
                 change_voice,
@@ -222,6 +288,8 @@ async def rvc_worker(
                     min_gain=vc_config.min_gain,
                     max_gain=vc_config.max_gain,
                 )
+            if vad_gains is not None:
+                audio = apply_vad_gate(audio, vad_gains)
             output_data = audio.tobytes()
             vc_end_time = time.perf_counter()
             record_vc_elapsed(vc_end_time - vc_start_time, trace_id=speech.trace_id)

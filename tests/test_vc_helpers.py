@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+from vspeech.worker.vc import _input_as_float32_16k
 from vspeech.worker.vc import apply_input_envelope
 from vspeech.worker.vc import check_cuda_provider
 
@@ -155,3 +156,10 @@ def test_vc_config_envelope_defaults():
     assert cfg.min_gain == 0.1
     assert cfg.max_gain == 1.0
     assert cfg.volume_adjust_window_ms == 25.0
+
+
+def test_input_as_float32_16k_scales_int16_without_resample():
+    samples = np.array([0, 16384, -16384, 32767], dtype=np.int16)
+    res = _input_as_float32_16k(samples.tobytes(), 2, 16000)
+    assert res.dtype == np.float32
+    np.testing.assert_allclose(res, [0.0, 0.5, -0.5, 32767 / 32768], atol=1e-6)
