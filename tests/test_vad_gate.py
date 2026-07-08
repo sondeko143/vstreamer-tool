@@ -124,6 +124,8 @@ requires_vad_model = pytest.mark.skipif(
 
 @requires_vad_model
 def test_real_model_silence_and_noise_score_low():
+    # Targets Silero VAD v6.2.1 (shares the v5 state-input contract). v6 scores
+    # silence/noise even lower than v5, so these loose upper bounds still hold.
     pytest.importorskip("onnxruntime")
     from vspeech.lib.vad import create_vad_session
 
