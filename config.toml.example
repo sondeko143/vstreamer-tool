@@ -130,7 +130,8 @@ onnxruntime_path = "./voicevox/onnxruntime/lib/voicevox_onnxruntime.dll"
 
 [rvc]
 model_file = "./dummy_simple.onnx"
-hubert_model_file = "./hubert_base.pt"
+# scripts/convert_hubert.py が出力した変換済み ContentVec 資産ディレクトリ（旧: hubert_base.pt）
+hubert_model_file = "./hubert_contentvec"
 f0_up_key = 12
 window = 160
 quality = 0

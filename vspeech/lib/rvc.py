@@ -1,20 +1,21 @@
+import json
 import time
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from typing import cast
 
-import fairseq.data.dictionary
 import numpy as np
 import torch
 import torchaudio.transforms as T
-from fairseq import checkpoint_utils
-from fairseq.models.hubert import HubertModel
 from numpy.typing import NDArray
 from onnxruntime import GraphOptimizationLevel
 from onnxruntime import InferenceSession
 from onnxruntime import SessionOptions
+from safetensors.torch import load_file
 from torch.nn import functional
+from transformers import HubertModel
 
 from vspeech.config import RvcConfig
 from vspeech.lib.pitch_extract import pitch_extract
@@ -24,6 +25,19 @@ from vspeech.logger import logger
 # is resampled to this rate before feature extraction, so any pad math must use
 # it -- not the remote's original capture rate.
 HUBERT_SAMPLE_RATE = 16000
+
+
+@dataclass
+class HubertBundle:
+    """変換済み ContentVec 資産の runtime 表現。
+
+    `final_proj` は資産に含まれていれば読む。RVC モデルのメタデータ `useFinalProj`
+    が真のときだけ使われるため、ロード時点では必須にできない（不在は正当な構成）。
+    """
+
+    model: HubertModel
+    final_proj: torch.nn.Linear | None
+    layer_offset: int
 
 
 def create_session(model_file: Path, gpu_id: int) -> InferenceSession:
@@ -72,26 +86,26 @@ def get_resampler(orig_freq: int, new_freq: int, device: torch.device):
 
 
 def extract_features(
-    model: HubertModel,
+    model: HubertBundle,
     feats: torch.Tensor,
     dev: torch.device,
     emb_output_layer: int = 9,
     use_final_proj: bool = True,
 ) -> torch.Tensor:
-    padding_mask = torch.zeros(feats.shape, dtype=torch.bool, device=dev)
-    inputs = {
-        "source": feats.to(dev),
-        "padding_mask": padding_mask,
-        "output_layer": emb_output_layer,
-    }
-
     with torch.inference_mode():
-        logits = model.extract_features(**inputs)  # type: ignore
+        # fairseq の padding_mask (True=パディング) と transformers の attention_mask
+        # (1=有効) は意味が反転している。ここは常にパディング無しなので何も渡さない
+        # (= 全フレーム有効) のが等価。
+        outputs = model.model(input_values=feats.to(dev), output_hidden_states=True)
+        hidden = outputs.hidden_states[emb_output_layer + model.layer_offset]
         if use_final_proj:
-            feats = model.final_proj(logits[0])  # type: ignore
-        else:
-            feats = logits[0]
-    return feats
+            if model.final_proj is None:
+                raise RuntimeError(
+                    "RVC モデルが useFinalProj=True を要求していますが、変換済み資産に "
+                    "final_proj.safetensors がありません"
+                )
+            hidden = model.final_proj(hidden)
+    return hidden
 
 
 def infer(
@@ -188,25 +202,47 @@ def infer(
 
 def load_hubert_model(
     file_name: Path, device: torch.device, is_half: bool
-) -> HubertModel:
-    torch.serialization.add_safe_globals([fairseq.data.dictionary.Dictionary])
-    models, _, _ = checkpoint_utils.load_model_ensemble_and_task(
-        [str(file_name.expanduser())],
-        suffix="",
-    )
-    model = cast(HubertModel, models[0])
-    model.eval()
+) -> HubertBundle:
+    """変換済み ContentVec 資産ディレクトリを読む（scripts/convert_hubert.py の出力）。"""
+    asset_dir = file_name.expanduser()
 
+    # torch.compile は使わない。旧 fairseq 実装では OptimizedModule が forward/__call__ しか
+    # 包まないため `model.extract_features(...)` が素通しされ、コンパイルは一度も走っていなかった。
+    # transformers 版は __call__ を呼ぶので本当にコンパイルされ、Triton の無い Windows/CUDA では
+    # TritonMissing で落ちる。旧実装の実効挙動（eager）に合わせる。
+    # 資産は scripts/convert_hubert.py が出力したローカルディレクトリで、Hub からは一切取得しない。
+    # local_files_only=True でそれを強制する（B615 の revision ピンは Hub 取得時のみ意味を持つ）。
+    model = HubertModel.from_pretrained(  # nosec B615 - local dir only, no Hub download
+        asset_dir, local_files_only=True
+    )
+    model.eval()
     model = model.to(device)
     if is_half:
         model = model.half()
 
-    try:
-        model = torch.compile(model, dynamic=True, mode="max-autotune")
-    except Exception as e:
-        logger.warning("torch.compileの適用をスキップしました: %s", e)
+    with open(asset_dir / "mapping.json", encoding="utf-8") as f:
+        layer_offset = int(json.load(f)["layer_offset"])
 
-    return cast(HubertModel, model)
+    final_proj: torch.nn.Linear | None = None
+    final_proj_path = asset_dir / "final_proj.safetensors"
+    if final_proj_path.exists():
+        tensors = load_file(str(final_proj_path))
+        weight = tensors["weight"]
+        bias = tensors["bias"]
+        final_proj = torch.nn.Linear(weight.shape[1], weight.shape[0])
+        with torch.no_grad():
+            final_proj.weight.copy_(weight)
+            final_proj.bias.copy_(bias)
+        final_proj.eval()
+        final_proj = final_proj.to(device)
+        if is_half:
+            final_proj = final_proj.half()
+
+    return HubertBundle(
+        model=cast(HubertModel, model),
+        final_proj=final_proj,
+        layer_offset=layer_offset,
+    )
 
 
 def _pad_input_to_block(voice_frames: bytes) -> np.ndarray:
@@ -236,7 +272,7 @@ def _quality_padding(
 
 
 def _extract_hubert_feats(
-    hubert_model: HubertModel,
+    hubert_model: HubertBundle,
     audio_pad: torch.Tensor,
     device: torch.device,
     half_available: bool,
@@ -330,7 +366,7 @@ def change_voice(
     device: torch.device,
     emb_output_layer: int,
     use_final_proj: bool,
-    hubert_model: HubertModel,
+    hubert_model: HubertBundle,
     session: InferenceSession,
     f0_enabled: bool,
     rmvpe_session: InferenceSession | None,

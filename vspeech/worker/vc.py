@@ -198,9 +198,9 @@ async def rvc_worker(
     metadata: dict[str, Any] = json.loads(modelmeta.custom_metadata_map["metadata"])
     target_sample_rate = metadata["samplingRate"]
     f0_enabled = metadata["f0"]
-    # Warm up: pay the torch.compile (max-autotune) and onnxruntime graph-build
-    # cost at startup. The first real inference would otherwise stall for
-    # seconds (observed up to ~145s) while these compile lazily.
+    # Warm up: pay the onnxruntime graph-build / CUDA kernel autotune cost at
+    # startup. The first real inference would otherwise stall for seconds
+    # (observed up to ~145s) while these build lazily.
     try:
         await to_thread(
             change_voice,

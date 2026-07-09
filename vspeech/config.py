@@ -332,7 +332,10 @@ class F0ExtractorType(Enum):
 class RvcConfig(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     model_file: Path = Field(default=Path())
-    hubert_model_file: Path = Field(default=Path())
+    hubert_model_file: Path = Field(
+        default=Path(),
+        description="scripts/convert_hubert.py が出力した変換済み ContentVec 資産ディレクトリ",
+    )
     f0_up_key: int = Field(default=0)
     window: int = Field(default=160)
     quality: RvcQuality = Field(default=RvcQuality.zero)

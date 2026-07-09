@@ -20,3 +20,8 @@ key.json
 .claude/*
 !.claude/skills/
 .superpowers/
+
+# HuBERT 変換済み資産と golden 捕獲（派生物・大容量）
+hubert_contentvec/
+hubert_golden/
+tests/assets/hubert_golden/

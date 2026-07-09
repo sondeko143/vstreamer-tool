@@ -32,19 +32,29 @@ whisper = [
     "faster-whisper==1.2.1",
     "torch ; sys_platform == 'win32'",
     "onnxruntime-gpu>=1.24.4,<2",
-    "numpy>=1.18,<1.24",
+    "numpy>=1.23,<2",
 ]
 rvc = [
     "torch ; sys_platform == 'win32'",
-    "fairseq ; sys_platform == 'win32'",
+    "transformers>=4.44,<5",
     "pyworld>=0.3.3,<0.4",
     "faiss-cpu>=1.7.2,<2 ; sys_platform == 'win32'",
     "onnxruntime-gpu>=1.24.4,<2",
     "torchaudio ; sys_platform == 'win32'",
-    "numpy>=1.18,<1.24",
+    "numpy>=1.23,<2",
     "scipy>=1.10.1,<2",
 ]
 mozc = ["mozcpy>=0.1.1,<0.2"]
+# HuBERT 変換ツール専用（scripts/convert_hubert.py）。runtime には含めない。
+# fairseq 0.12.2 は numpy>=1.24 で撤去された旧エイリアスを使うため <1.24 を保持する。
+# uv は 1 環境に numpy を 1 版しか解決しないので、rvc とは別の使い捨て 3.11 環境で使うこと。
+convert = [
+    "fairseq ; sys_platform == 'win32'",
+    "torch ; sys_platform == 'win32'",
+    "torchaudio ; sys_platform == 'win32'",
+    "transformers>=4.44,<5",
+    "numpy>=1.18,<1.24",
+]
 vroid2 = ["pyvcroid2 ; sys_platform == 'win32'"]
 audio = ["PyAudio>=0.2.13,<0.3"]
 gui = [
