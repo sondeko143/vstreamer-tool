@@ -40,23 +40,28 @@ def _tiny_config() -> HubertConfig:
     )
 
 
-@pytest.fixture
-def asset_dir(tmp_path):
-    """Task 3 の変換ツールが書き出すのと同じレイアウトの合成資産。"""
+def _write_asset(path, layer_offset: int):
+    """scripts/convert_hubert.py が書き出すのと同じレイアウトの合成資産を作る。"""
     torch.manual_seed(0)
     model = HubertModel(_tiny_config())
     model.eval()
-    model.save_pretrained(tmp_path)
+    model.save_pretrained(path)
     save_file(
         {
             "weight": torch.randn(PROJ_OUT, HIDDEN).contiguous(),
             "bias": torch.randn(PROJ_OUT).contiguous(),
         },
-        str(tmp_path / "final_proj.safetensors"),
+        str(path / "final_proj.safetensors"),
     )
-    with open(tmp_path / "mapping.json", "w", encoding="utf-8") as f:
-        json.dump({"layer_offset": 0, "num_hidden_layers": NUM_LAYERS}, f)
-    return tmp_path
+    with open(path / "mapping.json", "w", encoding="utf-8") as f:
+        json.dump({"layer_offset": layer_offset, "num_hidden_layers": NUM_LAYERS}, f)
+    return path
+
+
+@pytest.fixture
+def asset_dir(tmp_path):
+    """実資産と同じ layer_offset=0 の合成資産。"""
+    return _write_asset(tmp_path, layer_offset=0)
 
 
 def _wav() -> torch.Tensor:
@@ -112,6 +117,39 @@ def test_extract_features_selects_the_requested_layer(asset_dir):
         bundle, wav, torch.device("cpu"), emb_output_layer=2, use_final_proj=False
     )
     assert torch.allclose(out, expected, atol=1e-6)
+
+
+def test_extract_features_applies_a_nonzero_layer_offset(tmp_path):
+    """mapping.json の layer_offset を実際に足していること。
+
+    実資産の offset は 0 なので、`hidden_states[emb + model.layer_offset]` から
+    `+ model.layer_offset` を落とす退行は他のどのテストでも捕まらない（両辺が
+    一致してしまう）。ここだけが off-by-one を固定している。
+    """
+    from vspeech.lib.rvc import extract_features
+    from vspeech.lib.rvc import load_hubert_model
+
+    asset = _write_asset(tmp_path, layer_offset=1)
+    bundle = load_hubert_model(asset, torch.device("cpu"), is_half=False)
+    assert bundle.layer_offset == 1
+
+    wav = _wav()
+    with torch.inference_mode():
+        hidden_states = bundle.model(
+            input_values=wav, output_hidden_states=True
+        ).hidden_states
+
+    # このテストが空虚でないこと: 隣接層が十分に異なると確認してから比較する。
+    drift = (hidden_states[3] - hidden_states[2]).abs().max().item()
+    assert drift > 1e-3, f"adjacent layers too similar to detect a regression: {drift}"
+
+    out = extract_features(
+        bundle, wav, torch.device("cpu"), emb_output_layer=2, use_final_proj=False
+    )
+    # emb_output_layer(2) + layer_offset(1) == 3
+    assert torch.allclose(out, hidden_states[3], atol=1e-6)
+    # offset を無視する実装は hidden_states[2] を返す。
+    assert not torch.allclose(out, hidden_states[2], atol=1e-3)
 
 
 def test_extract_features_raises_when_final_proj_missing(asset_dir):
