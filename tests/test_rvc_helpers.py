@@ -181,3 +181,29 @@ def test_ort_output_to_torch_falls_back_to_numpy():
     assert out.shape == (1, 2, 3)
     assert out.dtype == torch.float32
     assert out[0, 1, 2].item() == 5.0
+
+
+def test_create_session_uses_cpu_ep_for_a_cpu_device(tmp_path, monkeypatch):
+    """CUDA が使えても device が CPU なら CUDA EP を積まないこと。
+
+    以前は torch.cuda.is_available() だけで判定しており、config で CPU を指定しても
+    GPU で走っていた。fp32 等価ゲートはこの差 (TF32, max_abs 2.6e-3) で落ちる。
+    """
+    import torch
+
+    import vspeech.lib.rvc as rvc
+
+    captured: dict = {}
+
+    def fake_session(path, sess_options, providers, provider_options):
+        captured["providers"] = providers
+        return object()
+
+    monkeypatch.setattr(rvc, "InferenceSession", fake_session)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+
+    rvc.create_session(tmp_path / "m.onnx", torch.device("cpu"))
+    assert captured["providers"] == ["CPUExecutionProvider"]
+
+    rvc.create_session(tmp_path / "m.onnx", torch.device("cuda", 0))
+    assert captured["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]

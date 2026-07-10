@@ -101,17 +101,22 @@ class HubertSession:
     is_half: bool
 
 
-def create_session(model_file: Path, gpu_id: int) -> InferenceSession:
+def create_session(model_file: Path, device: torch.device) -> InferenceSession:
+    """`device` を尊重してセッションを開く。
+
+    以前は `torch.cuda.is_available()` だけで CUDA EP を選んでいたため、呼び出し側が
+    CPU device を渡しても GPU で走っていた（`gpu_id=device.index` は None が渡る）。
+    """
     sess_options = SessionOptions()
     sess_options.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
     providers = ["CPUExecutionProvider"]
     providers_options: list[dict[str, Any]] = [{}]
-    if torch.cuda.is_available():
+    if device.type == "cuda" and torch.cuda.is_available():
         providers.insert(0, "CUDAExecutionProvider")
         providers_options.insert(
             0,
             {
-                "device_id": gpu_id,
+                "device_id": device.index if device.index is not None else 0,
                 "cudnn_conv_algo_search": "HEURISTIC",
                 "arena_extend_strategy": "kNextPowerOfTwo",
             },
@@ -323,9 +328,7 @@ def load_hubert_model(
     """ONNX 化済み ContentVec 資産ディレクトリを読む（scripts/export_hubert_onnx.py の出力）。"""
     asset_dir = file_name.expanduser()
     model_file, half = _select_onnx_file(asset_dir, device, is_half)
-    session = create_session(
-        model_file, gpu_id=device.index if device.index is not None else 0
-    )
+    session = create_session(model_file, device)
     with open(asset_dir / "mapping.json", encoding="utf-8") as f:
         mapping = json.load(f)
     return HubertSession(

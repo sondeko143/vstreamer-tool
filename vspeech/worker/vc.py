@@ -183,7 +183,7 @@ async def rvc_worker(
         device=device,
         is_half=half_available,
     )
-    session = create_session(rvc_config.model_file, gpu_id=device.index)
+    session = create_session(rvc_config.model_file, device)
     check_cuda_provider(session.get_providers())
     if rvc_config.f0_extractor_type == F0ExtractorType.rmvpe:
         rmvpe_session = create_rmvpe_session(rvc_config.rmvpe_model_file, device.index)

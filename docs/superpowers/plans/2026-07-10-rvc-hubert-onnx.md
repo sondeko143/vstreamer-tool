@@ -1280,11 +1280,101 @@ git commit -m "feat(rvc): add offline HuBERT ONNX exporter with a self-verifying
 ## Task 6: 等価ゲートを ONNX 経路へ
 
 **Files:**
+- Modify: `vspeech/lib/rvc.py`（`create_session` が device を尊重するようにする）
+- Modify: `vspeech/worker/vc.py:186`, `scripts/capture_change_voice_golden.py:81`（呼び出し追随）
 - Rewrite: `tests/test_hubert_equivalence.py`
 
 **Interfaces:**
 - Consumes: `load_hubert_model` / `extract_features`（Task 4）、fp16 しきい値（Task 5 で確定）
-- Produces: なし
+- Produces: `create_session(model_file: Path, device: torch.device) -> InferenceSession`（`gpu_id: int` から差し替え）
+
+### Step 0（前提バグの修正）: `create_session` が device を無視している
+
+`create_session` は `torch.cuda.is_available()` だけで CUDA EP を先頭に挿し、**呼び出し側の `device` を一切見ない**。実測（2026-07-10, RTX 4060）:
+
+```
+create_session(fp32.onnx, gpu_id=0)  providers=['CUDAExecutionProvider','CPUExecutionProvider']
+  l9_proj: cosine=0.99999966 max_abs=2.625e-03     <- CUDA EP の TF32 行列積
+  l12_raw: cosine=0.99999893 max_abs=2.164e-03
+InferenceSession(fp32.onnx, providers=['CPUExecutionProvider'])
+  l9_proj: cosine=1.00000000 max_abs=1.010e-05     <- golden と一致
+  l12_raw: cosine=1.00000000 max_abs=9.030e-06
+```
+
+これは 2 つの問題を同時に起こす:
+
+1. **production のバグ**: `get_device()` は gpu 未設定なら `torch.device("cpu")` を返すが、`create_session` は CUDA EP を使う。「config で CPU を指定したのに黙って GPU で走る」。しかも `gpu_id=device.index` は `None` が渡る。
+2. **ゲートが成立しない**: fp32 等価ゲートは CPU device で走らせるのに、CUDA ボックスでは実際には CUDA EP で走り、TF32 由来の `2.6e-3` で `MAX_ABS_MAX = 1e-4` を 26 倍超過する。
+
+`2.6e-3` は EP の数値特性であってグラフの欠陥ではない（cosine は 0.99999966）。**しきい値を緩めて逃げてはいけない。** 直すのは `create_session` のほう。
+
+- [ ] **Step 0-1: `create_session` のシグネチャを `device` に変える**
+
+```python
+def create_session(model_file: Path, device: torch.device) -> InferenceSession:
+    """`device` を尊重してセッションを開く。
+
+    以前は `torch.cuda.is_available()` だけで CUDA EP を選んでいたため、呼び出し側が
+    CPU device を渡しても GPU で走っていた（`gpu_id=device.index` は None が渡る）。
+    """
+    sess_options = SessionOptions()
+    sess_options.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
+    providers = ["CPUExecutionProvider"]
+    providers_options: list[dict[str, Any]] = [{}]
+    if device.type == "cuda" and torch.cuda.is_available():
+        providers.insert(0, "CUDAExecutionProvider")
+        providers_options.insert(
+            0,
+            {
+                "device_id": device.index if device.index is not None else 0,
+                "cudnn_conv_algo_search": "HEURISTIC",
+                "arena_extend_strategy": "kNextPowerOfTwo",
+            },
+        )
+    return InferenceSession(
+        str(model_file.expanduser()),
+        sess_options=sess_options,
+        providers=providers,
+        provider_options=providers_options,
+    )
+```
+
+- [ ] **Step 0-2: 呼び出し 3 箇所を追随させる**
+
+  - `vspeech/lib/rvc.py` の `load_hubert_model`: `create_session(model_file, device)`
+  - `vspeech/worker/vc.py:186`: `create_session(rvc_config.model_file, device)`
+  - `scripts/capture_change_voice_golden.py:81`: `create_session(rvc_config.model_file, device)`
+
+  `create_rmvpe_session`（`vspeech/lib/pitch_extract.py:25`）も同じバグを持つが、**この branch では触らない**（スコープ外。ledger に Minor として記録する）。
+
+- [ ] **Step 0-3: EP 選択を pin するテストを `tests/test_rvc_helpers.py` に足す**
+
+```python
+def test_create_session_uses_cpu_ep_for_a_cpu_device(tmp_path, monkeypatch):
+    """CUDA が使えても device が CPU なら CUDA EP を積まないこと。
+
+    以前は torch.cuda.is_available() だけで判定しており、config で CPU を指定しても
+    GPU で走っていた。fp32 等価ゲートはこの差 (TF32, max_abs 2.6e-3) で落ちる。
+    """
+    import torch
+
+    import vspeech.lib.rvc as rvc
+
+    captured: dict = {}
+
+    def fake_session(path, sess_options, providers, provider_options):
+        captured["providers"] = providers
+        return object()
+
+    monkeypatch.setattr(rvc, "InferenceSession", fake_session)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+
+    rvc.create_session(tmp_path / "m.onnx", torch.device("cpu"))
+    assert captured["providers"] == ["CPUExecutionProvider"]
+
+    rvc.create_session(tmp_path / "m.onnx", torch.device("cuda", 0))
+    assert captured["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+```
 
 - [ ] **Step 1: `tests/test_hubert_equivalence.py` を全面置換**
 
@@ -1417,11 +1507,22 @@ Expected: PASS 4 件（fp32 2 件 + fp16 2 件）
 Run: `uv run --all-extras pytest tests/test_hubert_equivalence.py -v`
 Expected: 4 skipped
 
-- [ ] **Step 4: commit**
+- [ ] **Step 4: ゲートが空虚でないことを確かめる**
+
+fp16 テストの参照を一時的に `hubert_golden.npz`（fp32 golden）に差し替えて実行し、`max_abs` が
+`5e-2` を大きく超えて FAIL することを確認する。正しいグラフでも**間違った参照に対しては落ちる**
+はずで、落ちないならゲートが何も見ていない。確認後、必ず元に戻して再実行する。
+
+- [ ] **Step 5: commit**
+
+Step 0 と Step 1 は別 commit にする（前者は既存バグの修正、後者はゲートの書き換え）。
 
 ```bash
+git add vspeech/lib/rvc.py vspeech/worker/vc.py scripts/capture_change_voice_golden.py tests/test_rvc_helpers.py
+git commit -m "fix(rvc): make create_session honour the caller's device"
+
 git add tests/test_hubert_equivalence.py
-git commit -m "test(rvc): gate the ONNX HuBERT on the fairseq golden (fp32 + fp16)"
+git commit -m "test(rvc): gate the ONNX HuBERT (fp32 vs fairseq golden, fp16 vs torch fp16)"
 ```
 
 ---

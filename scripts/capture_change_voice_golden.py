@@ -78,7 +78,7 @@ def build_rvc_runtime(config_path: Path) -> dict[str, Any]:
     hubert_model = load_hubert_model(
         file_name=rvc_config.hubert_model_file, device=device, is_half=half_available
     )
-    session = create_session(rvc_config.model_file, gpu_id=device.index)
+    session = create_session(rvc_config.model_file, device)
     if rvc_config.f0_extractor_type == F0ExtractorType.rmvpe:
         rmvpe_session = create_rmvpe_session(rvc_config.rmvpe_model_file, device.index)
     else:

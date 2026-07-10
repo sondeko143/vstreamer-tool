@@ -44,6 +44,7 @@ transformers 4.57.6 has 3 known vulnerabilities:
 ## 2. スコープ / 非目標
 
 - **スコープ**:
+  - `create_session` が呼び出し側の `device` を尊重するようにする（**実装中に発見した既存バグ**。`torch.cuda.is_available()` だけで CUDA EP を選んでおり、config が CPU を指定しても GPU で走っていた。CUDA EP の TF32 で fp32 特徴量に `2.6e-3` の誤差が乗り、fp32 等価ゲートが CUDA ボックスで成立しない）。
   - オフライン export ツールの新設（`scripts/export_hubert_onnx.py`）。
   - `vspeech/lib/rvc.py` の `load_hubert_model` / `extract_features` を `InferenceSession` ベースへ置換。`transformers` / `safetensors` の import 撤去。
   - `infer()` の io_binding 処理を小さなヘルパへ括り出し、`extract_features` と共有する。
@@ -54,6 +55,7 @@ transformers 4.57.6 has 3 known vulnerabilities:
   - `requires-python` の 3.12 化、`torch` / `torchaudio` の cp312 URL 差し替え、classifiers / `[tool.ty.environment]` の更新。本 spec は **3.11 のまま**完結する。
   - `torch` / `torchaudio` の除去（resample・`interpolate`・io_binding で引き続き必要）。
   - RVC 推論本体（`infer` / `change_voice` の数式）、f0 抽出、VAD ゲートの変更。
+  - `create_rmvpe_session`（`pitch_extract.py:25`）の同型バグの修正 — スコープ外。
   - `scripts/convert_hubert.py` の削除（`hubert_base.pt` からの再変換手段は残す）。
   - config の後方互換 alias。`RvcConfig.hubert_model_file` の意味（変換済み資産ディレクトリ）は **不変**なので、`config.toml.example` と GUI は無改修。
 
