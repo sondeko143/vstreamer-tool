@@ -119,3 +119,20 @@ def test_waveform_snr_rejects_energy_overflow():
     test[0] = 0.0
     with pytest.raises(ValueError, match="overflow"):
         waveform_snr(x, test)
+
+
+def test_fp16_thresholds_are_looser_than_fp32_but_still_tight():
+    """fp16 ゲートは fp32 より緩いが、無意味に緩くはないこと。
+
+    `1e-1` / `0.999` は**動かさない硬い上限**。実測 x 10 がこれを超えるなら
+    fp16 export が壊れているということなので、しきい値ではなく export を疑う。
+    """
+    from scripts.hubert_metrics import COSINE_MIN
+    from scripts.hubert_metrics import COSINE_MIN_FP16
+    from scripts.hubert_metrics import MAX_ABS_MAX
+    from scripts.hubert_metrics import MAX_ABS_MAX_FP16
+
+    assert MAX_ABS_MAX_FP16 > MAX_ABS_MAX
+    assert MAX_ABS_MAX_FP16 <= 1e-1
+    assert COSINE_MIN_FP16 <= COSINE_MIN
+    assert COSINE_MIN_FP16 >= 0.999

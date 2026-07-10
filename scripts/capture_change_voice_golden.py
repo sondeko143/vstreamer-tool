@@ -88,7 +88,6 @@ def build_rvc_runtime(config_path: Path) -> dict[str, Any]:
     return {
         "rvc_config": rvc_config,
         "device": device,
-        "half_available": half_available,
         "hubert_model": hubert_model,
         "session": session,
         "rmvpe_session": rmvpe_session,
@@ -106,7 +105,6 @@ def run_change_voice(
 
     return change_voice(
         voice_frames=voice_frames,
-        half_available=rt["half_available"],
         rvc_config=rt["rvc_config"],
         voice_sample_rate=voice_sample_rate,
         target_sample_rate=rt["target_sample_rate"],
