@@ -78,7 +78,7 @@ def build_rvc_runtime(config_path: Path) -> dict[str, Any]:
     hubert_model = load_hubert_model(
         file_name=rvc_config.hubert_model_file, device=device, is_half=half_available
     )
-    session = create_session(rvc_config.model_file, gpu_id=device.index)
+    session = create_session(rvc_config.model_file, device)
     if rvc_config.f0_extractor_type == F0ExtractorType.rmvpe:
         rmvpe_session = create_rmvpe_session(rvc_config.rmvpe_model_file, device.index)
     else:
@@ -88,7 +88,6 @@ def build_rvc_runtime(config_path: Path) -> dict[str, Any]:
     return {
         "rvc_config": rvc_config,
         "device": device,
-        "half_available": half_available,
         "hubert_model": hubert_model,
         "session": session,
         "rmvpe_session": rmvpe_session,
@@ -106,7 +105,6 @@ def run_change_voice(
 
     return change_voice(
         voice_frames=voice_frames,
-        half_available=rt["half_available"],
         rvc_config=rt["rvc_config"],
         voice_sample_rate=voice_sample_rate,
         target_sample_rate=rt["target_sample_rate"],

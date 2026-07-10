@@ -142,3 +142,102 @@ def test_select_pitch_disabled_returns_none():
         rmvpe_session=None,
     )
     assert result == (None, None)
+
+
+def test_element_type_maps_supported_dtypes():
+    import numpy as np
+    import torch
+
+    from vspeech.lib.rvc import _element_type
+
+    assert _element_type(torch.float16) is np.float16
+    assert _element_type(torch.float32) is np.float32
+    assert _element_type(torch.int64) is np.int64
+
+
+def test_element_type_rejects_unsupported_dtype():
+    import pytest
+    import torch
+
+    from vspeech.lib.rvc import _element_type
+
+    with pytest.raises(ValueError, match="Unsupported dtype"):
+        _element_type(torch.bfloat16)
+
+
+def test_ort_output_to_torch_falls_back_to_numpy():
+    """dlpack が使えない ORT 値でも numpy 経由で torch tensor を返すこと。"""
+    import numpy as np
+    import torch
+
+    from vspeech.lib.rvc import _ort_output_to_torch
+
+    class _NoDlpack:
+        def numpy(self):
+            return np.arange(6, dtype=np.float32).reshape(1, 2, 3)
+
+    out = _ort_output_to_torch(_NoDlpack(), torch.device("cpu"))
+    assert isinstance(out, torch.Tensor)
+    assert out.shape == (1, 2, 3)
+    assert out.dtype == torch.float32
+    assert out[0, 1, 2].item() == 5.0
+
+
+def test_create_session_uses_cpu_ep_for_a_cpu_device(tmp_path, monkeypatch):
+    """CUDA が使えても device が CPU なら CUDA EP を積まないこと。
+
+    以前は torch.cuda.is_available() だけで判定しており、config で CPU を指定しても
+    GPU で走っていた。fp32 等価ゲートはこの差 (TF32, max_abs 2.6e-3) で落ちる。
+    """
+    import torch
+
+    import vspeech.lib.rvc as rvc
+
+    captured: dict = {}
+
+    def fake_session(path, sess_options, providers, provider_options):
+        captured["providers"] = providers
+        return object()
+
+    monkeypatch.setattr(rvc, "InferenceSession", fake_session)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+
+    rvc.create_session(tmp_path / "m.onnx", torch.device("cpu"))
+    assert captured["providers"] == ["CPUExecutionProvider"]
+
+    rvc.create_session(tmp_path / "m.onnx", torch.device("cuda", 0))
+    assert captured["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+
+def test_get_device_treats_gpu_id_zero_as_a_real_device(monkeypatch):
+    """`gpu_id = 0` は「未設定」ではなく cuda:0。
+
+    `if gpu_id and ...` は 0 を falsy として弾いていた。config.toml.example が
+    `gpu_id = 0` を載せているため、この構成は CPU device になり、Task 6 で
+    create_session が device を尊重するようになった結果 check_cuda_provider が
+    起動時に落ちるようになった。「未設定」を表すのは None であって 0 ではない。
+    """
+    import torch
+
+    import vspeech.lib.cuda_util as cuda_util
+
+    class _Prop:
+        name = "FakeGPU"
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda i: _Prop())
+
+    device, name = cuda_util.get_device(0, "")
+    assert device == torch.device("cuda", 0)
+    assert name == "FakeGPU"
+
+
+def test_get_device_falls_back_to_cpu_when_gpu_id_is_none(monkeypatch):
+    import torch
+
+    import vspeech.lib.cuda_util as cuda_util
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    device, name = cuda_util.get_device(None, "")
+    assert device == torch.device("cpu")
+    assert name == "cpu"

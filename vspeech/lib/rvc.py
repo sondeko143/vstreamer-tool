@@ -13,9 +13,7 @@ from numpy.typing import NDArray
 from onnxruntime import GraphOptimizationLevel
 from onnxruntime import InferenceSession
 from onnxruntime import SessionOptions
-from safetensors.torch import load_file
 from torch.nn import functional
-from transformers import HubertModel
 
 from vspeech.config import RvcConfig
 from vspeech.lib.pitch_extract import pitch_extract
@@ -26,31 +24,99 @@ from vspeech.logger import logger
 # it -- not the remote's original capture rate.
 HUBERT_SAMPLE_RATE = 16000
 
+# ONNX グラフの出力名。scripts/export_hubert_onnx.py がこの名前で export し、
+# mapping.json が (emb_output_layer, use_final_proj) との対応を記録する。
+# 実在する RVC モデルは v1 = (9, True) と v2 = (12, False) の 2 種類だけ。
+FEATS_L9_PROJ = "feats_l9_proj"
+FEATS_L12_RAW = "feats_l12_raw"
+
+
+_REEXPORT_HINT = "scripts/export_hubert_onnx.py で再 export してください"
+
+
+def parse_output_names(mapping: dict[str, Any]) -> dict[tuple[int, bool], str]:
+    """mapping.json の `outputs` を (emb_output_layer, use_final_proj) -> 出力名 に開く。
+
+    runtime は層インデックスを推測しない。ここで読んだ対応表だけを信じる。
+    壊れた・古い mapping.json を黙って受け入れると、誤った層の出力へ voice
+    conversion をルーティングしてしまう（このモジュールが禁止する失敗モード）ので、
+    形式が少しでも期待と違えば必ず ValueError で止める。
+    """
+    outputs = mapping.get("outputs")
+    if not outputs:
+        raise ValueError(f"mapping.json に 'outputs' がありません。{_REEXPORT_HINT}")
+    if not isinstance(outputs, list):
+        raise ValueError(
+            "mapping.json の 'outputs' は list である必要があります"
+            f"（実際: {type(outputs).__name__}）。{_REEXPORT_HINT}"
+        )
+    result: dict[tuple[int, bool], str] = {}
+    for entry in outputs:
+        try:
+            layer = entry["layer"]
+            use_final_proj = entry["use_final_proj"]
+            name = entry["name"]
+        except (KeyError, TypeError) as e:
+            raise ValueError(
+                f"mapping.json の 'outputs' の要素が壊れています: {entry!r}。"
+                f"{_REEXPORT_HINT}"
+            ) from e
+        # bool は int のサブクラスなので isinstance(True, int) は True になる。
+        # JSON の true/false を層番号として受け入れてしまわないよう bool を先に弾く。
+        if isinstance(layer, bool) or not isinstance(layer, int):
+            raise ValueError(
+                "mapping.json の 'layer' は int である必要があります"
+                f"（実際: {layer!r}）。{_REEXPORT_HINT}"
+            )
+        if not isinstance(use_final_proj, bool):
+            raise ValueError(
+                "mapping.json の 'use_final_proj' は bool である必要があります"
+                f"（実際: {use_final_proj!r}）。{_REEXPORT_HINT}"
+            )
+        if not isinstance(name, str):
+            raise ValueError(
+                f"mapping.json の 'name' は str である必要があります"
+                f"（実際: {name!r}）。{_REEXPORT_HINT}"
+            )
+        key = (layer, use_final_proj)
+        if key in result:
+            raise ValueError(
+                f"mapping.json の 'outputs' にキー {key} の重複があります。"
+                f"{_REEXPORT_HINT}"
+            )
+        result[key] = name
+    return result
+
 
 @dataclass
-class HubertBundle:
-    """変換済み ContentVec 資産の runtime 表現。
+class HubertSession:
+    """ONNX 化した ContentVec の runtime 表現。
 
-    `final_proj` は資産に含まれていれば読む。RVC モデルのメタデータ `useFinalProj`
-    が真のときだけ使われるため、ロード時点では必須にできない（不在は正当な構成）。
+    `final_proj` はグラフに焼き込まれているので runtime には持たない。どの出力が
+    どの (emb_output_layer, use_final_proj) に対応するかは mapping.json が唯一の情報源。
     """
 
-    model: HubertModel
-    final_proj: torch.nn.Linear | None
-    layer_offset: int
+    session: InferenceSession
+    output_names: dict[tuple[int, bool], str]
+    is_half: bool
 
 
-def create_session(model_file: Path, gpu_id: int) -> InferenceSession:
+def create_session(model_file: Path, device: torch.device) -> InferenceSession:
+    """`device` を尊重してセッションを開く。
+
+    以前は `torch.cuda.is_available()` だけで CUDA EP を選んでいたため、呼び出し側が
+    CPU device を渡しても GPU で走っていた（`gpu_id=device.index` は None が渡る）。
+    """
     sess_options = SessionOptions()
     sess_options.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
     providers = ["CPUExecutionProvider"]
     providers_options: list[dict[str, Any]] = [{}]
-    if torch.cuda.is_available():
+    if device.type == "cuda" and torch.cuda.is_available():
         providers.insert(0, "CUDAExecutionProvider")
         providers_options.insert(
             0,
             {
-                "device_id": gpu_id,
+                "device_id": device.index if device.index is not None else 0,
                 "cudnn_conv_algo_search": "HEURISTIC",
                 "arena_extend_strategy": "kNextPowerOfTwo",
             },
@@ -85,27 +151,94 @@ def get_resampler(orig_freq: int, new_freq: int, device: torch.device):
     return T.Resample(orig_freq, new_freq, rolloff=0.99).to(device)
 
 
+_ORT_ELEMENT_TYPES: dict[torch.dtype, type] = {
+    torch.float16: np.float16,
+    torch.float32: np.float32,
+    torch.int64: np.int64,
+}
+
+
+def _element_type(dtype: torch.dtype) -> type:
+    try:
+        return _ORT_ELEMENT_TYPES[dtype]
+    except KeyError:
+        raise ValueError(f"Unsupported dtype: {dtype}") from None
+
+
+def _bind_torch_input(io_binding: Any, name: str, tensor: torch.Tensor) -> torch.Tensor:
+    """torch の CUDA バッファを ORT の入力へゼロコピーで bind する。
+
+    返り値は呼び出し側で**参照を保持する**こと。contiguous 化で新しい tensor が
+    生まれる場合があり、束縛したポインタの寿命がそれに依存する。
+    """
+    tensor = tensor.contiguous()
+    device = tensor.device
+    io_binding.bind_input(
+        name=name,
+        device_type="cuda",
+        device_id=device.index if device.index is not None else 0,
+        element_type=_element_type(tensor.dtype),
+        shape=tuple(tensor.shape),
+        buffer_ptr=tensor.data_ptr(),
+    )
+    return tensor
+
+
+def _ort_output_to_torch(ort_output: Any, device: torch.device) -> torch.Tensor:
+    try:
+        from torch.utils import dlpack
+
+        try:
+            dlp = ort_output._ortvalue.to_dlpack()
+        except AttributeError:
+            dlp = ort_output.to_dlpack()
+        return dlpack.from_dlpack(dlp).clone()
+    except Exception:
+        return torch.tensor(ort_output.numpy(), device=device)
+
+
 def extract_features(
-    model: HubertBundle,
+    model: HubertSession,
     feats: torch.Tensor,
     dev: torch.device,
     emb_output_layer: int = 9,
     use_final_proj: bool = True,
 ) -> torch.Tensor:
-    with torch.inference_mode():
-        # fairseq の padding_mask (True=パディング) と transformers の attention_mask
-        # (1=有効) は意味が反転している。ここは常にパディング無しなので何も渡さない
-        # (= 全フレーム有効) のが等価。
-        outputs = model.model(input_values=feats.to(dev), output_hidden_states=True)
-        hidden = outputs.hidden_states[emb_output_layer + model.layer_offset]
-        if use_final_proj:
-            if model.final_proj is None:
-                raise RuntimeError(
-                    "RVC モデルが useFinalProj=True を要求していますが、変換済み資産に "
-                    "final_proj.safetensors がありません"
-                )
-            hidden = model.final_proj(hidden)
-    return hidden
+    key = (emb_output_layer, use_final_proj)
+    try:
+        output_name = model.output_names[key]
+    except KeyError:
+        supported = ", ".join(
+            f"({layer}, {proj})" for layer, proj in sorted(model.output_names)
+        )
+        raise RuntimeError(
+            f"HuBERT ONNX 資産は (emb_output_layer, use_final_proj)={key} を出力しません。"
+            f" 利用可能な組合せ: {supported}。"
+            " scripts/export_hubert_onnx.py で再 export してください。"
+        ) from None
+
+    source = feats.to(
+        device=dev, dtype=torch.float16 if model.is_half else torch.float32
+    )
+    if dev.type == "cuda":
+        io_binding = model.session.io_binding()
+        # bind したポインタの寿命は `bound` が握る。run が終わるまで捨てないこと。
+        bound = _bind_torch_input(io_binding, "source", source)
+        io_binding.bind_output(
+            output_name, "cuda", device_id=dev.index if dev.index is not None else 0
+        )
+        model.session.run_with_iobinding(io_binding)
+        out = _ort_output_to_torch(io_binding.get_outputs()[0], dev)
+        del bound
+        return out
+
+    result = cast(
+        list,
+        model.session.run(
+            output_names=[output_name], input_feed={"source": source.cpu().numpy()}
+        ),
+    )
+    return torch.from_numpy(np.asarray(result[0])).to(dev)
 
 
 def infer(
@@ -120,54 +253,23 @@ def infer(
     device = feats.device
     if device.type == "cuda":
         io_binding = session.io_binding()
-
-        def bind(name: str, tensor: torch.Tensor):
-            tensor = tensor.contiguous()
-            if tensor.dtype == torch.float16:
-                element_type = np.float16
-            elif tensor.dtype == torch.float32:
-                element_type = np.float32
-            elif tensor.dtype == torch.int64:
-                element_type = np.int64
-            else:
-                raise ValueError(f"Unsupported dtype: {tensor.dtype}")
-
-            io_binding.bind_input(
-                name=name,
-                device_type="cuda",
-                device_id=device.index if device.index is not None else 0,
-                element_type=element_type,
-                shape=tuple(tensor.shape),
-                buffer_ptr=tensor.data_ptr(),
-            )
-            return tensor
-
-        tensors = []
-        tensors.append(bind("feats", feats.half() if is_half else feats.float()))
-        tensors.append(bind("p_len", pitch_length))
-        tensors.append(bind("sid", sid))
-
+        tensors = [
+            _bind_torch_input(
+                io_binding, "feats", feats.half() if is_half else feats.float()
+            ),
+            _bind_torch_input(io_binding, "p_len", pitch_length),
+            _bind_torch_input(io_binding, "sid", sid),
+        ]
         if pitch is not None and pitchf is not None:
-            tensors.append(bind("pitch", pitch))
-            tensors.append(bind("pitchf", pitchf))
+            tensors.append(_bind_torch_input(io_binding, "pitch", pitch))
+            tensors.append(_bind_torch_input(io_binding, "pitchf", pitchf))
 
         io_binding.bind_output(
             "audio", "cuda", device_id=device.index if device.index is not None else 0
         )
         session.run_with_iobinding(io_binding)
-        ort_output = io_binding.get_outputs()[0]
-
-        try:
-            from torch.utils import dlpack
-
-            try:
-                dlp = ort_output._ortvalue.to_dlpack()
-            except AttributeError:
-                dlp = ort_output.to_dlpack()
-            audio1 = dlpack.from_dlpack(dlp).clone()
-        except Exception:
-            audio1 = torch.tensor(ort_output.numpy(), device=device)
-
+        audio1 = _ort_output_to_torch(io_binding.get_outputs()[0], device)
+        del tensors
         return audio1.unsqueeze(0)
 
     # Fallback for CPU
@@ -200,48 +302,39 @@ def infer(
     return torch.tensor(np.array(audio1), device=device)
 
 
+def _select_onnx_file(
+    asset_dir: Path, device: torch.device, is_half: bool
+) -> tuple[Path, bool]:
+    """使う ONNX ファイルと、それが fp16 かどうかを返す。
+
+    fp16 グラフは CPUExecutionProvider では実質動かないので、CPU では必ず fp32。
+    """
+    if is_half and device.type == "cuda":
+        fp16 = asset_dir / "hubert_fp16.onnx"
+        if fp16.exists():
+            return fp16, True
+    fp32 = asset_dir / "hubert_fp32.onnx"
+    if not fp32.exists():
+        raise FileNotFoundError(
+            f"HuBERT ONNX 資産がありません: {fp32}。"
+            " `uv run poe export-hubert-onnx` で生成してください。"
+        )
+    return fp32, False
+
+
 def load_hubert_model(
     file_name: Path, device: torch.device, is_half: bool
-) -> HubertBundle:
-    """変換済み ContentVec 資産ディレクトリを読む（scripts/convert_hubert.py の出力）。"""
+) -> HubertSession:
+    """ONNX 化済み ContentVec 資産ディレクトリを読む（scripts/export_hubert_onnx.py の出力）。"""
     asset_dir = file_name.expanduser()
-
-    # torch.compile は使わない。旧 fairseq 実装では OptimizedModule が forward/__call__ しか
-    # 包まないため `model.extract_features(...)` が素通しされ、コンパイルは一度も走っていなかった。
-    # transformers 版は __call__ を呼ぶので本当にコンパイルされ、Triton の無い Windows/CUDA では
-    # TritonMissing で落ちる。旧実装の実効挙動（eager）に合わせる。
-    # 資産は scripts/convert_hubert.py が出力したローカルディレクトリで、Hub からは一切取得しない。
-    # local_files_only=True でそれを強制する（B615 の revision ピンは Hub 取得時のみ意味を持つ）。
-    model = HubertModel.from_pretrained(  # nosec B615 - local dir only, no Hub download
-        asset_dir, local_files_only=True
-    )
-    model.eval()
-    model = model.to(device)
-    if is_half:
-        model = model.half()
-
+    model_file, half = _select_onnx_file(asset_dir, device, is_half)
+    session = create_session(model_file, device)
     with open(asset_dir / "mapping.json", encoding="utf-8") as f:
-        layer_offset = int(json.load(f)["layer_offset"])
-
-    final_proj: torch.nn.Linear | None = None
-    final_proj_path = asset_dir / "final_proj.safetensors"
-    if final_proj_path.exists():
-        tensors = load_file(str(final_proj_path))
-        weight = tensors["weight"]
-        bias = tensors["bias"]
-        final_proj = torch.nn.Linear(weight.shape[1], weight.shape[0])
-        with torch.no_grad():
-            final_proj.weight.copy_(weight)
-            final_proj.bias.copy_(bias)
-        final_proj.eval()
-        final_proj = final_proj.to(device)
-        if is_half:
-            final_proj = final_proj.half()
-
-    return HubertBundle(
-        model=cast(HubertModel, model),
-        final_proj=final_proj,
-        layer_offset=layer_offset,
+        mapping = json.load(f)
+    return HubertSession(
+        session=session,
+        output_names=parse_output_names(mapping),
+        is_half=half,
     )
 
 
@@ -272,18 +365,13 @@ def _quality_padding(
 
 
 def _extract_hubert_feats(
-    hubert_model: HubertBundle,
+    hubert_model: HubertSession,
     audio_pad: torch.Tensor,
     device: torch.device,
-    half_available: bool,
     emb_output_layer: int,
     use_final_proj: bool,
 ) -> torch.Tensor:
     feats = audio_pad
-    if half_available:
-        feats = feats.half()
-    else:
-        feats = feats.float()
     if feats.dim() == 2:  # double channels
         feats = feats.mean(-1)
     assert feats.dim() == 1, feats.dim()  # nosec B101 - internal shape invariant
@@ -359,14 +447,13 @@ def _postprocess(audio1: torch.Tensor, t_pad_tgt: int) -> NDArray[np.int16]:
 
 def change_voice(
     voice_frames: bytes,
-    half_available: bool,
     rvc_config: RvcConfig,
     voice_sample_rate: int,
     target_sample_rate: int,
     device: torch.device,
     emb_output_layer: int,
     use_final_proj: bool,
-    hubert_model: HubertBundle,
+    hubert_model: HubertSession,
     session: InferenceSession,
     f0_enabled: bool,
     rmvpe_session: InferenceSession | None,
@@ -385,7 +472,6 @@ def change_voice(
         hubert_model=hubert_model,
         audio_pad=audio_pad,
         device=device,
-        half_available=half_available,
         emb_output_layer=emb_output_layer,
         use_final_proj=use_final_proj,
     )

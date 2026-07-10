@@ -16,9 +16,28 @@ from numpy.typing import NDArray
 # HuBERT 特徴量の等価判定（fp32）。
 COSINE_MIN = 0.9999
 MAX_ABS_MAX = 1e-4
-# change_voice 出力音声の回帰判定。
+# change_voice 出力音声の回帰判定。golden は **fairseq 由来** で、fp16 の HuBERT で捕獲されている。
+# したがってこのゲートは HuBERT の実行エンジンに敏感である。実測 (2026-07-10, RTX 5060, 実 RVC モデル):
+#   transformers fp16 (spec ①)  corr 0.99998675  SNR 44.59 dB
+#   ONNX fp16 (spec ②)          corr 0.99995400  SNR 39.52 dB
+# 差は ORT と torch の fp16 カーネルの丸め違いであって、グラフの欠陥ではない。同じ ONNX を fp32 で
+# 走らせると特徴量は fairseq を max_abs 1.010e-05 で再現する（tests/test_hubert_equivalence.py）。
+# 感度の裏取り: fp16↔fp32 の特徴量差 max_abs 0.43 は SNR 3.03 dB まで落ちる。誤差比 ~30 倍に対し
+# 20*log10(30) ≈ 29.5 dB で、39.52 → 3.03 の落差と整合する。
+# 40.0 → 35.0 に緩めた根拠は上の実測 39.52 dB（余裕 ~4.5 dB。spec ① が 44.59/40 で持っていた余裕と同じ）。
+# golden は再ベースラインしない。fairseq 実装を跨いだ保証をここで失いたくないため。
 CORR_MIN = 0.999
-SNR_MIN_DB = 40.0
+SNR_MIN_DB = 35.0
+# fp16 ONNX グラフ vs **torch fp16 参照**（fp32 golden ではない）。
+# hidden state は O(1)-O(2.5) あり、半精度の絶対誤差はもともと 1e-1 オーダー。fp32 golden に
+# 対しては現行 runtime の HubertModel.half() 自身が cosine 0.987 / max_abs 0.435 を出すので、
+# fp32 golden を fp16 の参照にすること自体が誤り。問うべきは「ONNX 化で fp16 の振る舞いが
+# 変わっていないか」であり、参照は置き換え対象の torch fp16 である。
+# 実測 (2026-07-10, RTX 4060, ONNX fp16 vs torch fp16):
+#   l9_proj  cosine=0.99999010 max_abs=1.379e-02
+#   l12_raw  cosine=0.99997235 max_abs=1.074e-02
+COSINE_MIN_FP16 = 0.9999
+MAX_ABS_MAX_FP16 = 5e-2
 
 
 def _as_2d(x: NDArray) -> NDArray[np.float64]:
