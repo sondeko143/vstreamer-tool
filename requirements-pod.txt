@@ -75,7 +75,7 @@ idna==3.18 ; sys_platform == 'linux' or sys_platform == 'win32'
     #   anyio
     #   httpx
     #   requests
-numpy==1.23.5 ; sys_platform == 'linux' or sys_platform == 'win32'
+numpy==1.26.4 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via ctranslate2
 proto-plus==1.28.0 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via
@@ -131,6 +131,8 @@ typing-inspection==0.4.2 ; sys_platform == 'linux' or sys_platform == 'win32'
     #   pydantic-settings
 urllib3==2.7.0 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via requests
+voicevox-core @ https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-manylinux_2_34_x86_64.whl ; sys_platform == 'linux'
+    # via voicerecog
 voicevox-core @ https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl ; sys_platform == 'win32'
     # via voicerecog
 vstreamer-protos @ https://github.com/sondeko143/vstreamer-protos/releases/download/v0.1.1/vstreamer_protos-0.1.1-py3-none-any.whl ; sys_platform == 'linux' or sys_platform == 'win32'

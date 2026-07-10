@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import IO
 from typing import Any
 from typing import Literal
-from typing import TypeAlias
 
 import toml
 from pydantic import AliasChoices
@@ -21,7 +20,7 @@ from toml.encoder import TomlArraySeparatorEncoder
 
 from vspeech.exceptions import ReplaceFilterParseError
 
-Anchor: TypeAlias = Literal["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"]
+type Anchor = Literal["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"]
 
 
 class SampleFormat(IntEnum):
@@ -134,7 +133,7 @@ class ReplaceFilter(BaseModel):
         return ReplaceFilter(pattern=pattern, replaced=replaced)
 
 
-RoutesList: TypeAlias = list[list[str]]
+type RoutesList = list[list[str]]
 
 
 class RecordingConfig(BaseModel):
@@ -268,7 +267,7 @@ class AmiConfig(BaseModel):
         return v.get_secret_value()
 
 
-ServiceAccountInfo: TypeAlias = dict[str, SecretStr]
+type ServiceAccountInfo = dict[str, SecretStr]
 
 
 class GcpConfig(BaseModel):

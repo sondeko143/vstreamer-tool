@@ -1,5 +1,3 @@
-from typing import TypeAlias
-
 from google.auth import default as google_auth_default
 from google.auth.compute_engine import Credentials as CeCredentials
 from google.auth.compute_engine import IDTokenCredentials as CeIdTokenCredentials
@@ -11,7 +9,7 @@ from google.oauth2.service_account import IDTokenCredentials
 from vspeech.config import GcpConfig
 from vspeech.config import ServiceAccountInfo
 
-GcpIDTokenCredentials: TypeAlias = IDTokenCredentials | CeIdTokenCredentials
+type GcpIDTokenCredentials = IDTokenCredentials | CeIdTokenCredentials
 
 
 def unescape_private_key(service_account_info: ServiceAccountInfo):

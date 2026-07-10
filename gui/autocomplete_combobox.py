@@ -11,15 +11,11 @@ Updated by Russell Adams, 2011/01/24 to support Python 3 and Combobox.
 import tkinter
 from tkinter import Event
 from typing import Any
-from typing import Generic
-from typing import TypeVar
 
 import ttkbootstrap as ttk
 
-T = TypeVar("T")
 
-
-class AutocompleteCombobox(ttk.Combobox, Generic[T]):
+class AutocompleteCombobox[T](ttk.Combobox):
     _completion_list: list[str]
     _hit_index: int
     _hits: list[str]

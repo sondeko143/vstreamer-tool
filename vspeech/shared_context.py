@@ -6,7 +6,6 @@ from collections.abc import MutableMapping
 from dataclasses import dataclass
 from dataclasses import field
 from typing import Literal
-from typing import TypeAlias
 from typing import cast
 from urllib.parse import ParseResult
 from urllib.parse import parse_qs
@@ -204,7 +203,7 @@ class EventAddress:
         )
 
 
-FollowingEvents: TypeAlias = list[list[EventAddress]]
+type FollowingEvents = list[list[EventAddress]]
 
 
 def get_remotes_of_events(followings: FollowingEvents):

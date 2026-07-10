@@ -3,12 +3,12 @@ name = "voicerecog"
 version = "0.1.0"
 description = ""
 authors = [{ name = "sondeko", email = "sondeko143@gmail.com" }]
-requires-python = ">=3.11,<3.12"
+requires-python = ">=3.12,<3.13"
 readme = "README.md"
 license = "MIT"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
     "google-cloud-translate>=3.11.1,<4",
@@ -27,7 +27,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-voicevox = ["voicevox-core ; sys_platform == 'win32'"]
+# marker は付けない。extra 側で platform を絞ると `uv export --extra voicevox` が
+# requirements-pod.txt から voicevox-core ごと落とし、Docker イメージが
+# `import voicevox_core` で死ぬ。platform ごとの wheel は [tool.uv.sources] で出し分ける。
+voicevox = ["voicevox-core"]
 whisper = [
     "faster-whisper==1.2.1",
     "torch ; sys_platform == 'win32'",
@@ -89,9 +92,12 @@ override-dependencies = ["onnxruntime ; sys_platform == 'never'"]
 
 [tool.uv.sources]
 vstreamer-protos = { url = "https://github.com/sondeko143/vstreamer-protos/releases/download/v0.1.1/vstreamer_protos-0.1.1-py3-none-any.whl" }
-voicevox-core = { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl" }
-torch = { url = "https://download.pytorch.org/whl/cu128/torch-2.10.0%2Bcu128-cp311-cp311-win_amd64.whl" }
-torchaudio = { url = "https://download.pytorch.org/whl/cu128/torchaudio-2.10.0%2Bcu128-cp311-cp311-win_amd64.whl" }
+voicevox-core = [
+    { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl", marker = "sys_platform == 'win32'" },
+    { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-manylinux_2_34_x86_64.whl", marker = "sys_platform == 'linux'" },
+]
+torch = { url = "https://download.pytorch.org/whl/cu128/torch-2.10.0%2Bcu128-cp312-cp312-win_amd64.whl" }
+torchaudio = { url = "https://download.pytorch.org/whl/cu128/torchaudio-2.10.0%2Bcu128-cp312-cp312-win_amd64.whl" }
 pyvcroid2 = { git = "https://github.com/Nkyoku/pyvcroid2" }
 
 [tool.uv.build-backend]
@@ -112,7 +118,7 @@ markers = [
 ]
 
 [tool.ty.environment]
-python-version = "3.11"
+python-version = "3.12"
 
 # scripts/convert_hubert.py と scripts/export_hubert_onnx.py はオフライン専用ツール。
 # その依存 (fairseq / transformers / onnx / safetensors) は poe task の `uv run --with`
@@ -152,10 +158,9 @@ deadcode = { cmd = "uv run --with vulture vulture vspeech --min-confidence 80", 
 # `poe security` / `poe deadcode` と同じ手口。
 #
 # convert-hubert: hubert_base.pt -> hubert_contentvec/ (transformers 資産)。
-#   `--python 3.11` は必須。省くとプロジェクトの処理系に落ち、cp311 の fairseq
-#   wheel が入らない（spec ③ で 3.12 化した後に効いてくる）。`--no-project` なので
-#   [tool.uv.sources] は読まれず、torch は PyPI 版 (Windows は CPU) になる。変換は
-#   CPU で足りるのでこれでよい。
+#   `--python 3.11` は必須。省くとプロジェクトの 3.12 に落ち、cp311 の fairseq wheel が
+#   入らない。`--no-project` なので [tool.uv.sources] は読まれず、torch は PyPI 版
+#   (Windows は CPU) になる。変換は CPU で足りるのでこれでよい。
 #   例: uv run poe convert-hubert --input ~/.config/vstreamer/hubert_base.pt \
 #           --output ./hubert_contentvec --golden ./hubert_golden
 convert-hubert = { cmd = "uv run --isolated --no-project --python 3.11 --with 'fairseq @ https://github.com/sondeko143/fairseq-311/releases/download/v0.12.2.post1/fairseq-0.12.2.post1-cp311-cp311-win_amd64.whl' --with 'numpy<1.24' --with torch --with transformers python -m scripts.convert_hubert", help = "hubert_base.pt -> transformers 資産 (offline, 3.11 使い捨て環境)" }
