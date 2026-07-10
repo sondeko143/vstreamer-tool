@@ -142,3 +142,42 @@ def test_select_pitch_disabled_returns_none():
         rmvpe_session=None,
     )
     assert result == (None, None)
+
+
+def test_element_type_maps_supported_dtypes():
+    import numpy as np
+    import torch
+
+    from vspeech.lib.rvc import _element_type
+
+    assert _element_type(torch.float16) is np.float16
+    assert _element_type(torch.float32) is np.float32
+    assert _element_type(torch.int64) is np.int64
+
+
+def test_element_type_rejects_unsupported_dtype():
+    import pytest
+    import torch
+
+    from vspeech.lib.rvc import _element_type
+
+    with pytest.raises(ValueError, match="Unsupported dtype"):
+        _element_type(torch.bfloat16)
+
+
+def test_ort_output_to_torch_falls_back_to_numpy():
+    """dlpack が使えない ORT 値でも numpy 経由で torch tensor を返すこと。"""
+    import numpy as np
+    import torch
+
+    from vspeech.lib.rvc import _ort_output_to_torch
+
+    class _NoDlpack:
+        def numpy(self):
+            return np.arange(6, dtype=np.float32).reshape(1, 2, 3)
+
+    out = _ort_output_to_torch(_NoDlpack(), torch.device("cpu"))
+    assert isinstance(out, torch.Tensor)
+    assert out.shape == (1, 2, 3)
+    assert out.dtype == torch.float32
+    assert out[0, 1, 2].item() == 5.0

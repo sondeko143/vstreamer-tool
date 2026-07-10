@@ -108,6 +108,52 @@ def extract_features(
     return hidden
 
 
+_ORT_ELEMENT_TYPES: dict[torch.dtype, type] = {
+    torch.float16: np.float16,
+    torch.float32: np.float32,
+    torch.int64: np.int64,
+}
+
+
+def _element_type(dtype: torch.dtype) -> type:
+    try:
+        return _ORT_ELEMENT_TYPES[dtype]
+    except KeyError:
+        raise ValueError(f"Unsupported dtype: {dtype}") from None
+
+
+def _bind_torch_input(io_binding: Any, name: str, tensor: torch.Tensor) -> torch.Tensor:
+    """torch の CUDA バッファを ORT の入力へゼロコピーで bind する。
+
+    返り値は呼び出し側で**参照を保持する**こと。contiguous 化で新しい tensor が
+    生まれる場合があり、束縛したポインタの寿命がそれに依存する。
+    """
+    tensor = tensor.contiguous()
+    device = tensor.device
+    io_binding.bind_input(
+        name=name,
+        device_type="cuda",
+        device_id=device.index if device.index is not None else 0,
+        element_type=_element_type(tensor.dtype),
+        shape=tuple(tensor.shape),
+        buffer_ptr=tensor.data_ptr(),
+    )
+    return tensor
+
+
+def _ort_output_to_torch(ort_output: Any, device: torch.device) -> torch.Tensor:
+    try:
+        from torch.utils import dlpack
+
+        try:
+            dlp = ort_output._ortvalue.to_dlpack()
+        except AttributeError:
+            dlp = ort_output.to_dlpack()
+        return dlpack.from_dlpack(dlp).clone()
+    except Exception:
+        return torch.tensor(ort_output.numpy(), device=device)
+
+
 def infer(
     is_half: bool,
     session: InferenceSession,
@@ -120,54 +166,23 @@ def infer(
     device = feats.device
     if device.type == "cuda":
         io_binding = session.io_binding()
-
-        def bind(name: str, tensor: torch.Tensor):
-            tensor = tensor.contiguous()
-            if tensor.dtype == torch.float16:
-                element_type = np.float16
-            elif tensor.dtype == torch.float32:
-                element_type = np.float32
-            elif tensor.dtype == torch.int64:
-                element_type = np.int64
-            else:
-                raise ValueError(f"Unsupported dtype: {tensor.dtype}")
-
-            io_binding.bind_input(
-                name=name,
-                device_type="cuda",
-                device_id=device.index if device.index is not None else 0,
-                element_type=element_type,
-                shape=tuple(tensor.shape),
-                buffer_ptr=tensor.data_ptr(),
-            )
-            return tensor
-
-        tensors = []
-        tensors.append(bind("feats", feats.half() if is_half else feats.float()))
-        tensors.append(bind("p_len", pitch_length))
-        tensors.append(bind("sid", sid))
-
+        tensors = [
+            _bind_torch_input(
+                io_binding, "feats", feats.half() if is_half else feats.float()
+            ),
+            _bind_torch_input(io_binding, "p_len", pitch_length),
+            _bind_torch_input(io_binding, "sid", sid),
+        ]
         if pitch is not None and pitchf is not None:
-            tensors.append(bind("pitch", pitch))
-            tensors.append(bind("pitchf", pitchf))
+            tensors.append(_bind_torch_input(io_binding, "pitch", pitch))
+            tensors.append(_bind_torch_input(io_binding, "pitchf", pitchf))
 
         io_binding.bind_output(
             "audio", "cuda", device_id=device.index if device.index is not None else 0
         )
         session.run_with_iobinding(io_binding)
-        ort_output = io_binding.get_outputs()[0]
-
-        try:
-            from torch.utils import dlpack
-
-            try:
-                dlp = ort_output._ortvalue.to_dlpack()
-            except AttributeError:
-                dlp = ort_output.to_dlpack()
-            audio1 = dlpack.from_dlpack(dlp).clone()
-        except Exception:
-            audio1 = torch.tensor(ort_output.numpy(), device=device)
-
+        audio1 = _ort_output_to_torch(io_binding.get_outputs()[0], device)
+        del tensors
         return audio1.unsqueeze(0)
 
     # Fallback for CPU
