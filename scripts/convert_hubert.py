@@ -1,14 +1,19 @@
 """fairseq ContentVec (hubert_base.pt) を transformers HubertModel 資産へ変換する。
 
 Python 3.11 + fairseq で **一度だけ** 走らせるオフライン処理。runtime には含めない。
+fairseq / transformers は pyproject にも uv.lock にも無い。poe task が `uv run --with` で
+使い捨ての 3.11 環境に供給する（`--python 3.11` は必須。省くとプロジェクトの処理系に落ち、
+cp311 の fairseq wheel が入らない）。
 
-`python scripts/convert_hubert.py` ではなく **`python -m scripts.convert_hubert`** で起動すること。
-前者は sys.path[0] が scripts/ になり `from scripts.hubert_metrics import ...` を解決できない。
-
-    uv run --extra convert python -m scripts.convert_hubert \
+    uv run poe convert-hubert \
         --input  <path>/hubert_base.pt \
         --output <path>/hubert_contentvec \
         --golden <path>/hubert_golden
+
+poe task は `python -m scripts.convert_hubert` の形で起動する。ファイルパスで叩くと
+sys.path[0] が scripts/ になり `from scripts.hubert_metrics import ...` を解決できない。
+
+このあと `uv run poe export-hubert-onnx` で ONNX を書き出すまで、runtime は資産を読めない。
 
 出力:
   <output>/config.json, model.safetensors  transformers HubertModel の encoder
