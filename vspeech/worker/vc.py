@@ -169,7 +169,6 @@ async def rvc_worker(
     in_queue: Queue[WorkerInput],
 ):
     from vspeech.lib.cuda_util import get_device
-    from vspeech.lib.pitch_extract import create_rmvpe_session
     from vspeech.lib.rvc import change_voice
     from vspeech.lib.rvc import create_session
     from vspeech.lib.rvc import half_precision_available
@@ -186,7 +185,7 @@ async def rvc_worker(
     session = create_session(rvc_config.model_file, device)
     check_cuda_provider(session.get_providers())
     if rvc_config.f0_extractor_type == F0ExtractorType.rmvpe:
-        rmvpe_session = create_rmvpe_session(rvc_config.rmvpe_model_file, device.index)
+        rmvpe_session = create_session(rvc_config.rmvpe_model_file, device)
     else:
         rmvpe_session = None
     if vc_config.vad_gate:

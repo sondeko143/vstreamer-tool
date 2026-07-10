@@ -42,7 +42,9 @@ make
 
 `config.toml.example` documents every setting; `vspeech/config.py` is the source of truth for defaults and shapes. Config files (`config*.toml`, `config*.json`, `key.json`, `*.log`, `*.wav`) are gitignored.
 
-[docs/follow-ups.md](docs/follow-ups.md) tracks review findings that were deliberately deferred out of a branch's scope — with the reason each was deferred. Check it before touching the code it names; there is a real, unfixed device-selection bug in `create_rmvpe_session`.
+[docs/follow-ups.md](docs/follow-ups.md) tracks review findings that were deliberately deferred out of a branch's scope — with the reason each was deferred. Check it before touching the code it names.
+
+Every `onnxruntime` session (RVC decoder, HuBERT, RMVPE) is opened through the one `create_session` in [`vspeech/lib/onnx_session.py`](vspeech/lib/onnx_session.py). It honours the caller's `torch.device` — never key the execution provider off `torch.cuda.is_available()` alone. `tests/test_onnx_session.py` pins that behaviour, and pins that the consumers still share one implementation: they used to hold duplicate copies and only one of them got fixed.
 
 A **gitleaks pre-commit gate** ([`.gitleaks.toml`](.gitleaks.toml), [`.pre-commit-config.yaml`](.pre-commit-config.yaml)) scans staged changes for secrets **and** environment-PII (private LAN IPs, `C:\Users\<name>` paths, AmiVoice `appkey`). It is local-only; activate with `uv tool install pre-commit && pre-commit install` plus a `gitleaks` binary on PATH. Use `<USER>`/`<NAS_HOST>` placeholders for machine-specific paths/hosts in committed docs. See [docs/secret-scanning.md](docs/secret-scanning.md).
 
