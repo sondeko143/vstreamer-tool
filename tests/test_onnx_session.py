@@ -1,9 +1,6 @@
-"""onnxruntime セッションの execution provider 選択を固定する。
+"""`create_session` の execution provider 選択と、その生成箇所を固定する。
 
-このモジュールは RVC decoder / HuBERT / RMVPE の 3 セッションすべてが通る唯一の入口。
-かつては `rvc.create_session` と `pitch_extract.create_rmvpe_session` に同じ 20 行が
-重複しており、前者だけが device を尊重するよう直されて後者が取り残された。
-実装を 1 本にしたので、このテストが 3 経路すべてを守る。
+RVC decoder / HuBERT / RMVPE の 3 経路がこの 1 実装を共有するので、ここが 3 つとも守る。
 """
 
 import ast
@@ -32,9 +29,8 @@ def _capture(monkeypatch, cuda_available: bool):
 def test_cpu_device_never_gets_the_cuda_ep(tmp_path, monkeypatch):
     """CUDA が使えても device が CPU なら CUDA EP を積まないこと。
 
-    以前は `torch.cuda.is_available()` だけで判定しており、config で CPU を指定しても
-    GPU で走っていた。HuBERT の fp32 等価ゲートはこの差 (CUDA EP の TF32, max_abs
-    2.6e-3) で落ちる。
+    CUDA EP は fp32 の行列積に TF32 を使う。HuBERT の特徴量は max_abs が 1.010e-05 から
+    2.625e-03 へ悪化し、`tests/test_hubert_equivalence.py` の fp32 ゲート (1e-4) が落ちる。
     """
     captured = _capture(monkeypatch, cuda_available=True)
 
@@ -95,13 +91,10 @@ def _inference_session_construction_sites() -> list[str]:
 def test_only_one_place_builds_a_device_aware_session():
     """CUDA EP を選ぶセッション生成は `onnx_session.py` の 1 箇所だけ。
 
-    `rvc.create_session` と `pitch_extract.create_rmvpe_session` は同じ 20 行の複製で、
-    前者だけが device を尊重するよう直され、後者が取り残された。**複製こそが原因**なので、
-    「create_session が 2 つある」ではなく「InferenceSession を組み立てる場所が増えた」を
-    検出する。新しい複製はどんな名前で書かれてもここで落ちる。
+    複製は任意の名前で書けるので、関数名ではなく `InferenceSession` の構築箇所を数える。
 
-    `vad.py` は例外。Silero VAD は意図的に `providers=["CPUExecutionProvider"]` 固定で、
-    device 引数を取らない（EP 選択のロジックを持たない）ので、複製ではない。
+    `vad.py` は例外。Silero VAD は `providers=["CPUExecutionProvider"]` 固定で device を
+    取らず、EP 選択のロジックを持たない。
     """
     assert sorted(set(_inference_session_construction_sites())) == [
         "onnx_session.py",

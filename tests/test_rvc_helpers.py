@@ -183,17 +183,12 @@ def test_ort_output_to_torch_falls_back_to_numpy():
     assert out[0, 1, 2].item() == 5.0
 
 
-# create_session の EP 選択は tests/test_onnx_session.py が固定する（実装は
-# vspeech/lib/onnx_session.py に一本化され、RVC / HuBERT / RMVPE の 3 経路が共有する）。
-
-
 def test_get_device_treats_gpu_id_zero_as_a_real_device(monkeypatch):
     """`gpu_id = 0` は「未設定」ではなく cuda:0。
 
-    `if gpu_id and ...` は 0 を falsy として弾いていた。config.toml.example が
-    `gpu_id = 0` を載せているため、この構成は CPU device になり、Task 6 で
-    create_session が device を尊重するようになった結果 check_cuda_provider が
-    起動時に落ちるようになった。「未設定」を表すのは None であって 0 ではない。
+    「未設定」を表すのは `None`（`gpu_id: int | None = None`）。`if gpu_id and ...` と
+    書くと 0 が falsy で弾かれ、`config.toml.example` が載せている `gpu_id = 0` の構成が
+    CPU device に落ちる。すると `check_cuda_provider` が vc worker の起動時に落ちる。
     """
     import torch
 
