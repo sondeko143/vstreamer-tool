@@ -169,11 +169,30 @@ class HubertSession:
 
 `tests/test_hubert_equivalence.py` を ONNX 経路へ書き換える。`hubert_golden.npz`（fairseq 由来）を正解とし、`(9, True)` / `(12, False)` の両方を `cosine ≥ 0.9999` かつ `max-abs ≤ 1e-4` で判定する。**しきい値は spec ① から据え置き**。
 
-**(b) fp16 ゲート**
+**(b) fp16 ゲート — 参照は fp32 golden ではなく torch fp16**
 
-fp32 golden に対する fp16 の誤差は 12 層の累積なので `1e-4` は原理的に通らない。`scripts/hubert_metrics.py` に `COSINE_MIN_FP16` / `MAX_ABS_MAX_FP16` を追加する（しきい値の単一情報源はこのファイルのまま）。
+当初は fp16 も fp32 golden と照合する設計だったが、**2026-07-10 の実測でこれが原理的に成立しないことが判明した**。hidden state の大きさは O(1)〜O(2.5) あり、半精度の絶対誤差はもともと 1e-1 オーダーになる。実際、**この branch より前から production で動いている `HubertModel.half()` 自身**が fp32 golden に対して次の値を出す:
 
-しきい値の確定規則は spec ① と同一: **export 時の実測値の 10 倍**を上限として採用し、その実測値を根拠としてコメントに残す。**理由なく緩めない。** テストは CUDA と `hubert_fp16.onnx` が無ければ skip する。
+| 実装 | l9_proj cosine | l9_proj max_abs | l12_raw cosine | l12_raw max_abs |
+|---|---|---|---|---|
+| torch fp16 (現行 runtime) | 0.98720998 | 4.353e-01 | 0.97697942 | 2.651e-01 |
+| ONNX fp16 (dynamo) | 0.98736646 | 4.304e-01 | 0.97705446 | 2.631e-01 |
+| ONNX fp32 (dynamo) | 1.00000000 | 1.010e-05 | 1.00000000 | 9.030e-06 |
+
+ONNX fp16 は torch fp16 よりむしろわずかに良い。つまり壊れているのは export ではなく「fp16 を fp32 golden に絶対誤差で照らす」というゲートの立て方だった。
+
+したがって fp16 ゲートは **ONNX fp16 を「置き換え対象である torch fp16」と照合する**。問いが「ONNX 化で fp16 の振る舞いが変わっていないか」になり、はじめて意味を持つ。実測（同上）:
+
+| 比較 | cosine | max_abs |
+|---|---|---|
+| ONNX fp16 vs torch fp16 `l9_proj` | 0.99999010 | 1.379e-02 |
+| ONNX fp16 vs torch fp16 `l12_raw` | 0.99997235 | 1.074e-02 |
+
+- torch fp16 の出力は export ツールが `<golden>/hubert_golden_fp16.npz` として捕獲する（transformers を持つのは export 環境だけなので、ここでしか捕獲できない）。テスト側は npz を読むだけで transformers を要らない。
+- しきい値: `COSINE_MIN_FP16 = 0.9999`、`MAX_ABS_MAX_FP16 = 5e-2`（実測 1.379e-2 の約 3.6 倍。10 倍規則の範囲内で、より厳しい側に取る）。単一情報源は `scripts/hubert_metrics.py`。
+- 硬い上限 `MAX_ABS_MAX_FP16 ≤ 1e-1` / `COSINE_MIN_FP16 ≥ 0.999` は**そのまま維持できる**。これを超えるなら export が壊れている。
+- fp16 参照は GPU / カーネル依存（RTX 4060 で捕獲）。このテストはどのみち CUDA と資産の両方で gating され開発機限定なので許容する。他機で再捕獲が要る場合は export を回し直せばよい。
+- テストは CUDA・`hubert_fp16.onnx`・`hubert_golden_fp16.npz` のいずれかが無ければ skip する。
 
 **(c) 回帰 — `change_voice` 音声 golden は据え置き**
 
@@ -231,7 +250,7 @@ export-hubert-onnx = { cmd = "uv run --with transformers --with onnx --with onnx
 | 種別 | 対象 | ゲート |
 |---|---|---|
 | 等価（主） | fp32 ONNX の特徴量 vs fairseq golden、`(9,True)` / `(12,False)` | `cosine ≥ 0.9999` かつ `max-abs ≤ 1e-4` |
-| 等価（fp16） | fp16 ONNX の特徴量 vs 同 golden（CUDA gating） | `COSINE_MIN_FP16` / `MAX_ABS_MAX_FP16`（実測の 10 倍で確定） |
+| 等価（fp16） | fp16 ONNX の特徴量 vs **torch fp16 参照**（CUDA gating） | `cosine ≥ 0.9999` かつ `max-abs ≤ 5e-2` |
 | 回帰 | `change_voice` の出力音声 vs 既存 golden | `corr ≥ 0.999` かつ `SNR ≥ 40 dB`（据え置き） |
 | runtime 単体 | 出力名の引き当て / エラー経路 / fp16 選択 | 極小 ONNX で固定（transformers 不要） |
 | 構造 | `vspeech/` 配下の `fairseq` / `transformers` import 数 | 0 件 |
@@ -252,7 +271,8 @@ export-hubert-onnx = { cmd = "uv run --with transformers --with onnx --with onnx
 
 | リスク | 影響 | 緩和 |
 |---|---|---|
-| `torch.onnx.export(dynamo=True)` が transformers HubertModel で失敗する | export できない | 既定の dynamo を第一候補、失敗時は legacy exporter（`dynamo=False`）へフォールバック。どちらで出したかを `mapping.json` の `exporter` に記録する |
+| `torch.onnx.export(dynamo=True)` が transformers HubertModel で失敗する | export できない | 既定の dynamo を第一候補、失敗時は legacy exporter（`dynamo=False`）へフォールバック。どちらで出したかを `mapping.json` の `exporter` に記録する。**フォールバックは必ず traceback 付きで大声で報告する**（下の行を参照） |
+| フォールバックが本当の失敗を隠す | 静かに劣った経路を使う | **2026-07-10 に実際に起きた。** torch.onnx が進捗表示の `✅` を Windows の cp1252 stdout に書こうとして `UnicodeEncodeError` で落ち、広い `except Exception` がそれを「dynamo 失敗」と誤認して legacy へ落ちていた。export ツールは起動時に stdout/stderr を UTF-8 へ `reconfigure` し、フォールバック時は例外型と traceback を印字する |
 | `pos_conv` の `weight_norm` パラメトリゼーションが export を壊す | 特徴量が別物になる | export 前に `remove_parametrizations` で畳み込む。3.1 の自己検証が即検知 |
 | fp16 ONNX が golden 比で想定より劣化 | 音質退行 | しきい値を実測で確定（10 倍規則）。音声側は corr/SNR ゲート（据え置き）が最終判定。**両方通らない限り採用しない** |
 | `io_binding` で 1 出力だけ bind したときの ORT の挙動 | 出力が取れない / 想定外の計算 | 等価ゲートで検証。ダメなら両出力を bind して片方を捨てる（現状比で劣化しない） |

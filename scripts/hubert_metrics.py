@@ -19,11 +19,16 @@ MAX_ABS_MAX = 1e-4
 # change_voice 出力音声の回帰判定。
 CORR_MIN = 0.999
 SNR_MIN_DB = 40.0
-# fp16 ONNX グラフ vs fp32 golden。12 層ぶんの半精度累積があるため fp32 の 1e-4 は
-# 原理的に通らない。値は `scripts/export_hubert_onnx.py --measure-only` の実測の 10 倍。
-# 実測 (2026-07-10, RTX 4060, hubert_fp16.onnx): TASK 5 で記入すること。
+# fp16 ONNX グラフ vs **torch fp16 参照**（fp32 golden ではない）。
+# hidden state は O(1)-O(2.5) あり、半精度の絶対誤差はもともと 1e-1 オーダー。fp32 golden に
+# 対しては現行 runtime の HubertModel.half() 自身が cosine 0.987 / max_abs 0.435 を出すので、
+# fp32 golden を fp16 の参照にすること自体が誤り。問うべきは「ONNX 化で fp16 の振る舞いが
+# 変わっていないか」であり、参照は置き換え対象の torch fp16 である。
+# 実測 (2026-07-10, RTX 4060, ONNX fp16 vs torch fp16):
+#   l9_proj  cosine=0.99999010 max_abs=1.379e-02
+#   l12_raw  cosine=0.99997235 max_abs=1.074e-02
 COSINE_MIN_FP16 = 0.9999
-MAX_ABS_MAX_FP16 = 1e-2
+MAX_ABS_MAX_FP16 = 5e-2
 
 
 def _as_2d(x: NDArray) -> NDArray[np.float64]:

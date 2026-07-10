@@ -21,6 +21,9 @@
 - `load_hubert_model(file_name, device, is_half)` の**シグネチャを変えない**。
 - runtime（`vspeech/` 配下）は `fairseq` / `transformers` / `safetensors` を **import しない**。
 - **runtime は層インデックスを推測しない。** 対応表は `mapping.json` から読み、未登録の組合せは明示的に例外にする。
+- **fp16 の参照は fp32 golden ではなく torch fp16。** 実測 (2026-07-10, RTX 4060): 現行 runtime の `HubertModel.half()` 自身が fp32 golden 比 `cosine 0.987 / max_abs 0.435` を出す。fp32 golden に fp16 を絶対誤差で照らすゲートは原理的に成立しない。
+- **`.half()` はモジュールを in-place で壊す。** fp32 グラフの export を必ず先に済ませること。`.float()` で戻しても fp32 の重みは復元しない。
+- **`scripts/export_hubert_onnx.py` は起動時に stdout/stderr を UTF-8 へ `reconfigure` する。** torch.onnx の進捗表示に `✅` が含まれ、Windows の cp1252 stdout では `UnicodeEncodeError` になる。これを `except Exception` が「dynamo 失敗」と誤認して黙って legacy exporter へ落とす事故が実際に起きた。フォールバック時は traceback を必ず印字する。
 - **`layer_offset` の off-by-one は `tests/test_hubert_export.py` だけが pin する。** 実資産の offset は 0 なので、`+ layer_offset` を落とす退行は golden ゲートすら通過する。このテストを消さないこと。
 - `scripts/export_hubert_onnx.py` は `transformers` / `safetensors` を**関数内で遅延 import** する。module 直下に置くと Task 8 の依存撤去後にテストから import できなくなる。
 - `torch.compile` を再導入しない（Windows/CUDA で `TritonMissing`）。
@@ -891,10 +894,17 @@ onnxscript) は poe task の `uv run --with` が一時環境で供給する。
 で起動すること（前者は sys.path[0] が scripts/ になり `from scripts...` / `from vspeech...`
 の import が解決しない）。
 
-出力 (--asset と同じディレクトリへ):
-  hubert_fp32.onnx   CPU で export した fp32 グラフ
-  hubert_fp16.onnx   CUDA 上で model.half() を export した fp16 グラフ
-  mapping.json       出力名 <-> (layer, use_final_proj) の対応表（上書き）
+出力:
+  <asset>/hubert_fp32.onnx    fp32 グラフ
+  <asset>/hubert_fp16.onnx    CUDA 上で model.half() を export した fp16 グラフ
+  <asset>/mapping.json        出力名 <-> (layer, use_final_proj) の対応表（上書き）
+  <golden>/hubert_golden_fp16.npz  torch fp16 の出力（fp16 ゲートの参照）
+
+ゲートの参照:
+  fp32 グラフ -> <golden>/hubert_golden.npz（fairseq 由来の fp32 正解）
+  fp16 グラフ -> torch fp16（置き換え対象の実装）。fp32 golden ではない。
+                 半精度の絶対誤差は hidden state のスケールに対して 1e-1 オーダーで、
+                 現行 runtime 自身が fp32 golden 比 cosine 0.987 / max_abs 0.435 を出す。
 
 final_proj はグラフに焼き込む。したがって runtime は safetensors も
 torch.nn.Linear も要らない。export の正しさはこのスクリプト自身がアサートし、
@@ -904,7 +914,9 @@ torch.nn.Linear も要らない。export の正しさはこのスクリプト自
 import argparse
 import json
 import shutil
+import sys
 import tempfile
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -1023,8 +1035,13 @@ def export_graph(wrapper: torch.nn.Module, source: torch.Tensor, path: Path) -> 
     try:
         torch.onnx.export(wrapper, (source,), str(path), dynamo=True, **kwargs)
         return "dynamo"
-    except Exception as e:  # exporter は多様な例外を投げるので広く捕まえる
-        print(f"dynamo exporter failed ({type(e).__name__}: {e}); falling back to legacy")
+    except Exception:  # exporter は多様な例外を投げるので広く捕まえる
+        # **大声で報告すること。** 2026-07-10 にこの except が UnicodeEncodeError を飲み込み、
+        # dynamo が成功できるのに黙って legacy へ落ちていた（torch.onnx が進捗の ✅ を
+        # Windows の cp1252 stdout へ書こうとして落ちる）。main() の UTF-8 reconfigure が
+        # その原因を潰すが、フォールバックが起きたときは必ず traceback を出す。
+        print("!!! dynamo exporter failed; falling back to the legacy exporter !!!")
+        traceback.print_exc()
         torch.onnx.export(wrapper, (source,), str(path), dynamo=False, **kwargs)
         return "legacy"
 
@@ -1038,6 +1055,31 @@ def run_session(path: Path, wav: np.ndarray, is_half: bool) -> dict[str, np.ndar
     names = [o.name for o in session.get_outputs()]
     outputs = session.run(names, {"source": source})
     return {name: np.asarray(out) for name, out in zip(names, outputs)}
+
+
+def torch_fp16_reference(
+    half_wrapper: torch.nn.Module, source: torch.Tensor
+) -> dict[str, np.ndarray]:
+    """置き換え対象である `HubertModel.half()` の出力（fp16 ゲートの参照）。
+
+    fp32 golden を fp16 の参照にはできない。半精度の絶対誤差は hidden state のスケール
+    (O(1)-O(2.5)) に対して 1e-1 オーダーになり、現行 runtime 自身が fp32 golden 比で
+    cosine 0.987 / max_abs 0.435 を出す。問うべきは「ONNX 化で fp16 の振る舞いが
+    変わっていないか」であり、参照は置き換え対象の torch fp16 である。
+
+    GPU / カーネル依存の参照。テストは CUDA gating 済みなので開発機でのみ意味を持つ。
+
+    **呼び出し順序が load-bearing**: `.half()` はモジュールを in-place で書き換えるので、
+    fp32 グラフの export を済ませてから半精度化すること。半精度化した後に `.float()` で
+    戻しても fp32 の重みは復元しない。ここでは既に半精度化済みのラッパをそのまま呼び、
+    ONNX fp16 と厳密に同じ重み・同じ層から参照を取る。
+    """
+    with torch.inference_mode():
+        out9, out12 = half_wrapper(source)
+    return {
+        "l9_proj": out9.squeeze(0).float().cpu().numpy(),
+        "l12_raw": out12.squeeze(0).float().cpu().numpy(),
+    }
 
 
 def check(
@@ -1064,6 +1106,12 @@ def check(
 
 
 def main() -> None:
+    # torch.onnx の進捗表示は ✅ を含む。Windows の既定 stdout (cp1252) では
+    # UnicodeEncodeError になり、export_graph の except がそれを「dynamo 失敗」と
+    # 誤認して黙って legacy へ落ちる。ここで潰しておく。
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--asset", required=True, type=Path, help="hubert_contentvec/")
     parser.add_argument("--golden", required=True, type=Path, help="hubert_golden/")
@@ -1075,8 +1123,12 @@ def main() -> None:
     args = parser.parse_args()
 
     asset_dir = args.asset.expanduser()
-    golden = dict(np.load(args.golden.expanduser() / "hubert_golden.npz"))
+    golden_dir = args.golden.expanduser()
+    golden = dict(np.load(golden_dir / "hubert_golden.npz"))
     wav = golden["wav"].astype(np.float32)
+
+    if not torch.cuda.is_available():
+        raise SystemExit("fp16 export には CUDA が要ります")
 
     model, final_proj, layer_offset, num_hidden_layers = load_asset(asset_dir)
     print(f"layer_offset={layer_offset}")
@@ -1086,6 +1138,7 @@ def main() -> None:
         fp32_path = tmp_dir / "hubert_fp32.onnx"
         fp16_path = tmp_dir / "hubert_fp16.onnx"
 
+        # fp32 を先に出す。次の `.half()` はモジュールを in-place で壊す。
         wrapper = HubertOnnxWrapper(model, final_proj, layer_offset).eval()
         source = torch.from_numpy(wav).unsqueeze(0)
         exporter = export_graph(wrapper, source, fp32_path)
@@ -1099,16 +1152,17 @@ def main() -> None:
             MAX_ABS_MAX,
         )
 
-        if not torch.cuda.is_available():
-            raise SystemExit("fp16 export には CUDA が要ります")
         half_wrapper = (
             HubertOnnxWrapper(model, final_proj, layer_offset).eval().half().cuda()
         )
-        export_graph(half_wrapper, source.half().cuda(), fp16_path)
+        half_source = source.half().cuda()
+        # fp16 ゲートの参照。ONNX fp16 と同じ重み・同じ層から取る。
+        reference = torch_fp16_reference(half_wrapper, half_source)
+        export_graph(half_wrapper, half_source, fp16_path)
         ok = (
             check(
                 run_session(fp16_path, wav, is_half=True),
-                golden,
+                reference,
                 "fp16",
                 COSINE_MIN_FP16,
                 MAX_ABS_MAX_FP16,
@@ -1124,6 +1178,10 @@ def main() -> None:
 
         shutil.move(str(fp32_path), asset_dir / "hubert_fp32.onnx")
         shutil.move(str(fp16_path), asset_dir / "hubert_fp16.onnx")
+
+    # fp16 ゲートの参照を golden 側へ保存する。テストは npz を読むだけで transformers を
+    # 要らない（Task 8 でプロジェクト依存から外れるため、ここでしか捕獲できない）。
+    np.savez(golden_dir / "hubert_golden_fp16.npz", wav=wav, **reference)
 
     mapping = {
         "layer_offset": layer_offset,
@@ -1154,35 +1212,44 @@ Expected: PASS 4 件
 Run: `uv run --all-extras python -c "import scripts.export_hubert_onnx"`
 Expected: 例外なし（transformers を module 直下で import していないことの確認。Task 8 後もこれが通る必要がある）
 
-- [ ] **Step 5: `--measure-only` で誤差を実測する**
+- [ ] **Step 5: `--measure-only` で確認する**
 
 Run:
 ```bash
 uv run --with onnx --with onnxscript python -m scripts.export_hubert_onnx \
   --asset ./hubert_contentvec --golden ./hubert_golden --measure-only
 ```
-Expected: `fp32 l9_proj: ... [OK]` / `fp32 l12_raw: ... [OK]` と、fp16 の実測 cosine / max_abs が印字される。
 
-fp32 が FAIL する場合は export が壊れている。exporter のフォールバック有無と `fold_weight_norm` を疑うこと。**しきい値を緩めて逃げない。**
+Expected（**2026-07-10 にこの機械で実測済み。この値を再現すること**）:
 
-- [ ] **Step 6: 実測値で fp16 しきい値を確定させる**
+```
+exported fp32 with dynamo exporter        <- legacy へ落ちたら失敗。原因を調べること
+fp32 l9_proj: cosine=1.00000000 max_abs=1.010e-05 [OK]
+fp32 l12_raw: cosine=1.00000000 max_abs=9.030e-06 [OK]
+fp16 l9_proj: cosine=0.99999010 max_abs=1.379e-02 [OK]   <- 参照は torch fp16
+fp16 l12_raw: cosine=0.99997235 max_abs=1.074e-02 [OK]
+```
 
-`scripts/hubert_metrics.py` の `COSINE_MIN_FP16` / `MAX_ABS_MAX_FP16` を、**Step 5 で印字された fp16 の実測値**から決める:
+fp32 が FAIL する場合は export が壊れている。`fold_weight_norm` と exporter を疑うこと。**しきい値を緩めて逃げない。**
 
-- `MAX_ABS_MAX_FP16` = 実測 max_abs の 10 倍を上回らない、切りのよい値
-- `COSINE_MIN_FP16` = 実測 cosine より下で、`1 - (1 - 実測) * 10` を下回らない値
+- [ ] **Step 6: fp16 しきい値を確定させる**
 
-コメントの `TASK 5 で記入すること。` を実測値に置き換える。例:
+`scripts/hubert_metrics.py` の定数とコメントを実測値に置き換える。`COSINE_MIN_FP16` は据え置き、`MAX_ABS_MAX_FP16` だけ `1e-2` → `5e-2` に直す（実測 1.379e-2 の約 3.6 倍。10 倍規則の範囲内で、より厳しい側に取る）:
 
 ```python
-# 実測 (2026-07-10, RTX 4060, hubert_fp16.onnx):
-#   l9_proj  cosine=0.99999xx max_abs=x.xxe-03
-#   l12_raw  cosine=0.99999xx max_abs=x.xxe-03
+# fp16 ONNX グラフ vs **torch fp16 参照**（fp32 golden ではない）。
+# hidden state は O(1)-O(2.5) あり、半精度の絶対誤差はもともと 1e-1 オーダー。fp32 golden に
+# 対しては現行 runtime の HubertModel.half() 自身が cosine 0.987 / max_abs 0.435 を出すので、
+# fp32 golden を fp16 の参照にすること自体が誤り。問うべきは「ONNX 化で fp16 の振る舞いが
+# 変わっていないか」であり、参照は置き換え対象の torch fp16 である。
+# 実測 (2026-07-10, RTX 4060, ONNX fp16 vs torch fp16):
+#   l9_proj  cosine=0.99999010 max_abs=1.379e-02
+#   l12_raw  cosine=0.99997235 max_abs=1.074e-02
 COSINE_MIN_FP16 = 0.9999
 MAX_ABS_MAX_FP16 = 5e-2
 ```
 
-`tests/test_hubert_metrics.py::test_fp16_thresholds_are_looser_than_fp32_but_still_tight` の `MAX_ABS_MAX_FP16 <= 1e-1` と `COSINE_MIN_FP16 >= 0.999` は**動かさない硬い上限**である。実測 × 10 がこれを超える場合、それは「しきい値が厳しすぎる」のではなく **fp16 export が壊れている**ということ。テストを緩めず、`fold_weight_norm` / exporter のフォールバック / fp16 グラフを CUDA で走らせているかを調べること。spec ① の実機実測（fp16 の e2e で SNR 44.59 dB）からして 1e-1 には十分な余裕があるはず。
+`tests/test_hubert_metrics.py::test_fp16_thresholds_are_looser_than_fp32_but_still_tight` の `MAX_ABS_MAX_FP16 <= 1e-1` と `COSINE_MIN_FP16 >= 0.999` は**動かさない硬い上限**である。上の値は両方を満たす。超えるなら export が壊れている。
 
 Run: `uv run --all-extras pytest tests/test_hubert_metrics.py -v`
 Expected: PASS
@@ -1196,8 +1263,8 @@ uv run --with onnx --with onnxscript python -m scripts.export_hubert_onnx \
 ```
 Expected: 全て `[OK]`、`wrote onnx + mapping.json -> hubert_contentvec`
 
-Run: `ls hubert_contentvec/`
-Expected: `hubert_fp32.onnx`（約 380MB）と `hubert_fp16.onnx`（約 190MB）と更新された `mapping.json`
+Run: `ls hubert_contentvec/ hubert_golden/`
+Expected: `hubert_fp32.onnx`（約 380MB）、`hubert_fp16.onnx`（約 190MB）、更新された `mapping.json`、そして `hubert_golden/hubert_golden_fp16.npz`（torch fp16 参照）
 
 - [ ] **Step 8: commit**
 
@@ -1222,11 +1289,17 @@ git commit -m "feat(rvc): add offline HuBERT ONNX exporter with a self-verifying
 - [ ] **Step 1: `tests/test_hubert_equivalence.py` を全面置換**
 
 ```python
-"""ONNX 版 HuBERT が fairseq 版と数値等価であることの主ゲート。
+"""ONNX 版 HuBERT の数値等価ゲート。
 
-fairseq 時代に scripts/convert_hubert.py が捕獲した特徴量（fp32）を正解とし、
-(9, use_final_proj=True) と (12, use_final_proj=False) の両方で照合する。
-fp32 グラフは厳密に、fp16 グラフは半精度累積ぶんの実測しきい値で判定する。
+fp32 グラフ: fairseq 時代に scripts/convert_hubert.py が捕獲した特徴量（fp32）を正解とし、
+(9, use_final_proj=True) と (12, use_final_proj=False) の両方を厳密に照合する。
+
+fp16 グラフ: 参照は **fp32 golden ではなく torch fp16**（置き換え対象の実装）。半精度の
+絶対誤差は hidden state のスケール (O(1)-O(2.5)) に対して 1e-1 オーダーで、現行 runtime の
+HubertModel.half() 自身が fp32 golden 比 cosine 0.987 / max_abs 0.435 を出す。したがって
+fp32 golden を fp16 の参照にすること自体が誤り。問うべきは「ONNX 化で fp16 の振る舞いが
+変わっていないか」であり、参照は scripts/export_hubert_onnx.py が捕獲した
+hubert_golden_fp16.npz。GPU 依存の参照なので CUDA gating 済みの開発機でのみ走る。
 
 資産と golden は派生物なので gitignore してある。環境変数が未設定なら skip し、
 CPU/CI のスイートを壊さない（tests/test_change_voice_golden.py と同じ流儀）。
@@ -1253,6 +1326,7 @@ _asset = os.environ.get(_ASSET_ENV)
 _golden = os.environ.get(_GOLDEN_ENV)
 ASSET_DIR = Path(_asset) if _asset else None
 GOLDEN_NPZ = Path(_golden) / "hubert_golden.npz" if _golden else None
+GOLDEN_FP16_NPZ = Path(_golden) / "hubert_golden_fp16.npz" if _golden else None
 
 # しきい値 (COSINE_MIN / MAX_ABS_MAX / *_FP16) の単一情報源は scripts/hubert_metrics.py。
 # 緩めるときはそこで変更し、実測値を根拠としてコメントに残すこと（実測の 10 倍まで）。
@@ -1268,14 +1342,16 @@ CASES = [(9, True, "l9_proj"), (12, False, "l12_raw")]
 
 
 def _compare(device: torch.device, is_half: bool, case) -> tuple[float, float]:
+    """`is_half` は判定に使う参照 npz も選ぶ。fp16 の参照は torch fp16。"""
     from vspeech.lib.rvc import extract_features
     from vspeech.lib.rvc import load_hubert_model
 
     emb_output_layer, use_final_proj, golden_key = case
     assert ASSET_DIR is not None and GOLDEN_NPZ is not None  # skipif guarantees
+    assert GOLDEN_FP16_NPZ is not None
 
-    data = np.load(GOLDEN_NPZ)
-    wav = data["wav"].astype(np.float32)
+    data = np.load(GOLDEN_FP16_NPZ if is_half else GOLDEN_NPZ)
+    wav = np.load(GOLDEN_NPZ)["wav"].astype(np.float32)
     reference = data[golden_key].astype(np.float32)
 
     model = load_hubert_model(ASSET_DIR, device, is_half=is_half)
@@ -1306,11 +1382,17 @@ def test_fp32_features_match_fairseq_golden(
     assert max_abs <= MAX_ABS_MAX, f"max-abs {max_abs:.3e} > {MAX_ABS_MAX:.1e}"
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="fp16 graph needs CUDA")
+@pytest.mark.skipif(
+    not torch.cuda.is_available()
+    or GOLDEN_FP16_NPZ is None
+    or not GOLDEN_FP16_NPZ.exists(),
+    reason="fp16 graph needs CUDA and hubert_golden_fp16.npz",
+)
 @pytest.mark.parametrize(("emb_output_layer", "use_final_proj", "golden_key"), CASES)
-def test_fp16_features_match_fairseq_golden(
+def test_fp16_features_match_the_torch_fp16_reference(
     emb_output_layer, use_final_proj, golden_key
 ):
+    """ONNX 化で fp16 の振る舞いが変わっていないこと。fp32 golden とは比べない。"""
     cosine, max_abs = _compare(
         torch.device("cuda", 0), True, (emb_output_layer, use_final_proj, golden_key)
     )
