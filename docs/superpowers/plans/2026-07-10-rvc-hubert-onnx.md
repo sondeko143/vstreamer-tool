@@ -1622,6 +1622,103 @@ git commit -m "test: generalize the import gate to forbid transformers in the ru
 
 ---
 
+## Task 7b: `get_device` が `gpu_id = 0` を未設定扱いする
+
+Task 6 の `create_session` 修正の直接の帰結として発見。`create_session` が `device` を尊重するようになったため、`device` が CPU になる構成では `check_cuda_provider`（`vspeech/worker/vc.py:48`）が起動時に `RuntimeError` を投げる。**修正前は黙って GPU で走っていた。**
+
+そして `get_device` は `gpu_id = 0` を falsy として弾く:
+
+```python
+def get_device(gpu_id: int | None, gpu_name: str) -> tuple[torch.device, str]:
+    if gpu_id and torch.cuda.is_available():   # <- gpu_id == 0 は falsy
+```
+
+`config.toml.example` の `[rvc]` は `gpu_id = 0` を載せている（:138）。つまり **example どおりに設定したユーザは Task 6 以降 vc worker が起動しない**。`gpu_id: int | None = None` という型が示すとおり、「未設定」を表すのは `None` であって `0` ではない。
+
+**Files:**
+- Modify: `vspeech/lib/cuda_util.py`
+- Test: `tests/test_rvc_helpers.py`
+
+**Interfaces:**
+- Consumes: なし
+- Produces: `get_device` の挙動変更（`gpu_id=0` → `cuda:0`）
+
+- [ ] **Step 1: 失敗するテストを書く**
+
+`tests/test_rvc_helpers.py` の末尾に追記:
+
+```python
+def test_get_device_treats_gpu_id_zero_as_a_real_device(monkeypatch):
+    """`gpu_id = 0` は「未設定」ではなく cuda:0。
+
+    `if gpu_id and ...` は 0 を falsy として弾いていた。config.toml.example が
+    `gpu_id = 0` を載せているため、この構成は CPU device になり、Task 6 で
+    create_session が device を尊重するようになった結果 check_cuda_provider が
+    起動時に落ちるようになった。「未設定」を表すのは None であって 0 ではない。
+    """
+    import torch
+
+    import vspeech.lib.cuda_util as cuda_util
+
+    class _Prop:
+        name = "FakeGPU"
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda i: _Prop())
+
+    device, name = cuda_util.get_device(0, "")
+    assert device == torch.device("cuda", 0)
+    assert name == "FakeGPU"
+
+
+def test_get_device_falls_back_to_cpu_when_gpu_id_is_none(monkeypatch):
+    import torch
+
+    import vspeech.lib.cuda_util as cuda_util
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    device, name = cuda_util.get_device(None, "")
+    assert device == torch.device("cpu")
+    assert name == "cpu"
+```
+
+- [ ] **Step 2: 失敗を確認**
+
+Run: `uv run --all-extras pytest tests/test_rvc_helpers.py -k get_device -v`
+Expected: `test_get_device_treats_gpu_id_zero_as_a_real_device` が FAIL（`cpu != cuda:0`）
+
+- [ ] **Step 3: 実装**
+
+`vspeech/lib/cuda_util.py`:
+
+```python
+def get_device(gpu_id: int | None, gpu_name: str) -> tuple[torch.device, str]:
+    # `gpu_id is not None` であって `gpu_id` ではない。0 は正当なデバイス番号であり、
+    # 「未設定」を表すのは None（config.py の `gpu_id: int | None = None`）。
+    if gpu_id is not None and torch.cuda.is_available():
+        prop = torch.cuda.get_device_properties(gpu_id)
+        dev = torch.device("cuda", gpu_id)
+        return dev, prop.name
+    if gpu_name and torch.cuda.is_available():
+        index, prop = get_device_index_by_name(gpu_name)
+        return torch.device("cuda", index), prop.name
+    return torch.device("cpu"), "cpu"
+```
+
+- [ ] **Step 4: テストが通ることを確認**
+
+Run: `uv run --all-extras pytest tests/test_rvc_helpers.py -v`
+Expected: PASS（既存分を含む全件）
+
+- [ ] **Step 5: commit**
+
+```bash
+git add vspeech/lib/cuda_util.py tests/test_rvc_helpers.py
+git commit -m "fix(rvc): treat gpu_id=0 as cuda:0, not as unset"
+```
+
+---
+
 ## Task 8: 依存手術
 
 `transformers` / `fairseq` を `pyproject.toml` と `uv.lock` から完全に取り除き、オフライン工程を poe task にする。

@@ -207,3 +207,37 @@ def test_create_session_uses_cpu_ep_for_a_cpu_device(tmp_path, monkeypatch):
 
     rvc.create_session(tmp_path / "m.onnx", torch.device("cuda", 0))
     assert captured["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+
+def test_get_device_treats_gpu_id_zero_as_a_real_device(monkeypatch):
+    """`gpu_id = 0` は「未設定」ではなく cuda:0。
+
+    `if gpu_id and ...` は 0 を falsy として弾いていた。config.toml.example が
+    `gpu_id = 0` を載せているため、この構成は CPU device になり、Task 6 で
+    create_session が device を尊重するようになった結果 check_cuda_provider が
+    起動時に落ちるようになった。「未設定」を表すのは None であって 0 ではない。
+    """
+    import torch
+
+    import vspeech.lib.cuda_util as cuda_util
+
+    class _Prop:
+        name = "FakeGPU"
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda i: _Prop())
+
+    device, name = cuda_util.get_device(0, "")
+    assert device == torch.device("cuda", 0)
+    assert name == "FakeGPU"
+
+
+def test_get_device_falls_back_to_cpu_when_gpu_id_is_none(monkeypatch):
+    import torch
+
+    import vspeech.lib.cuda_util as cuda_util
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    device, name = cuda_util.get_device(None, "")
+    assert device == torch.device("cpu")
+    assert name == "cpu"
