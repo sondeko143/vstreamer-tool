@@ -9,9 +9,6 @@ from scipy import signal
 from torch import Tensor
 
 from vspeech.config import F0ExtractorType
-from vspeech.lib.onnx_session import create_session
-
-__all__ = ["create_session"]  # RMVPE も RVC/HuBERT と同じ入口を使う
 
 
 class PitchExtractor:

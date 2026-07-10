@@ -64,7 +64,7 @@ def build_rvc_runtime(config_path: Path) -> dict[str, Any]:
     from vspeech.config import Config
     from vspeech.config import F0ExtractorType
     from vspeech.lib.cuda_util import get_device
-    from vspeech.lib.rvc import create_session
+    from vspeech.lib.onnx_session import create_session
     from vspeech.lib.rvc import half_precision_available
     from vspeech.lib.rvc import load_hubert_model
 

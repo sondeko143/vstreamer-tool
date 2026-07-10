@@ -169,8 +169,8 @@ async def rvc_worker(
     in_queue: Queue[WorkerInput],
 ):
     from vspeech.lib.cuda_util import get_device
+    from vspeech.lib.onnx_session import create_session
     from vspeech.lib.rvc import change_voice
-    from vspeech.lib.rvc import create_session
     from vspeech.lib.rvc import half_precision_available
     from vspeech.lib.rvc import load_hubert_model
 

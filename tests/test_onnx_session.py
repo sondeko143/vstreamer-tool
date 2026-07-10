@@ -6,6 +6,9 @@
 実装を 1 本にしたので、このテストが 3 経路すべてを守る。
 """
 
+import ast
+from pathlib import Path
+
 import torch
 
 import vspeech.lib.onnx_session as onnx_session
@@ -73,14 +76,41 @@ def test_cpu_only_box_never_gets_the_cuda_ep(tmp_path, monkeypatch):
     assert captured["provider_options"] == [{}]
 
 
-def test_rvc_and_pitch_extract_share_one_implementation():
-    """`rvc.create_session` と `pitch_extract` が同じ関数を指していること。
+def _inference_session_construction_sites() -> list[str]:
+    """`vspeech/` 配下で `InferenceSession(...)` を組み立てているファイル名。"""
+    vspeech_dir = Path(__file__).resolve().parents[1] / "vspeech"
+    sites = []
+    for py_file in sorted(vspeech_dir.rglob("*.py")):
+        tree = ast.parse(py_file.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "InferenceSession"
+            ):
+                sites.append(py_file.name)
+    return sites
 
-    片方だけを直したことで生まれたバグを二度と作らないための構造ゲート。
+
+def test_only_one_place_builds_a_device_aware_session():
+    """CUDA EP を選ぶセッション生成は `onnx_session.py` の 1 箇所だけ。
+
+    `rvc.create_session` と `pitch_extract.create_rmvpe_session` は同じ 20 行の複製で、
+    前者だけが device を尊重するよう直され、後者が取り残された。**複製こそが原因**なので、
+    「create_session が 2 つある」ではなく「InferenceSession を組み立てる場所が増えた」を
+    検出する。新しい複製はどんな名前で書かれてもここで落ちる。
+
+    `vad.py` は例外。Silero VAD は意図的に `providers=["CPUExecutionProvider"]` 固定で、
+    device 引数を取らない（EP 選択のロジックを持たない）ので、複製ではない。
     """
-    import vspeech.lib.pitch_extract as pitch_extract
+    assert sorted(set(_inference_session_construction_sites())) == [
+        "onnx_session.py",
+        "vad.py",
+    ]
+
+
+def test_rvc_uses_the_shared_factory():
+    """`rvc` が自前の実装を持たず、共有の関数を呼んでいること。"""
     import vspeech.lib.rvc as rvc
 
     assert rvc.create_session is onnx_session.create_session
-    assert pitch_extract.create_session is onnx_session.create_session
-    assert not hasattr(pitch_extract, "create_rmvpe_session")
