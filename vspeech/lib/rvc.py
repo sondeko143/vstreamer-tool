@@ -10,14 +10,15 @@ import numpy as np
 import torch
 import torchaudio.transforms as T
 from numpy.typing import NDArray
-from onnxruntime import GraphOptimizationLevel
 from onnxruntime import InferenceSession
-from onnxruntime import SessionOptions
 from torch.nn import functional
 
 from vspeech.config import RvcConfig
+from vspeech.lib.onnx_session import create_session
 from vspeech.lib.pitch_extract import pitch_extract
 from vspeech.logger import logger
+
+__all__ = ["create_session"]  # 呼び出し側は歴史的に vspeech.lib.rvc から取っている
 
 # RVC runs HuBERT and pitch extraction on a fixed 16kHz mono signal; the input
 # is resampled to this rate before feature extraction, so any pad math must use
@@ -99,34 +100,6 @@ class HubertSession:
     session: InferenceSession
     output_names: dict[tuple[int, bool], str]
     is_half: bool
-
-
-def create_session(model_file: Path, device: torch.device) -> InferenceSession:
-    """`device` を尊重してセッションを開く。
-
-    以前は `torch.cuda.is_available()` だけで CUDA EP を選んでいたため、呼び出し側が
-    CPU device を渡しても GPU で走っていた（`gpu_id=device.index` は None が渡る）。
-    """
-    sess_options = SessionOptions()
-    sess_options.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
-    providers = ["CPUExecutionProvider"]
-    providers_options: list[dict[str, Any]] = [{}]
-    if device.type == "cuda" and torch.cuda.is_available():
-        providers.insert(0, "CUDAExecutionProvider")
-        providers_options.insert(
-            0,
-            {
-                "device_id": device.index if device.index is not None else 0,
-                "cudnn_conv_algo_search": "HEURISTIC",
-                "arena_extend_strategy": "kNextPowerOfTwo",
-            },
-        )
-    return InferenceSession(
-        str(model_file.expanduser()),
-        sess_options=sess_options,
-        providers=providers,
-        provider_options=providers_options,
-    )
 
 
 def half_precision_available(id: int):

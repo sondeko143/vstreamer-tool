@@ -11,27 +11,25 @@
 
 設計書: [docs/superpowers/specs/2026-07-10-rvc-hubert-onnx-design.md](superpowers/specs/2026-07-10-rvc-hubert-onnx-design.md)
 
-### 本物のバグ（実害あり）
+### ✅ 解決済み
 
-**`create_rmvpe_session` が `device` を無視する** — [`vspeech/lib/pitch_extract.py:25`](../vspeech/lib/pitch_extract.py)
+**`create_rmvpe_session` が `device` を無視する** — 解決（`create_session` と 1 実装に統合）
 
-`create_session`（`vspeech/lib/rvc.py`）と**同型のバグ**。`cuda.is_available()` だけを見て
-`CUDAExecutionProvider` を先頭に挿し、呼び出し側の device を尊重しない。引数も `gpu_id: int` のままで、
-CPU device のとき `device.index` は `None` が渡る。
+`cuda.is_available()` だけを見て `CUDAExecutionProvider` を挿し、呼び出し側の device を無視していた。
+`create_session` 側は spec ② の `882b21f` で直したが、20 行の重複だったこちらは取り残されていた。
 
-症状は「config で CPU を指定したのに RMVPE が GPU で走る」。`create_session` 側は spec ② の `882b21f` で
-`(model_file, device: torch.device)` に直したが、こちらは HuBERT の ONNX 化と無関係なのでスコープ外とした。
+**同じ形でもう一度書けば、次も同じようにドリフトする。** 実装を
+[`vspeech/lib/onnx_session.py`](../vspeech/lib/onnx_session.py) に一本化し、RVC decoder / HuBERT /
+RMVPE の 3 経路が同じ関数を通るようにした。`tests/test_onnx_session.py` が EP 選択を
+変異テストで固定し、「両者が同一の関数を指していること」自体も構造ゲートとして検査する。
 
-直すときは `create_session` と同じ形にし、EP 選択を pin する単体テスト
-（`tests/test_rvc_helpers.py::test_create_session_uses_cpu_ep_for_a_cpu_device` と同型）を添えること。
+**EP テストが `provider_options` / `device_id` を見ていない** — 解決（同上）
+
+`device.index if device.index is not None else 0` の `None` 漏れ対策にテストが無かった。
+`tests/test_onnx_session.py::test_a_bare_cuda_device_yields_device_id_zero` が固定する
+（`device_id` を `device.index` に戻すと落ちることを確認済み）。
 
 ### テストの穴（退行が静かに通る）
-
-**EP テストが `provider_options` / `device_id` を見ていない** — [`tests/test_rvc_helpers.py`](../tests/test_rvc_helpers.py)
-
-`test_create_session_uses_cpu_ep_for_a_cpu_device` は `providers` リストしか assert しない。
-`device.index if device.index is not None else 0` という `None` 漏れ対策——まさに `882b21f` が狙った箇所——
-には**テストが 1 本も無い**。`None` を再導入する退行は緑のまま通る。
 
 **`get_device` の優先順位が未固定** — [`vspeech/lib/cuda_util.py`](../vspeech/lib/cuda_util.py)
 

@@ -1,18 +1,17 @@
-from pathlib import Path
 from typing import Any
 from typing import cast
 
 import numpy as np
 import pyworld
 from numpy.typing import NDArray
-from onnxruntime import GraphOptimizationLevel
 from onnxruntime import InferenceSession
-from onnxruntime import SessionOptions
 from scipy import signal
 from torch import Tensor
-from torch import cuda
 
 from vspeech.config import F0ExtractorType
+from vspeech.lib.onnx_session import create_session
+
+__all__ = ["create_session"]  # RMVPE も RVC/HuBERT と同じ入口を使う
 
 
 class PitchExtractor:
@@ -20,29 +19,6 @@ class PitchExtractor:
 
 
 RMVPE_THRESHOLD = 0.3
-
-
-def create_rmvpe_session(model_file: Path, gpu_id: int):
-    sess_options = SessionOptions()
-    sess_options.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
-    providers = ["CPUExecutionProvider"]
-    providers_options: list[dict[str, Any]] = [{}]
-    if cuda.is_available():
-        providers.insert(0, "CUDAExecutionProvider")
-        providers_options.insert(
-            0,
-            {
-                "device_id": gpu_id,
-                "cudnn_conv_algo_search": "HEURISTIC",
-                "arena_extend_strategy": "kNextPowerOfTwo",
-            },
-        )
-    return InferenceSession(
-        str(model_file.expanduser()),
-        sess_options=sess_options,
-        providers=providers,
-        provider_options=providers_options,
-    )
 
 
 def pitch_extract_harvest(
