@@ -18,8 +18,6 @@ from vspeech.lib.onnx_session import create_session
 from vspeech.lib.pitch_extract import pitch_extract
 from vspeech.logger import logger
 
-__all__ = ["create_session"]  # 呼び出し側は歴史的に vspeech.lib.rvc から取っている
-
 # RVC runs HuBERT and pitch extraction on a fixed 16kHz mono signal; the input
 # is resampled to this rate before feature extraction, so any pad math must use
 # it -- not the remote's original capture rate.
