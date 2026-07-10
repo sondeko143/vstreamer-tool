@@ -36,7 +36,6 @@ whisper = [
 ]
 rvc = [
     "torch ; sys_platform == 'win32'",
-    "transformers>=4.44,<5",
     "pyworld>=0.3.3,<0.4",
     "faiss-cpu>=1.7.2,<2 ; sys_platform == 'win32'",
     "onnxruntime-gpu>=1.24.4,<2",
@@ -45,16 +44,6 @@ rvc = [
     "scipy>=1.10.1,<2",
 ]
 mozc = ["mozcpy>=0.1.1,<0.2"]
-# HuBERT 変換ツール専用（scripts/convert_hubert.py）。runtime には含めない。
-# fairseq 0.12.2 は numpy>=1.24 で撤去された旧エイリアスを使うため <1.24 を保持する。
-# uv は 1 環境に numpy を 1 版しか解決しないので、rvc とは別の使い捨て 3.11 環境で使うこと。
-convert = [
-    "fairseq ; sys_platform == 'win32'",
-    "torch ; sys_platform == 'win32'",
-    "torchaudio ; sys_platform == 'win32'",
-    "transformers>=4.44,<5",
-    "numpy>=1.18,<1.24",
-]
 vroid2 = ["pyvcroid2 ; sys_platform == 'win32'"]
 audio = ["PyAudio>=0.2.13,<0.3"]
 gui = [
@@ -85,7 +74,7 @@ dev = [
 
 [tool.uv]
 default-groups = "all"
-# voicevox-core / torch / torchaudio / fairseq / pyvcroid2 are Windows-only wheels,
+# voicevox-core / torch / torchaudio / pyvcroid2 are Windows-only wheels,
 # and onnxruntime-gpu has no macOS wheel. Restrict resolution to the platforms this
 # project actually targets (Windows for dev, Linux for the Docker image).
 environments = [
@@ -103,7 +92,6 @@ vstreamer-protos = { url = "https://github.com/sondeko143/vstreamer-protos/relea
 voicevox-core = { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl" }
 torch = { url = "https://download.pytorch.org/whl/cu128/torch-2.10.0%2Bcu128-cp311-cp311-win_amd64.whl" }
 torchaudio = { url = "https://download.pytorch.org/whl/cu128/torchaudio-2.10.0%2Bcu128-cp311-cp311-win_amd64.whl" }
-fairseq = { url = "https://github.com/sondeko143/fairseq-311/releases/download/v0.12.2.post1/fairseq-0.12.2.post1-cp311-cp311-win_amd64.whl" }
 pyvcroid2 = { git = "https://github.com/Nkyoku/pyvcroid2" }
 
 [tool.uv.build-backend]
@@ -125,6 +113,16 @@ markers = [
 
 [tool.ty.environment]
 python-version = "3.11"
+
+# scripts/convert_hubert.py と scripts/export_hubert_onnx.py はオフライン専用ツール。
+# その依存 (fairseq / transformers / onnx / safetensors) は poe task の `uv run --with`
+# が一時環境で供給するので、プロジェクト依存ではない。未解決 import はここでは正常な
+# 状態であって、`python-health` が禁じる「extras 未同期による偽陽性の抑制」ではない。
+[[tool.ty.overrides]]
+include = ["scripts/convert_hubert.py", "scripts/export_hubert_onnx.py"]
+
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
 
 [tool.ruff.lint]
 extend-select = ["I", "UP"]
@@ -148,6 +146,24 @@ lock-check = { cmd = "uv lock --check", help = "Lockfile is in sync with pyproje
 audit = { cmd = "uv audit", help = "Dependency vulnerability audit" }
 security = { cmd = "uv run --with bandit bandit -q -r vspeech gui", help = "Security lint (bandit, project interpreter)" }
 deadcode = { cmd = "uv run --with vulture vulture vspeech --min-confidence 80", help = "Dead-code scan (advisory)" }
+
+# 一度きりのオフライン工程。依存 (fairseq / transformers / onnx / onnxscript) は
+# pyproject にも uv.lock にも載せず、`uv run --with` の一時環境で供給する。
+# `poe security` / `poe deadcode` と同じ手口。
+#
+# convert-hubert: hubert_base.pt -> hubert_contentvec/ (transformers 資産)。
+#   `--python 3.11` は必須。省くとプロジェクトの処理系に落ち、cp311 の fairseq
+#   wheel が入らない（spec ③ で 3.12 化した後に効いてくる）。`--no-project` なので
+#   [tool.uv.sources] は読まれず、torch は PyPI 版 (Windows は CPU) になる。変換は
+#   CPU で足りるのでこれでよい。
+#   例: uv run poe convert-hubert --input ~/.config/vstreamer/hubert_base.pt \
+#           --output ./hubert_contentvec --golden ./hubert_golden
+convert-hubert = { cmd = "uv run --isolated --no-project --python 3.11 --with 'fairseq @ https://github.com/sondeko143/fairseq-311/releases/download/v0.12.2.post1/fairseq-0.12.2.post1-cp311-cp311-win_amd64.whl' --with 'numpy<1.24' --with torch --with transformers python -m scripts.convert_hubert", help = "hubert_base.pt -> transformers 資産 (offline, 3.11 使い捨て環境)" }
+# export-hubert-onnx: hubert_contentvec/ -> hubert_fp32.onnx + hubert_fp16.onnx。
+#   `--no-project` は付けない。fp16 を CUDA 上で export するためプロジェクト環境の
+#   cu128 torch が要る。
+#   例: uv run poe export-hubert-onnx --asset ./hubert_contentvec --golden ./hubert_golden
+export-hubert-onnx = { cmd = "uv run --with transformers --with onnx --with onnxscript python -m scripts.export_hubert_onnx", help = "transformers 資産 -> ONNX (offline, プロジェクト環境 + overlay)" }
 
 # Complexity insight (advisory; separate from the health gates above) — driven by the
 # `code-metrics` skill. Shells out to `uvx lizard` + `uvx complexipy`, plus an in-process

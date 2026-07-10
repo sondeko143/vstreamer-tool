@@ -17,7 +17,7 @@ uv sync --extra audio       # recording/playback (needs portaudio)
 uv sync --extra whisper     # faster-whisper (needs CUDA 11.8/cu128)
 uv sync --extra vroid2      # VOICEROID2 TTS
 uv sync --extra voicevox    # VOICEVOX TTS
-uv sync --extra rvc         # RVC voice changer
+uv sync --extra rvc         # RVC voice changer (a lone --extra deselects the others; prefer 'uv sync --all-extras')
 uv sync --extra gui         # ttkbootstrap GUI
 
 # Run the pipeline (gRPC server + workers)
@@ -43,6 +43,28 @@ make
 `config.toml.example` documents every setting; `vspeech/config.py` is the source of truth for defaults and shapes. Config files (`config*.toml`, `config*.json`, `key.json`, `*.log`, `*.wav`) are gitignored.
 
 A **gitleaks pre-commit gate** ([`.gitleaks.toml`](.gitleaks.toml), [`.pre-commit-config.yaml`](.pre-commit-config.yaml)) scans staged changes for secrets **and** environment-PII (private LAN IPs, `C:\Users\<name>` paths, AmiVoice `appkey`). It is local-only; activate with `uv tool install pre-commit && pre-commit install` plus a `gitleaks` binary on PATH. Use `<USER>`/`<NAS_HOST>` placeholders for machine-specific paths/hosts in committed docs. See [docs/secret-scanning.md](docs/secret-scanning.md).
+
+### HuBERT assets (RVC only, offline)
+
+The RVC content encoder runs as ONNX. Its assets are derived, gitignored, and built by two
+one-shot offline steps whose dependencies live **only** in the poe task's `uv run --with`
+overlay — never in `pyproject.toml` or `uv.lock`:
+
+```sh
+# hubert_base.pt -> hubert_contentvec/ (transformers asset). Needs fairseq, so it runs in a
+# throwaway 3.11 environment. Keep ~/.config/vstreamer/hubert_base.pt: it is the input.
+uv run poe convert-hubert --input ~/.config/vstreamer/hubert_base.pt \
+    --output ./hubert_contentvec --golden ./hubert_golden
+
+# hubert_contentvec/ -> hubert_fp32.onnx + hubert_fp16.onnx. Runs on the project env (cu128
+# torch) because the fp16 graph is exported on CUDA. Self-verifies against the golden.
+uv run poe export-hubert-onnx --asset ./hubert_contentvec --golden ./hubert_golden
+```
+
+`rvc.hubert_model_file` points at the **asset directory**, not a file. The runtime opens only
+`hubert_*.onnx` + `mapping.json`; `vspeech/` never imports `fairseq` or `transformers`
+(enforced by `tests/test_forbidden_imports.py`). Never run `uv sync --extra rvc` — it
+uninstalls the other extras. Use `uv sync --all-extras`.
 
 ## Architecture
 
@@ -79,7 +101,7 @@ The single shared object threaded through everything: holds the live `Config`, t
 - **Pydantic v2** (`pydantic>=2,<3`). Code uses v2 APIs: `model_config = ConfigDict(...)` / `SettingsConfigDict(...)`, `model_validate`, `model_dump`, `model_dump_json`, `model_validator(mode="after")`, `field_serializer`, `populate_by_name`, `from_attributes`, `AliasChoices`, `SecretStr`. `BaseSettings` is imported from **`pydantic-settings`**. SecretStr secrets that must serialize to plaintext JSON (for the GUI→main handoff) use `@field_serializer(..., when_used="json")` — note `json_encoders` does NOT affect `model_dump_json()` for SecretStr in v2. Do **not** reintroduce v1 APIs (`parse_obj`/`.dict()`/`.json()`/`root_validator`/`orm_mode`/`Field(env=)`/`json_encoders`).
 - **Config loading** (`Config` in `config.py`): from a `--config` file (TOML, or JSON if the name ends in `.json`) or, with no file, from environment variables (prefix `vspeech_`, nested delimiter `__`). Secrets (`ami.appkey`, `gcp.service_account_info`) are `SecretStr`.
 - **Imports are one-per-line** (`ruff` `force-single-line = true`) and auto-sorted on save. Type checking is **ty** (Astral, configured under `[tool.ty.environment]`, Python 3.11) — the project migrated off pyright. Custom type stubs live in `typings/`.
-- **Platform constraints** (encoded in `pyproject.toml`): `voicevox-core`, `torch`, `torchaudio`, `fairseq`, `pyvcroid2` are **Windows-only** wheels pinned to specific release URLs in `[tool.uv.sources]`. Dev target is Windows; the Docker image targets Linux. The CPU `onnxruntime` is force-overridden out (`override-dependencies`) because it clobbers `onnxruntime-gpu`'s CUDA binary — both expose the same `onnxruntime` module. `voicevox-core` is pinned to **0.16.4** (`cp310-abi3`, pydantic-free). Its ONNX Runtime, OpenJTalk dictionary, and `.vvm` voice models are **not** bundled in the wheel — fetch them with the VOICEVOX downloader (`make voicevox-assets`) and point `voicevox.openjtalk_dir` / `model_dir` / `onnxruntime_path` at them. VOICEVOX uses its own `voicevox_onnxruntime` build, distinct from the `onnxruntime-gpu` used by whisper/rvc; set `onnxruntime_path` explicitly so the correct DLL is loaded.
+- **Platform constraints** (encoded in `pyproject.toml`): `voicevox-core`, `torch`, `torchaudio`, `pyvcroid2` are **Windows-only** wheels pinned to specific release URLs in `[tool.uv.sources]`. `fairseq` and `transformers` are **not** runtime dependencies and are absent from both `pyproject.toml` and `uv.lock` — the HuBERT content encoder runs as ONNX, and the two offline conversion tools (`poe convert-hubert` / `poe export-hubert-onnx`) supply those libs from a `uv run --with` overlay (see *HuBERT assets*). Dev target is Windows; the Docker image targets Linux. The CPU `onnxruntime` is force-overridden out (`override-dependencies`) because it clobbers `onnxruntime-gpu`'s CUDA binary — both expose the same `onnxruntime` module. `voicevox-core` is pinned to **0.16.4** (`cp310-abi3`, pydantic-free). Its ONNX Runtime, OpenJTalk dictionary, and `.vvm` voice models are **not** bundled in the wheel — fetch them with the VOICEVOX downloader (`make voicevox-assets`) and point `voicevox.openjtalk_dir` / `model_dir` / `onnxruntime_path` at them. VOICEVOX uses its own `voicevox_onnxruntime` build, distinct from the `onnxruntime-gpu` used by whisper/rvc; set `onnxruntime_path` explicitly so the correct DLL is loaded.
 - **Python 3.11 features in use**: `TaskGroup` and `except*` exception groups. Don't lower the floor.
 - `vstreamer-protos` (the gRPC/protobuf contract) is an external wheel dependency, not vendored here — changes to the wire format happen in that repo.
 - Tests live in `tests/`, run under `pytest` with `asyncio_mode = "auto"` (no `@pytest.mark.asyncio` needed). The most load-bearing tests are `test_event_chains.py` (routing/`EventAddress`/`Command` conversion) — keep them green when touching `command.py` or `shared_context.py`.
