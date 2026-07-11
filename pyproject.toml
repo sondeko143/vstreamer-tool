@@ -36,20 +36,20 @@ dependencies = [
 voicevox = ["voicevox-core"]
 whisper = [
     "faster-whisper==1.2.1",
-    "torch ; sys_platform == 'win32'",
+    "torch==2.10.0 ; sys_platform == 'win32'",
     # >=1.27: CUDA 13 (nvidia-*-cu13) を採用し torch +cu130 と揃える (roadmap フェーズ2)。
     "onnxruntime-gpu>=1.27,<2",
     "numpy>=2,<3",
 ]
 rvc = [
-    "torch ; sys_platform == 'win32'",
+    "torch==2.10.0 ; sys_platform == 'win32'",
     # pyworld (dio/harvest の f0 抽出) は runtime 依存から外した: cp314 wheel が無く、
     # 既定は rmvpe。dio/harvest を使う場合のみ手動導入 (`uv pip install pyworld`)。
     # pitch_extract.py が遅延 import する。
     "faiss-cpu>=1.7.2,<2 ; sys_platform == 'win32'",
     # >=1.27: CUDA 13 (nvidia-*-cu13) を採用し torch +cu130 と揃える (roadmap フェーズ2)。
     "onnxruntime-gpu>=1.27,<2",
-    "torchaudio ; sys_platform == 'win32'",
+    "torchaudio==2.10.0 ; sys_platform == 'win32'",
     "numpy>=2,<3",
     "scipy>=1.10.1,<2",
 ]
@@ -100,14 +100,21 @@ environments = [
 # provides the `onnxruntime` module that faster-whisper imports.
 override-dependencies = ["onnxruntime ; sys_platform == 'never'"]
 
+# explicit=true が肝。外すと PyTorch index が全依存の探索対象になり、そこに mirror されて
+# いる numpy/pillow まで cu130 側から解決され得る。名指しした torch/torchaudio だけに限定する。
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
 [tool.uv.sources]
 vstreamer-protos = { url = "https://github.com/sondeko143/vstreamer-protos/releases/download/v0.1.1/vstreamer_protos-0.1.1-py3-none-any.whl" }
 voicevox-core = [
     { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl", marker = "sys_platform == 'win32'" },
     { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-manylinux_2_34_x86_64.whl", marker = "sys_platform == 'linux'" },
 ]
-torch = { url = "https://download.pytorch.org/whl/cu130/torch-2.10.0%2Bcu130-cp314-cp314-win_amd64.whl" }
-torchaudio = { url = "https://download.pytorch.org/whl/cu130/torchaudio-2.10.0%2Bcu130-cp314-cp314-win_amd64.whl" }
+torch = { index = "pytorch-cu130" }
+torchaudio = { index = "pytorch-cu130" }
 pyvcroid2 = { git = "https://github.com/Nkyoku/pyvcroid2" }
 
 [tool.uv.build-backend]
