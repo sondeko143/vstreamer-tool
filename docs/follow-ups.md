@@ -11,6 +11,12 @@
 
 ### 次の昇格（3.13）の障害
 
+**障害は 2 つある。** かつてここには「唯一のブロッカーは `audioop`」と書いていたが誤りだった
+（2026-07-12 に PyPI の wheel を直接確認して訂正）。`audioop`（標準ライブラリの除去）と、
+`numpy>=1.23,<2` の上限（cp313 wheel の不在）の両方を外さないと 3.13 では動かない。
+
+#### 障害 1: `audioop`
+
 **`audioop` は PEP 594 で 3.13 から標準ライブラリを外れる** — 3.12 では `DeprecationWarning` が出るだけ。
 
 使用は 3 箇所・2 関数だけで、いずれも整数 PCM の `bytes` を直接扱う:
@@ -31,6 +37,34 @@
    **`mul` のクランプ挙動に注意** — `vc.py` は既に `change_voice` の int16 キャストで
    オーバーシュートの wrap（クリック音）を踏んでいる（`feat/rvc-input-envelope` の教訓）。
    `audioop.mul` は飽和させる。numpy の素の astype は wrap する。ここを取り違えると無音の劣化になる。
+
+   `audioop-lts`（選択肢 1）を推す。`_audioop.c` の本物の C ポートなので `import audioop` がそのまま通り、
+   3 箇所は無変更で、`mul` の飽和セマンティクスが構造的に保存される（上の wrap 罠を踏まずに済む）。
+   宣言は `audioop-lts ; python_version >= '3.13'` — このパッケージ自身の `Requires-Python` が
+   `>=3.13` なので、マーカー無しだと現行 3.12 の解決が壊れる。
+
+#### 障害 2: `numpy>=1.23,<2` の上限
+
+**この上限を外さないと 3.13 に上げられない。** `uv.lock` は numpy 1.26.4 に解決されるが、
+**1.26.4 に cp313 wheel は無い**（cp39〜cp312 と pp39 のみ）。しかも numpy 側の `Requires-Python` は
+上限なしの `>=3.9` なので、リゾルバはこれを候補から外さず、3.13 では sdist ビルドを試みて失敗する。
+つまり 3.13 は `<2` の撤廃を**強制**する。
+
+**今回直さなかった理由**: この `<2` は既知の非互換ではなく予防的な上限
+（[docs/superpowers/specs/2026-07-09-rvc-hubert-fairseq-free-design.md](superpowers/specs/2026-07-09-rvc-hubert-fairseq-free-design.md) が
+「onnxruntime-gpu / faiss-cpu / pyworld の numpy 2.x 対応が未確認」として後続 spec 送りにした）。
+spec ③ のスコープは 3.12 であり、numpy 2 への移行は RVC・録音の実機経路を巻き込むので別ブランチに切る。
+
+拾うときの見通し: この上限は**自動的に解ける**。numpy 1.26 に cp313 が無い以上、cp313 wheel を
+配っているライブラリ（pyworld 0.3.5 / faiss-cpu 1.14.3 / ctranslate2 4.8.x はいずれも配布済み）は
+**必然的に numpy 2 でビルドされている**。自コードも NEP 50 安全 — int16 演算はすべて
+`astype(float)` → 明示 `np.clip` → キャストの形（[`vspeech/worker/vc.py:139`](../vspeech/worker/vc.py),
+[`vspeech/lib/rvc.py:410`](../vspeech/lib/rvc.py)）で、弱スカラーの値ベース昇格に依存していない。
+
+> **なお 3.13 自体に上げる旨みは無い**（incremental GC は 3.13.0 final 直前に revert、free-threading は
+> 3.14 まで experimental で、そもそも GPU/バッファ律速のこのパイプラインでは無意味）。上げるなら
+> サポートが 1 年長い **3.14** を直接狙う。有効化作業は同一。3.14 の唯一の穴は `pyworld`（cp314 wheel 無し
+> → sdist ビルド。ただし実機は `f0_extractor_type="rmvpe"` なので依存から外す手もある）。
 
 ### Docker イメージ（未検証。この環境に docker が無い）
 
