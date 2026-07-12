@@ -104,6 +104,14 @@ class AutocompleteCombobox[T](ttk.Entry):
         self._reposition_job = None
         if self._popup is None:
             return
+        # If the entry has scrolled out of its visible viewport (clipped by the
+        # ScrolledFrame) or off-window, its own centre point is no longer the
+        # entry — hide the popup instead of trailing it off past the window edge.
+        centre_x = self.winfo_rootx() + self.winfo_width() // 2
+        centre_y = self.winfo_rooty() + self.winfo_height() // 2
+        if self.winfo_containing(centre_x, centre_y) is not self:
+            self._close()
+            return
         x = self.winfo_rootx()
         y = self.winfo_rooty() + self.winfo_height()
         if (x, y) != self._last_pos:
