@@ -4,6 +4,7 @@ from pathlib import Path
 from tkinter import W
 from tkinter import X
 from typing import Any
+from typing import get_args
 
 from pydantic import SecretStr
 from ttkbootstrap import Frame
@@ -35,17 +36,25 @@ def _get(config: Config, path: str) -> Any:
     return node
 
 
+def _coerce_value(node: Any, child: str, value: Any) -> Any:
+    annotation = type(node).model_fields[child].annotation
+    types = get_args(annotation) or (annotation,)
+    if SecretStr in types:
+        return SecretStr(str(value))
+    if Path in types:
+        text = str(value)
+        if type(None) in types and not text.strip():
+            return None
+        return Path(text)
+    return value
+
+
 def _set(config: Config, path: str, value: Any) -> None:
     *parents, child = path.split(".")
     node: Any = config
     for part in parents:
         node = getattr(node, part)
-    current = getattr(node, child)
-    if isinstance(current, SecretStr):
-        value = SecretStr(str(value))
-    elif isinstance(current, Path):
-        value = Path(str(value))
-    setattr(node, child, value)
+    setattr(node, child, _coerce_value(node, child, value))
 
 
 class PipelineForm(Frame):
