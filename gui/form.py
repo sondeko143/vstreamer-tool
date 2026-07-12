@@ -1,9 +1,11 @@
 from collections.abc import Callable
 from functools import partial
+from pathlib import Path
 from tkinter import W
 from tkinter import X
 from typing import Any
 
+from pydantic import SecretStr
 from ttkbootstrap import Frame
 from ttkbootstrap import Label
 from ttkbootstrap import Labelframe
@@ -28,6 +30,8 @@ def _get(config: Config, path: str) -> Any:
     node: Any = config
     for part in path.split("."):
         node = getattr(node, part)
+    if isinstance(node, SecretStr):
+        return node.get_secret_value()
     return node
 
 
@@ -36,6 +40,11 @@ def _set(config: Config, path: str, value: Any) -> None:
     node: Any = config
     for part in parents:
         node = getattr(node, part)
+    current = getattr(node, child)
+    if isinstance(current, SecretStr):
+        value = SecretStr(str(value))
+    elif isinstance(current, Path):
+        value = Path(str(value))
     setattr(node, child, value)
 
 
@@ -68,9 +77,11 @@ class PipelineForm(Frame):
 
     def read_into(self, config: Config) -> None:
         for widget, (path, coerce) in self.bindings.items():
+            if not widget.winfo_exists():
+                continue
             try:
                 _set(config, path, coerce(widget.get_value()))
-            except ValueError, KeyError:
+            except (ValueError, KeyError):
                 continue
 
     # --- field builders -------------------------------------------------
@@ -113,19 +124,32 @@ class PipelineForm(Frame):
         self, parent: Any, path: str, label: str, *, input: bool
     ) -> Frame:
         assert self.config is not None
+        devices = list_all_devices(input=input, output=not input)
         frame = Frame(parent)
         Label(frame, text=label).pack(fill=X)
-        combo = AutocompleteCombobox[int](frame)
-        combo.set_completion_list(list_all_devices(input=input, output=not input))
         current = _get(self.config, path)
-        combo_label = (
-            combo.get_label_for_item_value(current) if current is not None else None
-        )
-        if combo_label:
-            combo.set(combo_label)
-        combo.bind("<<ComboboxSelected>>", lambda _e: self.on_change())
-        self.bindings[combo] = (path, lambda v: v)
-        combo.pack(fill=X)
+        if devices:
+            combo = AutocompleteCombobox[int](frame)
+            combo.set_completion_list(devices)
+            combo_label = (
+                combo.get_label_for_item_value(current)
+                if current is not None
+                else None
+            )
+            if combo_label:
+                combo.set(combo_label)
+            combo.bind("<<ComboboxSelected>>", lambda _e: self.on_change())
+            self.bindings[combo] = (path, lambda v: v)
+            combo.pack(fill=X)
+        else:
+            entry = Textbox(frame)
+            entry.set("" if current is None else str(current))
+            entry.bind("<KeyRelease>", lambda _e: self.on_change())
+            self.bindings[entry] = (
+                path,
+                lambda v: int(v) if str(v).strip() else None,
+            )
+            entry.pack(fill=X)
         return frame
 
     def _enum_combo(
@@ -184,8 +208,12 @@ class PipelineForm(Frame):
         self, backend: Frame, combo: Any, _event: Any
     ) -> None:
         for child in list(backend.children.values()):
-            self.bindings.pop(child, None)
             child.destroy()
+        self.bindings = {
+            widget: binding
+            for widget, binding in self.bindings.items()
+            if widget.winfo_exists()
+        }
         self.on_change()
         try:
             worker_type = combo.get_value()
@@ -220,8 +248,12 @@ class PipelineForm(Frame):
 
     def _rebuild_tts_backend(self, backend: Frame, combo: Any, _event: Any) -> None:
         for child in list(backend.children.values()):
-            self.bindings.pop(child, None)
             child.destroy()
+        self.bindings = {
+            widget: binding
+            for widget, binding in self.bindings.items()
+            if widget.winfo_exists()
+        }
         self.on_change()
         try:
             worker_type = combo.get_value()
