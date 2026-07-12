@@ -37,6 +37,9 @@ def _get(config: Config, path: str) -> Any:
 
 
 def _coerce_value(node: Any, child: str, value: Any) -> Any:
+    # None passes through cleanly (read_into only sends None for Optional
+    # fields). Blank strings never reach here — read_into intercepts them — so
+    # Path/SecretStr always wrap a real value.
     if value is None:
         return None
     annotation = type(node).model_fields[child].annotation
@@ -44,20 +47,19 @@ def _coerce_value(node: Any, child: str, value: Any) -> Any:
     if SecretStr in types:
         return SecretStr(str(value))
     if Path in types:
-        text = str(value)
-        if type(None) in types and not text.strip():
-            return None
-        return Path(text)
+        return Path(str(value))
     return value
 
 
-def _field_accepts_none(config: Config, path: str) -> bool:
+def _field_types(config: Config, path: str) -> tuple[Any, ...]:
+    """The pydantic annotation of `path`'s field, flattened to a tuple of types
+    (e.g. `int | None` -> `(int, NoneType)`, a bare `int` -> `(int,)`)."""
     *parents, child = path.split(".")
     node: Any = config
     for part in parents:
         node = getattr(node, part)
     annotation = type(node).model_fields[child].annotation
-    return type(None) in (get_args(annotation) or (annotation,))
+    return get_args(annotation) or (annotation,)
 
 
 def _set(config: Config, path: str, value: Any) -> None:
@@ -106,16 +108,22 @@ class PipelineForm(Frame):
                 continue
             value = widget.get_value()
             if value is None or value == "":
-                # A blank widget: an unselected combo (None) or a cleared
-                # field (""). If the field accepts None, set it to None — this
-                # both leaves a fresh unset field unchanged AND lets the user
-                # clear a previously-set optional field (device index, gpu_id,
-                # optional path). If the field is required (e.g. rate, or a
-                # garbled worker_type combo), a blank value IS an error, so
-                # surface it rather than silently keeping the stale value.
-                if _field_accepts_none(config, path):
+                # A blank widget: an unselected combo (None) or a cleared field
+                # (""). Classify by the field's type:
+                types = _field_types(config, path)
+                if type(None) in types:
+                    # Optional -> clear to None. Leaves a fresh unset field
+                    # unchanged AND lets the user clear a previously-set optional
+                    # field (device index, gpu_id, optional path).
                     _set(config, path, None)
+                elif str in types or SecretStr in types:
+                    # A str/SecretStr field where "" is itself a valid value
+                    # (e.g. the ami.* ACP fields default to blank) — apply it,
+                    # don't cry wolf.
+                    _set(config, path, "")
                 else:
+                    # Required numeric / enum / path — blank genuinely can't be
+                    # coerced, so surface it instead of keeping the stale value.
                     failed.append(path)
                 continue
             try:
