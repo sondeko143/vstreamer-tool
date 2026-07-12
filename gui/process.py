@@ -22,13 +22,11 @@ def build_argv(config_path: Path) -> list[str]:
 
 
 def build_text_command(text: str, text_send_operations: RoutesList) -> Command:
-    chains = [
-        OperationChain(
-            operations=[EventAddress.from_string(op).to_pb() for op in ops if op]
-        )
-        for ops in text_send_operations
-        if ops
-    ]
+    chains = []
+    for ops in text_send_operations:
+        operations = [EventAddress.from_string(op).to_pb() for op in ops if op]
+        if operations:
+            chains.append(OperationChain(operations=operations))
     return Command(chains=chains, operand=Operand(text=text.strip()))
 
 
@@ -53,6 +51,7 @@ class PipelineRunner:
             stderr=STDOUT,
             text=True,
             bufsize=1,
+            errors="replace",
         )
         Thread(target=self._pump, daemon=True).start()
 
@@ -60,9 +59,11 @@ class PipelineRunner:
         proc = self.proc
         if not proc or not proc.stdout:
             return
-        for line in proc.stdout:
-            self.on_log(line.rstrip())
-        self.on_exit(proc.wait())
+        try:
+            for line in proc.stdout:
+                self.on_log(line.rstrip())
+        finally:
+            self.on_exit(proc.wait())
 
     def is_running(self) -> bool:
         return self.proc is not None and self.proc.poll() is None

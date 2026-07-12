@@ -21,3 +21,8 @@ def test_build_text_command_trims_and_chains():
 def test_build_text_command_drops_empty_chains():
     command = build_text_command("x", [["tts"], []])
     assert len(command.chains) == 1
+
+
+def test_build_text_command_drops_chain_left_empty_by_op_filter():
+    command = build_text_command("x", [[""]])
+    assert len(command.chains) == 0
