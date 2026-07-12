@@ -51,9 +51,9 @@ class App(Frame):
         self.logs: dict[str, deque[str]] = {}
 
         left = Frame(self)
-        left.pack(side=LEFT, fill=Y)
+        left.pack(side=LEFT, fill=Y, padx=(6, 2), pady=6)
         self.listbox = Listbox(left, width=32)
-        self.listbox.pack(fill=Y, expand=True)
+        self.listbox.pack(fill=Y, expand=True, pady=(0, 4))
         self.listbox.bind("<<ListboxSelect>>", self._on_select)
         Button(left, text="+ new", command=self.new_pipeline).pack(fill="x")
         Button(left, text="del", command=self.delete_pipeline).pack(fill="x")
@@ -103,6 +103,12 @@ class App(Frame):
     def _on_select(self, _event: Any) -> None:
         selection = self.listbox.curselection()
         if not selection:
+            return
+        entry = self.profile.pipelines[selection[0]]
+        # <<ListboxSelect>> fires on every click (sometimes twice), so
+        # re-clicking the already-shown pipeline would rebuild the whole form
+        # and flicker. Skip when the selection hasn't actually changed.
+        if self.editor.entry is not None and self.editor.entry.id == entry.id:
             return
         self._load_selected(selection[0])
 

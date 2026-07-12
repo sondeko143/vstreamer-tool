@@ -149,7 +149,7 @@ class PipelineForm(Frame):
     def _entry(self, parent: Any, path: str, label: str) -> Frame:
         assert self.config is not None  # nosec B101
         frame = Frame(parent)
-        Label(frame, text=label).pack(fill=X)
+        Label(frame, text=label).pack(fill=X, pady=(6, 0))
         widget = Textbox(frame)
         widget.set(_get(self.config, path))
         widget.bind("<KeyRelease>", lambda _e: self.on_change())
@@ -162,7 +162,7 @@ class PipelineForm(Frame):
     ) -> Frame:
         assert self.config is not None  # nosec B101
         frame = Frame(parent)
-        Label(frame, text=label).pack(fill=X)
+        Label(frame, text=label).pack(fill=X, pady=(6, 0))
         widget = Spinbox(frame, from_=from_, to=to, increment=inc, wrap=True)
         widget.set(_get(self.config, path))
         coerce = int if float(inc).is_integer() else float
@@ -178,7 +178,7 @@ class PipelineForm(Frame):
         assert self.config is not None  # nosec B101
         devices = list_all_devices(input=input, output=not input)
         frame = Frame(parent)
-        Label(frame, text=label).pack(fill=X)
+        Label(frame, text=label).pack(fill=X, pady=(6, 0))
         current = _get(self.config, path)
         if devices:
             combo = AutocompleteCombobox[int](frame)
@@ -206,7 +206,7 @@ class PipelineForm(Frame):
         self, parent: Any, path: str, label: str, enum_cls: Any
     ) -> AutocompleteCombobox[Any]:
         assert self.config is not None  # nosec B101
-        Label(parent, text=label).pack(fill=X)
+        Label(parent, text=label).pack(fill=X, pady=(6, 0))
         combo = AutocompleteCombobox[Any](parent)
         combo.set_completion_list({member.name: member for member in enum_cls})
         current = _get(self.config, path)
@@ -217,9 +217,16 @@ class PipelineForm(Frame):
 
     # --- worker sections ------------------------------------------------
 
+    def _section_box(self, title: str) -> Labelframe:
+        # One padded, clearly-separated box per worker: internal padding keeps
+        # fields off the border, and the outer margin (esp. left/right) plus the
+        # gap below separates adjacent sections.
+        box = Labelframe(self.body, text=title, padding=12)
+        box.pack(fill=X, padx=12, pady=(2, 10))
+        return box
+
     def _section_recording(self) -> None:
-        box = Labelframe(self.body, text="recording")
-        box.pack(fill=X, padx=4, pady=4)
+        box = self._section_box("recording")
         self._check(box, "recording.enable", "enable recording").pack(anchor=W)
         self._device_combo(
             box, "recording.input_device_index", "input device", input=True
@@ -230,8 +237,7 @@ class PipelineForm(Frame):
         ).pack(fill=X)
 
     def _section_playback(self) -> None:
-        box = Labelframe(self.body, text="playback")
-        box.pack(fill=X, padx=4, pady=4)
+        box = self._section_box("playback")
         self._check(box, "playback.enable", "enable playback").pack(anchor=W)
         self._device_combo(
             box, "playback.output_device_index", "output device", input=False
@@ -239,8 +245,7 @@ class PipelineForm(Frame):
         self._spin(box, "playback.volume", "volume", 0, 100, 1).pack(fill=X)
 
     def _section_transcription(self) -> None:
-        box = Labelframe(self.body, text="transcription")
-        box.pack(fill=X, padx=4, pady=4)
+        box = self._section_box("transcription")
         self._check(box, "transcription.enable", "enable transcription").pack(anchor=W)
         combo = self._enum_combo(
             box, "transcription.worker_type", "worker_type", TranscriptionWorkerType
@@ -282,8 +287,7 @@ class PipelineForm(Frame):
             self._entry(backend, "ami.service_id", "ami service_id").pack(fill=X)
 
     def _section_tts(self) -> None:
-        box = Labelframe(self.body, text="tts")
-        box.pack(fill=X, padx=4, pady=4)
+        box = self._section_box("tts")
         self._check(box, "tts.enable", "enable tts").pack(anchor=W)
         combo = self._enum_combo(box, "tts.worker_type", "worker_type", TtsWorkerType)
         backend = Frame(box)
@@ -320,8 +324,7 @@ class PipelineForm(Frame):
             self._entry(backend, "vr2.voice_name", "voice_name").pack(fill=X)
 
     def _section_vc(self) -> None:
-        box = Labelframe(self.body, text="vc")
-        box.pack(fill=X, padx=4, pady=4)
+        box = self._section_box("vc")
         self._check(box, "vc.enable", "enable vc").pack(anchor=W)
         self._entry(box, "rvc.model_file", "rvc model_file").pack(fill=X)
         self._entry(box, "rvc.hubert_model_file", "hubert asset dir").pack(fill=X)

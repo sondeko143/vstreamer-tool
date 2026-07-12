@@ -39,7 +39,9 @@ class PipelineEditor(Frame):
         on_stop: Callable[[], None],
         on_send: Callable[[str], None],
     ):
-        super().__init__(master)
+        # Internal padding so the editor's content isn't flush against the
+        # window edge (esp. left/right).
+        super().__init__(master, padding=(8, 6))
         self.paths = paths
         self.on_dirty = on_dirty
         self.on_start = on_start
