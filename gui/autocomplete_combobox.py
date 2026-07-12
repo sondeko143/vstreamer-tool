@@ -1,11 +1,11 @@
-"""
-tkentrycomplete.py
+"""A combobox whose dropdown filters by a case-insensitive SUBSTRING of what is
+typed (not just a prefix), and that opens on a click anywhere in the field, not
+only on the small arrow.
 
-A tkinter widget that features autocompletion.
-
-Created by Mitja Martini on 2008-11-29.
-Updated by Russell Adams, 2011/01/24 to support Python 3 and Combobox.
-   Licensed same as original (not specified?), or public domain, whichever is less restrictive.
+Note on behaviour: ttk's native dropdown takes keyboard focus while it is open,
+so you cannot keep typing to narrow a *currently-open* list. The flow is: type
+to filter the candidates (the entry keeps focus), then click (anywhere) to open
+the filtered list and pick one.
 """
 
 import tkinter
@@ -17,14 +17,12 @@ import ttkbootstrap as ttk
 
 class AutocompleteCombobox[T](ttk.Combobox):
     _completion_list: list[str]
-    _hit_index: int
-    _hits: list[str]
     _label_value_map: dict[str, T]
 
     def get_value(self) -> T | None:
-        # Returns None when the current text isn't a known label (e.g. an
-        # unselected/blank combo, or a partial autocomplete). Callers treat
-        # None as "no selection" rather than an error.
+        # None when the current text isn't a known label (blank, or a partial
+        # filter the user didn't resolve to a pick). Callers treat None as "no
+        # selection" rather than an error.
         return self._label_value_map.get(self.get())
 
     def get_label_for_item_value(self, value: T) -> str | None:
@@ -32,61 +30,37 @@ class AutocompleteCombobox[T](ttk.Combobox):
             if _value == value:
                 return label
 
-    def set_completion_list(self, label_value_map: dict[str, T]):
-        """Use our completion list as our drop down selection menu, arrows move through menu."""
-        completion_list = list(label_value_map.keys())
-        self._completion_list = sorted(
-            completion_list, key=str.lower
-        )  # Work with a sorted list
-        self._hits = []
-        self._hit_index = 0
-        self.position = 0
-        self.bind("<KeyRelease>", self.handle_keyrelease)
-        self["values"] = self._completion_list  # Setup our popup menu
+    def set_completion_list(self, label_value_map: dict[str, T]) -> None:
         self._label_value_map = label_value_map.copy()
+        self._completion_list = sorted(label_value_map.keys(), key=str.lower)
+        self["values"] = self._completion_list
+        self.bind("<KeyRelease>", self._on_keyrelease)
+        self.bind("<Button-1>", self._on_click, add="+")
 
-    def autocomplete(self, delta: int = 0):
-        """autocomplete the Combobox, delta may be 0/1/-1 to cycle through possible hits"""
-        if (
-            delta
-        ):  # need to delete selection otherwise we would fix the current position
-            self.delete(self.position, tkinter.END)
-        else:  # set position to end so selection starts where textentry ended
-            self.position = len(self.get())
-        # collect hits
-        _hits = []
-        for element in self._completion_list:
-            if element.lower().startswith(
-                self.get().lower()
-            ):  # Match case insensitively
-                _hits.append(element)
-        # if we have a new hit list, keep this in mind
-        if _hits != self._hits:
-            self._hit_index = 0
-            self._hits = _hits
-        # only allow cycling if we are in a known hit list
-        if _hits == self._hits and self._hits:
-            self._hit_index = (self._hit_index + delta) % len(self._hits)
-        # now finally perform the auto completion
-        if self._hits:
-            self.delete(0, tkinter.END)
-            self.insert(0, self._hits[self._hit_index])
-            self.select_range(self.position, tkinter.END)
+    def _matches(self, text: str) -> list[str]:
+        needle = text.strip().lower()
+        if not needle:
+            return self._completion_list
+        return [item for item in self._completion_list if needle in item.lower()]
 
-    def handle_keyrelease(self, event: Event[Any]):
-        """event handler for the keyrelease event on this widget"""
-        if event.keysym == "BackSpace":
-            self.delete(self.index(tkinter.INSERT), tkinter.END)
-            self.position = self.index(tkinter.END)
-        if event.keysym == "Left":
-            if self.position < self.index(tkinter.END):  # delete the selection
-                self.delete(self.position, tkinter.END)
-            else:
-                self.position = self.position - 1  # delete one character
-                self.delete(self.position, tkinter.END)
-        if event.keysym == "Right":
-            self.position = self.index(tkinter.END)  # go to end (no selection)
-        if len(event.keysym) == 1:
-            self.autocomplete()
-        # No need for up/down, we'll jump to the popup
-        # list at the position of the autocompletion
+    def _post(self) -> None:
+        """Open the dropdown (the same action as clicking the arrow)."""
+        try:
+            self.tk.call("ttk::combobox::Post", self)
+        except tkinter.TclError:
+            pass
+
+    def _on_keyrelease(self, event: Event[Any]) -> None:
+        # Navigation keys belong to the entry cursor / open dropdown — don't
+        # treat them as filter input.
+        if event.keysym in ("Up", "Down", "Return", "Escape", "Tab", "Left", "Right"):
+            return
+        # Narrow the candidates by substring; the entry keeps focus so the user
+        # can keep typing.
+        self["values"] = self._matches(self.get())
+
+    def _on_click(self, _event: Event[Any]) -> None:
+        # Click anywhere in the field opens the (filtered) dropdown, not just the
+        # arrow. Post after Tk finishes the click that places the cursor.
+        self["values"] = self._matches(self.get())
+        self.after(1, self._post)
