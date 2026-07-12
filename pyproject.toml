@@ -34,16 +34,16 @@ voicevox = ["voicevox-core"]
 whisper = [
     "faster-whisper==1.2.1",
     "torch ; sys_platform == 'win32'",
-    # <1.27: 1.27.0 は CUDA 13 化で torch +cu128 と衝突 (roadmap フェーズ2)。
-    "onnxruntime-gpu>=1.24.4,<1.27",
+    # >=1.27: CUDA 13 (nvidia-*-cu13) を採用し torch +cu130 と揃える (roadmap フェーズ2)。
+    "onnxruntime-gpu>=1.27,<2",
     "numpy>=2,<3",
 ]
 rvc = [
     "torch ; sys_platform == 'win32'",
     "pyworld>=0.3.3,<0.4",
     "faiss-cpu>=1.7.2,<2 ; sys_platform == 'win32'",
-    # <1.27: 1.27.0 は CUDA 13 化で torch +cu128 と衝突 (roadmap フェーズ2)。
-    "onnxruntime-gpu>=1.24.4,<1.27",
+    # >=1.27: CUDA 13 (nvidia-*-cu13) を採用し torch +cu130 と揃える (roadmap フェーズ2)。
+    "onnxruntime-gpu>=1.27,<2",
     "torchaudio ; sys_platform == 'win32'",
     "numpy>=2,<3",
     "scipy>=1.10.1,<2",
@@ -98,8 +98,8 @@ voicevox-core = [
     { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl", marker = "sys_platform == 'win32'" },
     { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-manylinux_2_34_x86_64.whl", marker = "sys_platform == 'linux'" },
 ]
-torch = { url = "https://download.pytorch.org/whl/cu128/torch-2.10.0%2Bcu128-cp312-cp312-win_amd64.whl" }
-torchaudio = { url = "https://download.pytorch.org/whl/cu128/torchaudio-2.10.0%2Bcu128-cp312-cp312-win_amd64.whl" }
+torch = { url = "https://download.pytorch.org/whl/cu130/torch-2.10.0%2Bcu130-cp312-cp312-win_amd64.whl" }
+torchaudio = { url = "https://download.pytorch.org/whl/cu130/torchaudio-2.10.0%2Bcu130-cp312-cp312-win_amd64.whl" }
 pyvcroid2 = { git = "https://github.com/Nkyoku/pyvcroid2" }
 
 [tool.uv.build-backend]
