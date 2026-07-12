@@ -64,9 +64,17 @@ GUI 専用モデル:
 
 **バージョンは config ファイルではなくマニフェストに集約する** (§9 参照)。
 
-### ポート採番
+### ポート採番 (空きポート自動割当)
 
-base = 8080。新規作成時、既存 pipeline の最大ポート + 1 を割り当てる (最初は 8080)。フォームで編集可。起動直前に `Config.listen_port = entry.port` を注入して config ファイルへ保存する。
+base = 8080 から昇順に走査し、**予約済みでも OS で使用中でもない最初のポート**を割り当てる:
+
+- **予約済み判定**: マニフェスト上の他 pipeline が持つ `port` の集合を避ける。
+- **OS 空き判定** (`is_port_free`): `SO_REUSEADDR` なしのソケットを候補ポートに `bind` して成否を見る (成功で即 close)。他プロセス (外部アプリや別 pipeline の稼働中プロセス) が握るポートも避けられる。
+- `allocate_free_port(claimed: set[int], base=8080) -> int` — 予約済み + OS 使用中をスキップし最初の空きを返す。上限まで空きが無ければ例外。
+- フォームで手動編集可。
+- **起動直前に再確認**: `Config.listen_port = entry.port` を注入する直前に `is_port_free(port)` を再チェックし、既に塞がっていれば警告して起動を止める (割当てから起動までの間に他プロセスが握った競合を検出)。
+
+`is_port_free` / `allocate_free_port` は `gui/ports.py` に置く (OS ソケット判定は monkeypatch でテスト可能にする)。
 
 ### 「常にユーザーデフォルトプロファイルから読む」の解釈
 
@@ -84,6 +92,7 @@ base = 8080。新規作成時、既存 pipeline の最大ポート + 1 を割り
 | `gui/profile.py` | `PipelineEntry`/`Profile` モデル + 読み書き (マニフェスト・各 config・雛形)。安全ロード。純粋・テスト可 |
 | `gui/recipes.py` | レシピ登録簿 (名前 → `apply(base: Config) -> Config`)。純粋・テスト可 |
 | `gui/migration.py` | config / マニフェストの versioning + migration チェーン + 退避 + 安全ローダ。純粋・テスト可 |
+| `gui/ports.py` | `is_port_free` / `allocate_free_port` (空きポート自動割当)。OS ソケット判定は monkeypatch でテスト可 |
 | `gui/process.py` | `PipelineRunner`: サブプロセス生死・ログ読取スレッド・gRPC 送信 (send_text/ping) |
 | `gui/pipeline_editor.py` | 右パネル (フォーム/生 TOML タブ + 起動/停止/状態 + テキスト送信 + ログ) 1 pipeline 分 |
 | `gui/form.py` | 最小フォーム (必須フィールド宣言 + `Config` 双方向バインド) |
@@ -222,13 +231,14 @@ Config.model_validate({..., 'config_version': 3}) → ValidationError: extra_for
 - `tests/gui/test_profile.py` — 読み書きラウンドトリップ / 雛形自動生成 / マニフェスト追加・削除・並替 / 固定場所からの読込 / マニフェスト migration / 破損時 fallback (default → `Config()`, manifest → 空)。
 - `tests/gui/test_paths.py` — プロファイル dir 解決 (platformdirs を monkeypatch / `--profile-dir` 上書き)。
 - `tests/gui/test_migration.py` — チェーン順序 (注入した擬似 migration で N→N+1) / version 欠落→0→全適用 / 冪等性 / `quarantine` の非破壊連番 / 安全ローダ (正常・破損=raw 保持+退避・移行=書き戻し+原本退避)。
-- `tests/gui/test_process.py` — argv 構築 (`python -m vspeech --config <path>`) / 起動前のポート注入 / gRPC `Command` 構築 (スタブ mock、実プロセス無し)。
+- `tests/gui/test_ports.py` — `allocate_free_port` が予約済み + OS 使用中 (availability 述語を monkeypatch) をスキップし最初の空きを返す / 全滅時に例外。
+- `tests/gui/test_process.py` — argv 構築 (`python -m vspeech --config <path>`) / 起動前のポート注入・再確認 / gRPC `Command` 構築 (スタブ mock、実プロセス無し)。
 
 Tk ウィジェットのテストは行わない (純粋ロジックのみ)。テストは `asyncio_mode = "auto"` の pytest 下。
 
 ## 14. 実装順序 (概略)
 
-1. `gui/paths.py` + `gui/migration.py` (純粋基盤) + テスト。
+1. `gui/paths.py` + `gui/ports.py` + `gui/migration.py` (純粋基盤) + テスト。
 2. `gui/profile.py` + `gui/recipes.py` (安全ロード/レシピ) + テスト。
 3. `gui/process.py` (`PipelineRunner`) + テスト (argv/gRPC)。
 4. `gui/widgets.py` (回収) → `gui/form.py` / `gui/rawedit.py`。
