@@ -313,7 +313,8 @@ def main() -> None:
 
     # fp16 ゲートの参照を golden 側へ保存する。テストは npz を読むだけで transformers を
     # 要らない（Task 8 でプロジェクト依存から外れるため、ここでしか捕獲できない）。
-    np.savez(golden_dir / "hubert_golden_fp16.npz", wav=wav, **reference)
+    # numpy 2 の savez スタブは allow_pickle:bool を持ち、**reference 展開と衝突する型誤検知。実行時は正しい。
+    np.savez(golden_dir / "hubert_golden_fp16.npz", wav=wav, **reference)  # ty: ignore[invalid-argument-type]
 
     mapping = {
         "layer_offset": layer_offset,

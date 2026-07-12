@@ -75,7 +75,7 @@ idna==3.18 ; sys_platform == 'linux' or sys_platform == 'win32'
     #   anyio
     #   httpx
     #   requests
-numpy==1.26.4 ; sys_platform == 'linux' or sys_platform == 'win32'
+numpy==2.5.1 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via ctranslate2
 proto-plus==1.28.0 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via

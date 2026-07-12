@@ -259,7 +259,8 @@ def main() -> None:
         )
 
     args.golden.mkdir(parents=True, exist_ok=True)
-    np.savez(args.golden / "hubert_golden.npz", wav=wav, **golden)
+    # numpy 2 の savez スタブは allow_pickle:bool を持ち、**golden(ndarray dict)展開と衝突する型誤検知。実行時は正しい。
+    np.savez(args.golden / "hubert_golden.npz", wav=wav, **golden)  # ty: ignore[invalid-argument-type]
 
     print(f"wrote asset -> {args.output}")
     print(f"wrote golden -> {args.golden / 'hubert_golden.npz'}")
