@@ -88,10 +88,26 @@ class App(Frame):
         selection = self.listbox.curselection()
         if not selection:
             return
-        entry = self.profile.pipelines[selection[0]]
+        self._load_selected(selection[0])
+
+    def _load_selected(self, index: int) -> None:
+        entry = self.profile.pipelines[index]
         self.editor.load_entry(entry)
         self.editor.set_running(self._is_running(entry.id))
         self.editor.set_log(list(self.logs.get(entry.id, [])))
+
+    def _select_index(self, index: int) -> None:
+        # Programmatic selection does NOT fire <<ListboxSelect>>, so re-sync the
+        # editor explicitly. Used after a structural change (delete/new) where a
+        # raw index restore would otherwise leave the editor showing one pipeline
+        # while the listbox highlights a different (shifted-up) one.
+        self.listbox.selection_clear(0, END)
+        if 0 <= index < len(self.profile.pipelines):
+            self.listbox.selection_set(index)
+            self.listbox.activate(index)
+            self._load_selected(index)
+        else:
+            self.editor.clear()
 
     # --- runner lifecycle (per pipeline, App-owned) ---------------------
 
@@ -175,12 +191,14 @@ class App(Frame):
         self.profile.pipelines.append(entry)
         save_profile(self.paths, self.profile)
         self._refresh_list()
+        self._select_index(len(self.profile.pipelines) - 1)
 
     def delete_pipeline(self) -> None:
         selection = self.listbox.curselection()
         if not selection:
             return
-        entry = self.profile.pipelines.pop(selection[0])
+        index = selection[0]
+        entry = self.profile.pipelines.pop(index)
         if entry.id in self.runners:
             self.runners[entry.id].stop()
             del self.runners[entry.id]
@@ -193,6 +211,9 @@ class App(Frame):
         if self.editor.entry is not None and self.editor.entry.id == entry.id:
             self.editor.clear()
         self._refresh_list()
+        # Re-select by position (clamped) and re-sync the editor, so a stale
+        # old-list index can never leave a shifted-up pipeline highlighted.
+        self._select_index(min(index, len(self.profile.pipelines) - 1))
         logger.info("deleted pipeline %s", entry.id)
 
     def on_close(self) -> None:
