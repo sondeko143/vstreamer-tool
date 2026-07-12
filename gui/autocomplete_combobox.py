@@ -34,6 +34,8 @@ class AutocompleteCombobox[T](ttk.Entry):
         self._popup: Toplevel | None = None
         self._listbox: Listbox | None = None
         self._root_click_bind: str | None = None
+        self._reposition_job: str | None = None
+        self._last_pos: tuple[int, int] | None = None
 
     # --- public interface (drop-in for the old combobox) ----------------
 
@@ -93,6 +95,23 @@ class AutocompleteCombobox[T](ttk.Entry):
             )
         self._populate(matches)
         self._place_popup(len(matches))
+        if self._reposition_job is None:
+            self._reposition_job = self.after(40, self._reposition)
+
+    def _reposition(self) -> None:
+        # Keep the popup glued to the entry so it follows when the form is
+        # scrolled (the popup is a separate top-level at a fixed screen point).
+        self._reposition_job = None
+        if self._popup is None:
+            return
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() + self.winfo_height()
+        if (x, y) != self._last_pos:
+            self._last_pos = (x, y)
+            width = self.winfo_width()
+            height = self._popup.winfo_height() or self._popup.winfo_reqheight()
+            self._popup.wm_geometry(f"{width}x{height}+{x}+{y}")
+        self._reposition_job = self.after(40, self._reposition)
 
     def _populate(self, matches: list[str]) -> None:
         lb = self._listbox
@@ -119,6 +138,10 @@ class AutocompleteCombobox[T](ttk.Entry):
         self._popup.lift()
 
     def _close(self) -> None:
+        if self._reposition_job is not None:
+            self.after_cancel(self._reposition_job)
+            self._reposition_job = None
+        self._last_pos = None
         if self._root_click_bind is not None:
             try:
                 self.winfo_toplevel().unbind("<Button-1>", self._root_click_bind)
