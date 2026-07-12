@@ -76,6 +76,12 @@ class App(Frame):
         return runner is not None and runner.is_running()
 
     def _refresh_list(self) -> None:
+        # Preserves the current selection INDEX. This is correct only for a
+        # ramp/status refresh where the list order and length are unchanged
+        # (e.g. _start_current / _on_exit). After a STRUCTURAL change
+        # (delete/new shifts indices), the caller must follow with
+        # _select_index(...), which clears this restore and re-syncs the editor
+        # — otherwise a stale index would highlight the wrong pipeline.
         selection = self.listbox.curselection()
         self.listbox.delete(0, END)
         for entry in self.profile.pipelines:
