@@ -95,9 +95,12 @@ class PipelineEditor(Frame):
         else:
             self.broken = True
             self.config = None
-            self.banner.configure(
-                text=f"❗ config 読込失敗: {result.quarantined_path} に退避。生TOMLで修正してください — {result.error}"
-            )
+            if result.quarantined_path is not None:
+                self.banner.configure(
+                    text=f"❗ config 読込失敗: {result.quarantined_path} に退避。生TOMLで修正してください — {result.error}"
+                )
+            else:
+                self.banner.configure(text=f"❗ config 読込失敗: {result.error}")
             self.raw.set_text(result.raw_text or "")
             self.notebook.select(self.raw)
             self.start_bt.configure(state=DISABLED)
@@ -136,6 +139,8 @@ class PipelineEditor(Frame):
             self.config = config
             self.broken = False
             self.banner.configure(text="")
+            self.form.bind_config(self.config)
+            self.start_bt.configure(state=NORMAL)
         else:
             self.sync_form_to_config()
         save_pipeline_config(self.paths, self.entry, self.config)
