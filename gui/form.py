@@ -120,11 +120,12 @@ class PipelineForm(Frame):
 
     def _apply_enable(self, box: Any, enable: Checkbutton, title: str) -> None:
         enabled = enable.get_value()
-        # Recolour the whole group so on/off reads at a glance: a muted grey
-        # ("secondary") box titled "… (無効)" when off, the normal box when on.
+        # Recolour the whole group so on/off reads at a glance, with the ACTIVE
+        # worker the prominent one: an "info" (blue) accent box when on, and a
+        # plain, understated box titled "… (無効)" when off.
         box.configure(
             text=title if enabled else f"{title}  (無効)",
-            bootstyle="default" if enabled else "secondary",
+            bootstyle="info" if enabled else "default",
         )
         state = "normal" if enabled else "disabled"
         for widget in self._descendants(box):
