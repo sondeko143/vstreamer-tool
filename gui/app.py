@@ -1,3 +1,4 @@
+from collections import deque
 from pathlib import Path
 from tkinter import BOTH
 from tkinter import END
@@ -19,6 +20,8 @@ from gui.migration import quarantine
 from gui.paths import resolve_paths
 from gui.pipeline_editor import PipelineEditor
 from gui.ports import allocate_free_port
+from gui.ports import is_port_free
+from gui.process import PipelineRunner
 from gui.profile import PipelineEntry
 from gui.profile import load_default_config
 from gui.profile import load_profile
@@ -27,6 +30,8 @@ from gui.profile import save_profile
 from gui.recipes import RECIPES
 from gui.recipes import RECIPES_BY_KEY
 from vspeech.logger import logger
+
+LOG_BUFFER_MAX = 2000
 
 
 class App(Frame):
@@ -37,6 +42,12 @@ class App(Frame):
         self.paths.root.mkdir(parents=True, exist_ok=True)
         self.default_config = load_default_config(self.paths)
         self.profile = load_profile(self.paths)
+        # Runners live at the App level, keyed by pipeline id, so a pipeline
+        # keeps running (and stays stoppable) no matter which pipeline the
+        # editor is currently showing. Each pipeline's log is buffered here too
+        # and replayed into the editor when its pipeline is selected.
+        self.runners: dict[str, PipelineRunner] = {}
+        self.logs: dict[str, deque[str]] = {}
 
         left = Frame(self)
         left.pack(side=LEFT, fill=Y)
@@ -46,15 +57,32 @@ class App(Frame):
         Button(left, text="+ new", command=self.new_pipeline).pack(fill="x")
         Button(left, text="del", command=self.delete_pipeline).pack(fill="x")
 
-        self.editor = PipelineEditor(self, self.paths, on_dirty=lambda: None)
+        self.editor = PipelineEditor(
+            self,
+            self.paths,
+            on_dirty=lambda: None,
+            on_start=self._start_current,
+            on_stop=self._stop_current,
+            on_send=self._send_current,
+        )
         self.editor.pack(side=RIGHT, fill=BOTH, expand=True)
 
         self._refresh_list()
 
+    # --- pipeline list --------------------------------------------------
+
+    def _is_running(self, pipeline_id: str) -> bool:
+        runner = self.runners.get(pipeline_id)
+        return runner is not None and runner.is_running()
+
     def _refresh_list(self) -> None:
+        selection = self.listbox.curselection()
         self.listbox.delete(0, END)
         for entry in self.profile.pipelines:
-            self.listbox.insert(END, f"{entry.name}  :{entry.port}")
+            ramp = "●" if self._is_running(entry.id) else "■"
+            self.listbox.insert(END, f"{ramp} {entry.name}  :{entry.port}")
+        if selection:
+            self.listbox.selection_set(selection[0])
 
     def _on_select(self, _event: Any) -> None:
         selection = self.listbox.curselection()
@@ -62,6 +90,67 @@ class App(Frame):
             return
         entry = self.profile.pipelines[selection[0]]
         self.editor.load_entry(entry)
+        self.editor.set_running(self._is_running(entry.id))
+        self.editor.set_log(list(self.logs.get(entry.id, [])))
+
+    # --- runner lifecycle (per pipeline, App-owned) ---------------------
+
+    def _start_current(self) -> None:
+        entry = self.editor.entry
+        if entry is None or not self.editor.save():
+            return
+        if self._is_running(entry.id):
+            return
+        if not is_port_free(entry.port):
+            self.editor.append_log(f"port {entry.port} is busy; cannot start")
+            return
+        pipeline_id = entry.id
+        self.logs.setdefault(pipeline_id, deque(maxlen=LOG_BUFFER_MAX))
+        runner = PipelineRunner(
+            config_path=self.paths.pipeline_config(pipeline_id),
+            port=entry.port,
+            on_log=lambda line: self._schedule_log(pipeline_id, line),
+            on_exit=lambda code: self._schedule_exit(pipeline_id, code),
+        )
+        self.runners[pipeline_id] = runner
+        runner.start()
+        self.editor.set_running(True)
+        self._refresh_list()
+
+    def _stop_current(self) -> None:
+        entry = self.editor.entry
+        if entry is not None and entry.id in self.runners:
+            self.runners[entry.id].stop()
+
+    def _send_current(self, text: str) -> None:
+        entry = self.editor.entry
+        if entry is None:
+            return
+        runner = self.runners.get(entry.id)
+        config = self.editor.config
+        if runner is not None and runner.is_running() and config is not None:
+            runner.send_text(text, config.text_send_operations)
+
+    def _schedule_log(self, pipeline_id: str, line: str) -> None:
+        self.after(0, self._on_log, pipeline_id, line)
+
+    def _schedule_exit(self, pipeline_id: str, code: int) -> None:
+        self.after(0, self._on_exit, pipeline_id, code)
+
+    def _on_log(self, pipeline_id: str, line: str) -> None:
+        self.logs.setdefault(pipeline_id, deque(maxlen=LOG_BUFFER_MAX)).append(line)
+        if self.editor.entry is not None and self.editor.entry.id == pipeline_id:
+            self.editor.append_log(line)
+
+    def _on_exit(self, pipeline_id: str, code: int) -> None:
+        message = f"process exited: {code}"
+        self.logs.setdefault(pipeline_id, deque(maxlen=LOG_BUFFER_MAX)).append(message)
+        if self.editor.entry is not None and self.editor.entry.id == pipeline_id:
+            self.editor.append_log(message)
+            self.editor.set_running(False)
+        self._refresh_list()
+
+    # --- new / delete ---------------------------------------------------
 
     def new_pipeline(self) -> None:
         labels = [recipe.label for recipe in RECIPES]
@@ -92,13 +181,24 @@ class App(Frame):
         if not selection:
             return
         entry = self.profile.pipelines.pop(selection[0])
+        if entry.id in self.runners:
+            self.runners[entry.id].stop()
+            del self.runners[entry.id]
+        self.logs.pop(entry.id, None)
         config_path = self.paths.pipeline_config(entry.id)
         if config_path.exists():
             quarantine(config_path)
             config_path.unlink()
         save_profile(self.paths, self.profile)
+        if self.editor.entry is not None and self.editor.entry.id == entry.id:
+            self.editor.clear()
         self._refresh_list()
         logger.info("deleted pipeline %s", entry.id)
+
+    def on_close(self) -> None:
+        for runner in self.runners.values():
+            runner.stop()
+        self.master.destroy()
 
 
 @click.command()
@@ -112,5 +212,6 @@ def main(profile_dir: Path | None, theme: str):
     root = Window(themename=theme)
     root.title("vspeech pipelines")
     root.geometry("900x760")
-    App(root, profile_dir)
+    app = App(root, profile_dir)
+    root.protocol("WM_DELETE_WINDOW", app.on_close)
     root.mainloop()

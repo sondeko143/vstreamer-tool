@@ -14,8 +14,6 @@ from ttkbootstrap import Notebook
 
 from gui.form import PipelineForm
 from gui.paths import ProfilePaths
-from gui.ports import is_port_free
-from gui.process import PipelineRunner
 from gui.profile import PipelineEntry
 from gui.profile import load_pipeline_config
 from gui.profile import save_pipeline_config
@@ -27,21 +25,30 @@ from vspeech.logger import logger
 
 
 class PipelineEditor(Frame):
-    # Explicit class-level annotation: `tkinter.Misc` aliases `config` to
-    # `configure`, so this must be declared here (not just inferred from an
-    # `__init__` assignment) to override the inherited method's type for the
-    # whole class rather than only within `__init__`. (Same fix as
-    # `PipelineForm` in gui/form.py.)
+    # See gui/form.py: tkinter.Misc aliases `config` to `configure`, so the
+    # bound-config attribute must be declared at class level to override the
+    # inherited method's type for the whole class (not just within __init__).
     config: Config | None
 
-    def __init__(self, master: Any, paths: ProfilePaths, on_dirty: Callable[[], None]):
+    def __init__(
+        self,
+        master: Any,
+        paths: ProfilePaths,
+        on_dirty: Callable[[], None],
+        on_start: Callable[[], None],
+        on_stop: Callable[[], None],
+        on_send: Callable[[str], None],
+    ):
         super().__init__(master)
         self.paths = paths
         self.on_dirty = on_dirty
+        self.on_start = on_start
+        self.on_stop = on_stop
+        self.on_send = on_send
         self.entry: PipelineEntry | None = None
         self.config = None
-        self.runner: PipelineRunner | None = None
         self.broken = False
+        self.running = False
 
         self.banner = Label(self, text="", bootstyle="danger")
         self.banner.pack(fill=X)
@@ -57,9 +64,11 @@ class PipelineEditor(Frame):
 
         controls = Frame(self)
         controls.pack(fill=X)
-        self.start_bt = Button(controls, text="Start", command=self.start)
+        self.start_bt = Button(controls, text="Start", command=self._start_click)
         self.start_bt.pack(side=LEFT, padx=4, pady=4)
-        self.stop_bt = Button(controls, text="Stop", command=self.stop, state=DISABLED)
+        self.stop_bt = Button(
+            controls, text="Stop", command=self._stop_click, state=DISABLED
+        )
         self.stop_bt.pack(side=LEFT, padx=4, pady=4)
         self.status = Label(controls, text="■ stopped")
         self.status.pack(side=LEFT, padx=8)
@@ -72,10 +81,64 @@ class PipelineEditor(Frame):
         send_frame.pack(fill=X)
         self.send_entry = Textbox(send_frame)
         self.send_entry.pack(side=LEFT, fill=X, expand=True, padx=4)
-        Button(send_frame, text="send", command=self.send_text).pack(side=LEFT, padx=4)
+        Button(send_frame, text="send", command=self._send_click).pack(
+            side=LEFT, padx=4
+        )
 
         self.log = ScrolledText(self, height=10, state=DISABLED)
         self.log.pack(fill=BOTH, expand=True)
+        self._refresh_start_button()
+
+    # --- button clicks delegate to App-provided callbacks ---------------
+
+    def _start_click(self) -> None:
+        self.on_start()
+
+    def _stop_click(self) -> None:
+        self.on_stop()
+
+    def _send_click(self) -> None:
+        self.on_send(self.send_entry.get_value())
+
+    # --- runtime state, driven by App (which owns the runners) ----------
+
+    def set_running(self, running: bool) -> None:
+        self.running = running
+        self.stop_bt.configure(state=NORMAL if running else DISABLED)
+        self.status.configure(text="● running" if running else "■ stopped")
+        self._refresh_start_button()
+
+    def _refresh_start_button(self) -> None:
+        can_start = self.entry is not None and not self.broken and not self.running
+        self.start_bt.configure(state=NORMAL if can_start else DISABLED)
+
+    def set_log(self, lines: list[str]) -> None:
+        # `self.log` is a ttkbootstrap ScrolledText (a Frame wrapper); only its
+        # inner Text (`self.log.text`) accepts `state`/`insert`/`delete`. Calling
+        # `self.log.configure(state=...)` hits the Frame and raises a TclError.
+        self.log.text.configure(state=NORMAL)
+        self.log.delete("1.0", END)
+        for line in lines:
+            self.log.insert(END, line + "\n")
+        self.log.text.configure(state=DISABLED)
+        self.log.yview(END)
+
+    def append_log(self, line: str) -> None:
+        self.log.text.configure(state=NORMAL)
+        self.log.insert(END, line + "\n")
+        self.log.text.configure(state=DISABLED)
+        self.log.yview(END)
+
+    def clear(self) -> None:
+        self.entry = None
+        self.config = None
+        self.broken = False
+        self.running = False
+        self.banner.configure(text="")
+        self.stop_bt.configure(state=DISABLED)
+        self.status.configure(text="■ stopped")
+        self._refresh_start_button()
+        self.set_log([])
 
     # --- loading --------------------------------------------------------
 
@@ -88,7 +151,6 @@ class PipelineEditor(Frame):
             self.config = result.value
             self.form.bind_config(self.config)
             self.raw.set_config(self.config)
-            self.start_bt.configure(state=NORMAL)
             if result.migrated:
                 save_pipeline_config(self.paths, entry, self.config)
                 self.on_dirty()
@@ -103,7 +165,7 @@ class PipelineEditor(Frame):
                 self.banner.configure(text=f"❗ config 読込失敗: {result.error}")
             self.raw.set_text(result.raw_text or "")
             self.notebook.select(self.raw)
-            self.start_bt.configure(state=DISABLED)
+        self._refresh_start_button()
 
     # --- form/raw sync --------------------------------------------------
 
@@ -125,7 +187,7 @@ class PipelineEditor(Frame):
         self.banner.configure(text="")
         self.config = config
         self.form.bind_config(config)
-        self.start_bt.configure(state=NORMAL)
+        self._refresh_start_button()
         self.on_dirty()
 
     def save(self) -> bool:
@@ -140,60 +202,9 @@ class PipelineEditor(Frame):
             self.broken = False
             self.banner.configure(text="")
             self.form.bind_config(self.config)
-            self.start_bt.configure(state=NORMAL)
+            self._refresh_start_button()
         else:
             self.sync_form_to_config()
         save_pipeline_config(self.paths, self.entry, self.config)
         logger.info("saved pipeline %s", self.entry.id)
         return True
-
-    # --- runtime --------------------------------------------------------
-
-    def start(self) -> None:
-        if self.entry is None or not self.save():
-            return
-        if not is_port_free(self.entry.port):
-            self._append_log(f"port {self.entry.port} is busy; cannot start")
-            return
-        self.runner = PipelineRunner(
-            config_path=self.paths.pipeline_config(self.entry.id),
-            port=self.entry.port,
-            on_log=self._schedule_log,
-            on_exit=self._schedule_exit,
-        )
-        self.runner.start()
-        self.start_bt.configure(state=DISABLED)
-        self.stop_bt.configure(state=NORMAL)
-        self.status.configure(text="● running")
-
-    def stop(self) -> None:
-        if self.runner:
-            self.runner.stop()
-
-    def _schedule_log(self, line: str) -> None:
-        # `Misc.after` returns a scheduler id (str); wrap it in a `-> None`
-        # method (not a lambda) so this matches PipelineRunner's
-        # `Callable[[str], None]` on_log type. Called from the runner's
-        # reader thread, so the UI update itself is marshaled via `after`.
-        self.log.after(0, self._append_log, line)
-
-    def _schedule_exit(self, code: int) -> None:
-        self.log.after(0, self._on_exit, code)
-
-    def _on_exit(self, code: int) -> None:
-        self._append_log(f"process exited: {code}")
-        self.start_bt.configure(state=NORMAL)
-        self.stop_bt.configure(state=DISABLED)
-        self.status.configure(text="■ stopped")
-
-    def send_text(self) -> None:
-        if self.runner and self.runner.is_running() and self.config is not None:
-            self.runner.send_text(
-                self.send_entry.get_value(), self.config.text_send_operations
-            )
-
-    def _append_log(self, line: str) -> None:
-        self.log.configure(state=NORMAL)
-        self.log.insert(END, line + "\n")
-        self.log.configure(state=DISABLED)
-        self.log.yview(END)
