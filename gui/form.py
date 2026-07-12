@@ -90,7 +90,7 @@ class PipelineForm(Frame):
                 continue
             try:
                 _set(config, path, coerce(widget.get_value()))
-            except (ValueError, KeyError):
+            except ValueError, KeyError:
                 continue
 
     # --- field builders -------------------------------------------------
@@ -141,9 +141,7 @@ class PipelineForm(Frame):
             combo = AutocompleteCombobox[int](frame)
             combo.set_completion_list(devices)
             combo_label = (
-                combo.get_label_for_item_value(current)
-                if current is not None
-                else None
+                combo.get_label_for_item_value(current) if current is not None else None
             )
             if combo_label:
                 combo.set(combo_label)
