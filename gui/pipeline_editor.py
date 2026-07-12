@@ -171,12 +171,17 @@ class PipelineEditor(Frame):
 
     def _on_tab_changed(self, _event: Any) -> None:
         if self.notebook.select() == str(self.raw) and self.config is not None:
-            self.sync_form_to_config()
+            failed = self.sync_form_to_config()
             self.raw.set_config(self.config)
+            if failed:
+                self.banner.configure(
+                    text=f"⚠ フォームで反映できなかった項目: {', '.join(failed)}"
+                )
 
-    def sync_form_to_config(self) -> None:
+    def sync_form_to_config(self) -> list[str]:
         if self.config is not None:
-            self.form.read_into(self.config)
+            return self.form.read_into(self.config)
+        return []
 
     def apply_raw(self) -> None:
         config, error = self.raw.parse()
@@ -204,7 +209,14 @@ class PipelineEditor(Frame):
             self.form.bind_config(self.config)
             self._refresh_start_button()
         else:
-            self.sync_form_to_config()
+            failed = self.sync_form_to_config()
+            self.banner.configure(
+                text=(
+                    f"⚠ 反映できなかった項目: {', '.join(failed)}(値を確認してください)"
+                    if failed
+                    else ""
+                )
+            )
         save_pipeline_config(self.paths, self.entry, self.config)
         logger.info("saved pipeline %s", self.entry.id)
         return True

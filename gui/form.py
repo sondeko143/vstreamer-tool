@@ -84,14 +84,20 @@ class PipelineForm(Frame):
         self._section_tts()
         self._section_vc()
 
-    def read_into(self, config: Config) -> None:
+    def read_into(self, config: Config) -> list[str]:
+        # Returns the dotted paths of any fields whose widget value could not be
+        # coerced/applied (e.g. a non-numeric spinbox/device entry). The caller
+        # surfaces these instead of the old silent `continue`, so a dropped edit
+        # is visible rather than vanishing.
+        failed: list[str] = []
         for widget, (path, coerce) in self.bindings.items():
             if not widget.winfo_exists():
                 continue
             try:
                 _set(config, path, coerce(widget.get_value()))
             except ValueError, KeyError:
-                continue
+                failed.append(path)
+        return failed
 
     # --- field builders -------------------------------------------------
 

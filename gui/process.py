@@ -4,6 +4,7 @@ from pathlib import Path
 from subprocess import PIPE  # nosec B404 - launches local vspeech with fixed argv
 from subprocess import STDOUT  # nosec B404 - see PIPE import
 from subprocess import Popen  # nosec B404 - see PIPE import
+from subprocess import TimeoutExpired  # nosec B404 - see PIPE import
 from threading import Thread
 
 import grpc
@@ -68,10 +69,33 @@ class PipelineRunner:
     def is_running(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
 
-    def stop(self) -> None:
+    def request_stop(self) -> None:
+        """Send the terminate signal WITHOUT waiting for the process to die.
+
+        Safe to call from the Tk main thread (e.g. on window close) — it never
+        blocks the UI. The process dies asynchronously; `_pump` fires `on_exit`
+        when it does.
+        """
         if self.proc and self.is_running():
             self.proc.terminate()
-            self.proc.wait()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        """Terminate the process, then wait up to `timeout`s, escalating to a
+        kill if it ignores the terminate signal.
+
+        This BLOCKS for up to `timeout`s, so a caller on the Tk main thread
+        should run it off-thread (e.g. in a daemon Thread) to keep the UI
+        responsive. `on_exit` is fired by `_pump`, not here.
+        """
+        proc = self.proc
+        if proc is None or proc.poll() is not None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=timeout)
+        except TimeoutExpired:
+            logger.warning("pipeline on port %s ignored terminate; killing", self.port)
+            proc.kill()
 
     def send_text(self, text: str, text_send_operations: RoutesList) -> None:
         command = build_text_command(text, text_send_operations)

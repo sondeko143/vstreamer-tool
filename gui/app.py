@@ -1,5 +1,6 @@
 from collections import deque
 from pathlib import Path
+from threading import Thread
 from tkinter import BOTH
 from tkinter import END
 from tkinter import LEFT
@@ -13,9 +14,9 @@ import click
 from ttkbootstrap import Button
 from ttkbootstrap import Frame
 from ttkbootstrap import Window
-from ttkbootstrap.dialogs import Querybox
 from ttkbootstrap.themes.standard import STANDARD_THEMES
 
+from gui.dialogs import RecipeDialog
 from gui.migration import quarantine
 from gui.paths import resolve_paths
 from gui.pipeline_editor import PipelineEditor
@@ -27,7 +28,6 @@ from gui.profile import load_default_config
 from gui.profile import load_profile
 from gui.profile import save_pipeline_config
 from gui.profile import save_profile
-from gui.recipes import RECIPES
 from gui.recipes import RECIPES_BY_KEY
 from vspeech.logger import logger
 
@@ -142,7 +142,10 @@ class App(Frame):
     def _stop_current(self) -> None:
         entry = self.editor.entry
         if entry is not None and entry.id in self.runners:
-            self.runners[entry.id].stop()
+            # stop() blocks (terminate → wait → kill); run it off the Tk thread
+            # so the UI stays responsive. The ramp/log update when the process
+            # actually dies, via _pump → on_exit → after.
+            Thread(target=self.runners[entry.id].stop, daemon=True).start()
 
     def _send_current(self, text: str) -> None:
         entry = self.editor.entry
@@ -175,15 +178,10 @@ class App(Frame):
     # --- new / delete ---------------------------------------------------
 
     def new_pipeline(self) -> None:
-        labels = [recipe.label for recipe in RECIPES]
-        chosen = Querybox.get_string(
-            prompt="レシピを選んでください:\n" + "\n".join(labels),
-            title="new pipeline",
-        )
-        recipe = next(
-            (r for r in RECIPES if r.label == chosen or r.key == chosen),
-            RECIPES_BY_KEY["blank"],
-        )
+        dialog = RecipeDialog(self)
+        if dialog.result is None:
+            return
+        recipe = RECIPES_BY_KEY[dialog.result]
         claimed = {entry.port for entry in self.profile.pipelines}
         port = allocate_free_port(claimed)
         entry = PipelineEntry(
@@ -223,8 +221,12 @@ class App(Frame):
         logger.info("deleted pipeline %s", entry.id)
 
     def on_close(self) -> None:
+        # Signal every runner to terminate WITHOUT waiting, then close
+        # immediately — waiting serially on each Popen.wait() would freeze the
+        # window for the sum of all shutdown times. The children get the
+        # terminate signal synchronously (fast) before the process exits.
         for runner in self.runners.values():
-            runner.stop()
+            runner.request_stop()
         self.master.destroy()
 
 
