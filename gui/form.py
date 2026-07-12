@@ -2,7 +2,6 @@ from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from tkinter import BOTH
-from tkinter import TclError
 from tkinter import W
 from tkinter import X
 from typing import Any
@@ -86,9 +85,10 @@ class PipelineForm(Frame):
         self.config = None
         # widget -> (config_path, coerce fn from widget value to config value)
         self.bindings: dict[Any, tuple[str, Callable[[Any], Any]]] = {}
-        # (box, enable-checkbutton, title) per worker section, so the section's
-        # fields + its box styling can follow its `enable` toggle.
-        self._section_enables: list[tuple[Any, Checkbutton, str]] = []
+        # (box, enable-checkbutton, title, content-frame) per worker section, so
+        # the section's fields collapse/expand and its box styling follow the
+        # `enable` toggle.
+        self._section_enables: list[tuple[Any, Checkbutton, str, Any]] = []
         # A scrollable body so the full field list is reachable on a small
         # window; the vertical scrollbar shows whenever the content overflows.
         self.body = ScrolledFrame(self, autohide=False)
@@ -109,41 +109,32 @@ class PipelineForm(Frame):
 
     # --- enable-driven disabling ----------------------------------------
 
-    def _register_section(self, box: Any, enable: Checkbutton, title: str) -> None:
-        # The enable checkbox drives whether the rest of the section is editable.
+    def _register_section(
+        self, box: Any, enable: Checkbutton, title: str, content: Any
+    ) -> None:
+        # The enable checkbox drives whether the section is expanded or collapsed.
         enable.configure(command=lambda: (self.on_change(), self._apply_all_enables()))
-        self._section_enables.append((box, enable, title))
+        self._section_enables.append((box, enable, title, content))
 
     def _apply_all_enables(self) -> None:
-        for box, enable, title in self._section_enables:
-            self._apply_enable(box, enable, title)
+        for box, enable, title, content in self._section_enables:
+            self._apply_enable(box, enable, title, content)
 
-    def _apply_enable(self, box: Any, enable: Checkbutton, title: str) -> None:
+    def _apply_enable(
+        self, box: Any, enable: Checkbutton, title: str, content: Any
+    ) -> None:
         enabled = enable.get_value()
-        # Recolour the whole group so on/off reads at a glance, with the ACTIVE
-        # worker the prominent one: an "info" (blue) accent box when on, and a
-        # plain, understated box titled "… (無効)" when off.
+        # An active worker is the prominent one (an "info" accent box with its
+        # fields shown); a disabled worker collapses to just its checkbox line,
+        # titled "… (無効)", so it takes almost no space.
         box.configure(
             text=title if enabled else f"{title}  (無効)",
             bootstyle="info" if enabled else "default",
         )
-        state = "normal" if enabled else "disabled"
-        for widget in self._descendants(box):
-            if widget is enable:
-                continue
-            try:
-                widget.configure(state=state)
-            except TclError:
-                # containers (Frame) have no `state` option — skip; their
-                # children are handled by the recursion.
-                pass
-
-    def _descendants(self, parent: Any) -> list[Any]:
-        result: list[Any] = []
-        for child in parent.winfo_children():
-            result.append(child)
-            result.extend(self._descendants(child))
-        return result
+        if enabled:
+            content.pack(fill=X)
+        else:
+            content.pack_forget()
 
     def read_into(self, config: Config) -> list[str]:
         # Returns the dotted paths of any fields whose widget value could not be
@@ -273,34 +264,42 @@ class PipelineForm(Frame):
         box = self._section_box("recording")
         enable = self._check(box, "recording.enable", "enable recording")
         enable.pack(anchor=W)
-        self._register_section(box, enable, "recording")
+        content = Frame(box)
+        self._register_section(box, enable, "recording", content)
         self._device_combo(
-            box, "recording.input_device_index", "input device", input=True
+            content, "recording.input_device_index", "input device", input=True
         ).pack(fill=X)
-        self._spin(box, "recording.rate", "rate", 8000, 48000, 1).pack(fill=X)
+        self._spin(content, "recording.rate", "rate", 8000, 48000, 1).pack(fill=X)
         self._spin(
-            box, "recording.silence_threshold", "silence threshold (dBFS)", -120, 0, 1
+            content,
+            "recording.silence_threshold",
+            "silence threshold (dBFS)",
+            -120,
+            0,
+            1,
         ).pack(fill=X)
 
     def _section_playback(self) -> None:
         box = self._section_box("playback")
         enable = self._check(box, "playback.enable", "enable playback")
         enable.pack(anchor=W)
-        self._register_section(box, enable, "playback")
+        content = Frame(box)
+        self._register_section(box, enable, "playback", content)
         self._device_combo(
-            box, "playback.output_device_index", "output device", input=False
+            content, "playback.output_device_index", "output device", input=False
         ).pack(fill=X)
-        self._spin(box, "playback.volume", "volume", 0, 100, 1).pack(fill=X)
+        self._spin(content, "playback.volume", "volume", 0, 100, 1).pack(fill=X)
 
     def _section_transcription(self) -> None:
         box = self._section_box("transcription")
         enable = self._check(box, "transcription.enable", "enable transcription")
         enable.pack(anchor=W)
-        self._register_section(box, enable, "transcription")
+        content = Frame(box)
+        self._register_section(box, enable, "transcription", content)
         combo = self._enum_combo(
-            box, "transcription.worker_type", "worker_type", TranscriptionWorkerType
+            content, "transcription.worker_type", "worker_type", TranscriptionWorkerType
         )
-        backend = Frame(box)
+        backend = Frame(content)
         backend.pack(fill=X)
         combo.bind(
             "<<ComboboxSelected>>",
@@ -335,16 +334,17 @@ class PipelineForm(Frame):
             self._entry(backend, "ami.engine_uri", "ami engine_uri").pack(fill=X)
             self._entry(backend, "ami.engine_name", "ami engine_name").pack(fill=X)
             self._entry(backend, "ami.service_id", "ami service_id").pack(fill=X)
-        # newly-built backend fields must follow the section's enable state
-        self._apply_all_enables()
 
     def _section_tts(self) -> None:
         box = self._section_box("tts")
         enable = self._check(box, "tts.enable", "enable tts")
         enable.pack(anchor=W)
-        self._register_section(box, enable, "tts")
-        combo = self._enum_combo(box, "tts.worker_type", "worker_type", TtsWorkerType)
-        backend = Frame(box)
+        content = Frame(box)
+        self._register_section(box, enable, "tts", content)
+        combo = self._enum_combo(
+            content, "tts.worker_type", "worker_type", TtsWorkerType
+        )
+        backend = Frame(content)
         backend.pack(fill=X)
         combo.bind(
             "<<ComboboxSelected>>",
@@ -376,16 +376,15 @@ class PipelineForm(Frame):
             )
         elif worker_type == TtsWorkerType.VR2:
             self._entry(backend, "vr2.voice_name", "voice_name").pack(fill=X)
-        # newly-built backend fields must follow the section's enable state
-        self._apply_all_enables()
 
     def _section_vc(self) -> None:
         box = self._section_box("vc")
         enable = self._check(box, "vc.enable", "enable vc")
         enable.pack(anchor=W)
-        self._register_section(box, enable, "vc")
-        self._entry(box, "rvc.model_file", "rvc model_file").pack(fill=X)
-        self._entry(box, "rvc.hubert_model_file", "hubert asset dir").pack(fill=X)
-        self._entry(box, "rvc.rmvpe_model_file", "rmvpe model_file").pack(fill=X)
-        self._spin(box, "rvc.f0_up_key", "f0_up_key", -64, 64, 1).pack(fill=X)
-        self._spin(box, "rvc.gpu_id", "gpu_id", 0, 16, 1).pack(fill=X)
+        content = Frame(box)
+        self._register_section(box, enable, "vc", content)
+        self._entry(content, "rvc.model_file", "rvc model_file").pack(fill=X)
+        self._entry(content, "rvc.hubert_model_file", "hubert asset dir").pack(fill=X)
+        self._entry(content, "rvc.rmvpe_model_file", "rmvpe model_file").pack(fill=X)
+        self._spin(content, "rvc.f0_up_key", "f0_up_key", -64, 64, 1).pack(fill=X)
+        self._spin(content, "rvc.gpu_id", "gpu_id", 0, 16, 1).pack(fill=X)
