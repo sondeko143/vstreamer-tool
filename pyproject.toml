@@ -61,6 +61,7 @@ audio = ["sounddevice>=0.5,<0.6"]
 gui = [
     "ttkbootstrap>=1.10.1,<2",
     "pillow>=12.1.1,<13",
+    "platformdirs>=4,<5",
 ]
 
 [project.urls]
