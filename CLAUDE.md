@@ -23,8 +23,9 @@ uv sync --extra gui         # ttkbootstrap GUI
 # Run the pipeline (gRPC server + workers)
 uv run python -m vspeech --config ./config.toml
 
-# Run the GUI control panel
-uv run python -m gui -c config.toml
+# Run the GUI control panel (multi-pipeline manager; always reads the user
+# profile from the OS config dir — no config-file argument)
+uv run python -m gui                    # optionally: --profile-dir PATH  -t THEME
 
 # Tests
 uv run pytest                              # all tests

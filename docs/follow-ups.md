@@ -7,6 +7,53 @@
 
 ---
 
+## GUI 全面書き直し（マルチ pipeline、branch `feat/gui-multi-pipeline`、2026-07-12）
+
+設計: [docs/superpowers/specs/2026-07-12-gui-multi-pipeline-rewrite-design.md](superpowers/specs/2026-07-12-gui-multi-pipeline-rewrite-design.md)
+
+App 層で pipeline 毎に `PipelineRunner` を持ち、どの pipeline を見ていても各行を個別に起動/停止できる設計
+（要件「複数の pipeline を起動/停止」）。以下はレビューで出たが、フェーズ1のスコープ外として繰り延べた項目。
+
+### 自己終了した runner が `self.runners` から除去されない — [`gui/app.py`](../gui/app.py)
+
+プロセスが自分で終了しても `_on_exit` はログ + ランプを更新するだけで dict から消さない。
+`_is_running` は `Popen.poll()` を見るので挙動は正しい（終了済みは False）が、`self.runners` は起動した
+pipeline 数だけ単調増加し、古い `PipelineRunner` のリーダースレッドも join されない。
+**今回直さなかった理由**: 挙動は正しく、実害は再起動を多数繰り返したときのスレッド/dict の緩やかな蓄積のみ。
+除去には「終了検知で dict から消しつつ選択中の UI は残す」ライフサイクル整理が要り、フェーズ1の
+「とりあえず動く」より広い。拾うなら `_on_exit` で `self.runners.pop(id)` しつつ `_is_running` の意味を保つ。
+
+### `stop()` / `on_close()` が Tk メインループを同期ブロックする — [`gui/process.py`](../gui/process.py) / [`gui/app.py`](../gui/app.py)
+
+`PipelineRunner.stop()` は `terminate()` + `Popen.wait()`（タイムアウト無し）。Stop クリックやウィンドウを
+閉じる操作で、子プロセスが終了するまで UI が固まる。`on_close` は runner を直列に `stop()` するので、
+4 本同時稼働だと 4 本ぶんの終了時間だけ固まる。**今回直さなかった理由**: Task 6 由来の既存挙動で、旧 GUI も
+単一プロセスを同期終了していた。恒久策は `wait(timeout=...)` + タイムアウト時 `kill()` + 複数 runner の
+並行停止だが、終了レースの検証コストがフェーズ1の範囲を超える。
+
+### delete 中の in-flight ログが `logs[]` の孤児エントリを再生成しうる — [`gui/app.py`](../gui/app.py)
+
+リーダースレッドが `self.after(0, self._on_log, id, line)` をスケジュールした直後に `delete_pipeline` が
+`self.logs.pop(id)` すると、後から走る `_on_log` の `setdefault` が消したはずの id に小さな buffer を作り直す。
+以後クリーンアップされない。**今回直さなかった理由**: 上限 2000 行・dict 1 エントリで有界、かつ発生確率が
+極めて低いレース。
+
+### `load_entry` が古い `self.running` で Start ボタン状態を一瞬計算する — [`gui/pipeline_editor.py`](../gui/pipeline_editor.py)
+
+`load_entry` 末尾の `_refresh_start_button()` は直前の pipeline の `self.running` を使う。
+`App._on_select` / `_load_selected` が直後に必ず `set_running(...)` を呼ぶので実害は無い（単一スレッドの Tk で
+間に再描画が挟まらない）が、正しさが呼び出し側の規律に依存する。**今回直さなかった理由**: 現状の唯一の
+呼び出し経路では常に正しく、見た目のグリッチも無い。拾うなら `load_entry`+`set_running`+`set_log` を
+editor 側の 1 メソッドに畳む。
+
+### レシピ選択が自由入力マッチ / 削除に確認ダイアログが無い — [`gui/app.py`](../gui/app.py)
+
+`Querybox.get_string` にラベルをタイプさせる方式で、タイポは黙って `blank` レシピに落ちる。`del` は確認無しで
+即削除する（config は退避されるので復旧可能）。**今回直さなかった理由**: フェーズ1は「とりあえず起動すれば
+動く」優先。ラジオリストの `Toplevel` や確認ダイアログは UX 改善でフェーズ2向き。
+
+---
+
 ## CUDA 13 化（フェーズ2、branch `feat/cuda13-on-312`、2026-07-12）— ctranslate2 が CUDA 12 に取り残される
 
 **whisper ホストは CUDA 12.x の cuBLAS + cuDNN 9 が必要。** `ctranslate2` 4.8.x（faster-whisper が使う）は

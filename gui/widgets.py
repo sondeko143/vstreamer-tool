@@ -1,5 +1,3 @@
-from logging import Handler
-from logging import LogRecord
 from tkinter import END
 from tkinter import BooleanVar
 from tkinter import StringVar
@@ -8,31 +6,11 @@ from typing import Any
 from ttkbootstrap import Checkbutton as ttkCheckbutton
 from ttkbootstrap import Entry
 from ttkbootstrap import Spinbox as ttkSpinbox
-from ttkbootstrap import Text
 from ttkbootstrap.widgets.scrolled import ScrolledText as ttkScrolledText
 
 
 class ScrolledText(ttkScrolledText):
     pass
-
-
-class TextHandler(Handler):
-    """Log to a Tkinter Text/ScrolledText widget from any thread."""
-
-    def __init__(self, text: Text | ScrolledText):
-        Handler.__init__(self)
-        self.text = text
-
-    def emit(self, record: LogRecord):
-        msg = self.format(record)
-
-        def append():
-            self.text.configure(state="normal")
-            self.text.insert(END, msg + "\n")
-            self.text.configure(state="disabled")
-            self.text.yview(END)
-
-        self.text.after(0, append)
 
 
 class Spinbox(ttkSpinbox):

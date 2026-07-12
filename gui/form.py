@@ -96,7 +96,7 @@ class PipelineForm(Frame):
     # --- field builders -------------------------------------------------
 
     def _check(self, parent: Any, path: str, label: str) -> Checkbutton:
-        assert self.config is not None
+        assert self.config is not None  # nosec B101
         widget = Checkbutton(parent, text=label)
         widget.set(_get(self.config, path))
         widget.configure(command=self.on_change)
@@ -104,7 +104,7 @@ class PipelineForm(Frame):
         return widget
 
     def _entry(self, parent: Any, path: str, label: str) -> Frame:
-        assert self.config is not None
+        assert self.config is not None  # nosec B101
         frame = Frame(parent)
         Label(frame, text=label).pack(fill=X)
         widget = Textbox(frame)
@@ -117,7 +117,7 @@ class PipelineForm(Frame):
     def _spin(
         self, parent: Any, path: str, label: str, from_: float, to: float, inc: float
     ) -> Frame:
-        assert self.config is not None
+        assert self.config is not None  # nosec B101
         frame = Frame(parent)
         Label(frame, text=label).pack(fill=X)
         widget = Spinbox(frame, from_=from_, to=to, increment=inc, wrap=True)
@@ -132,7 +132,7 @@ class PipelineForm(Frame):
     def _device_combo(
         self, parent: Any, path: str, label: str, *, input: bool
     ) -> Frame:
-        assert self.config is not None
+        assert self.config is not None  # nosec B101
         devices = list_all_devices(input=input, output=not input)
         frame = Frame(parent)
         Label(frame, text=label).pack(fill=X)
@@ -162,7 +162,7 @@ class PipelineForm(Frame):
     def _enum_combo(
         self, parent: Any, path: str, label: str, enum_cls: Any
     ) -> AutocompleteCombobox[Any]:
-        assert self.config is not None
+        assert self.config is not None  # nosec B101
         Label(parent, text=label).pack(fill=X)
         combo = AutocompleteCombobox[Any](parent)
         combo.set_completion_list({member.name: member for member in enum_cls})
