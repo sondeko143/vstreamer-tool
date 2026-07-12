@@ -37,6 +37,8 @@ def _get(config: Config, path: str) -> Any:
 
 
 def _coerce_value(node: Any, child: str, value: Any) -> Any:
+    if value is None:
+        return None
     annotation = type(node).model_fields[child].annotation
     types = get_args(annotation) or (annotation,)
     if SecretStr in types:
@@ -47,6 +49,15 @@ def _coerce_value(node: Any, child: str, value: Any) -> Any:
             return None
         return Path(text)
     return value
+
+
+def _field_accepts_none(config: Config, path: str) -> bool:
+    *parents, child = path.split(".")
+    node: Any = config
+    for part in parents:
+        node = getattr(node, part)
+    annotation = type(node).model_fields[child].annotation
+    return type(None) in (get_args(annotation) or (annotation,))
 
 
 def _set(config: Config, path: str, value: Any) -> None:
@@ -86,19 +97,26 @@ class PipelineForm(Frame):
 
     def read_into(self, config: Config) -> list[str]:
         # Returns the dotted paths of any fields whose widget value could not be
-        # coerced/applied (e.g. a non-numeric spinbox/device entry). The caller
-        # surfaces these instead of the old silent `continue`, so a dropped edit
-        # is visible rather than vanishing.
+        # coerced/applied (e.g. a non-numeric spinbox, or a garbled combo). The
+        # caller surfaces these instead of the old silent `continue`, so a
+        # dropped edit is visible rather than vanishing.
         failed: list[str] = []
         for widget, (path, coerce) in self.bindings.items():
             if not widget.winfo_exists():
                 continue
             value = widget.get_value()
             if value is None or value == "":
-                # An unset/blank widget — an unselected combo (None) or a cleared
-                # numeric/text field ("") — leaves the config field unchanged.
-                # This is a normal state (e.g. no device picked, gpu_id unset),
-                # not an error, so it must not be reported as a failed field.
+                # A blank widget: an unselected combo (None) or a cleared
+                # field (""). If the field accepts None, set it to None — this
+                # both leaves a fresh unset field unchanged AND lets the user
+                # clear a previously-set optional field (device index, gpu_id,
+                # optional path). If the field is required (e.g. rate, or a
+                # garbled worker_type combo), a blank value IS an error, so
+                # surface it rather than silently keeping the stale value.
+                if _field_accepts_none(config, path):
+                    _set(config, path, None)
+                else:
+                    failed.append(path)
                 continue
             try:
                 _set(config, path, coerce(value))
@@ -235,10 +253,9 @@ class PipelineForm(Frame):
             if widget.winfo_exists()
         }
         self.on_change()
-        try:
-            worker_type = combo.get_value()
-        except KeyError:
-            return
+        # get_value() returns None (not a raise) for an unmatched label; the
+        # if/elif below then simply renders no backend fields.
+        worker_type = combo.get_value()
         if worker_type == TranscriptionWorkerType.WHISPER:
             self._entry(backend, "whisper.model", "whisper model").pack(fill=X)
             self._spin(backend, "whisper.gpu_id", "gpu_id", 0, 16, 1).pack(fill=X)
@@ -275,10 +292,9 @@ class PipelineForm(Frame):
             if widget.winfo_exists()
         }
         self.on_change()
-        try:
-            worker_type = combo.get_value()
-        except KeyError:
-            return
+        # get_value() returns None (not a raise) for an unmatched label; the
+        # if/elif below then simply renders no backend fields.
+        worker_type = combo.get_value()
         if worker_type == TtsWorkerType.VOICEVOX:
             self._entry(backend, "voicevox.openjtalk_dir", "openjtalk_dir").pack(fill=X)
             self._entry(backend, "voicevox.model_dir", "model_dir").pack(fill=X)
