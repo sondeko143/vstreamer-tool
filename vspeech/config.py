@@ -125,7 +125,7 @@ class ReplaceFilter(BaseModel):
         return self.__str__()
 
     @staticmethod
-    def from_str(value: str) -> "ReplaceFilter":
+    def from_str(value: str) -> ReplaceFilter:
         try:
             pattern, replaced = value.split("=")
         except ValueError as e:
@@ -340,7 +340,7 @@ class RvcConfig(BaseModel):
     quality: RvcQuality = Field(default=RvcQuality.zero)
     gpu_id: int | None = Field(default=None)
     gpu_name: str = Field(default="")
-    f0_extractor_type: F0ExtractorType = Field(default=F0ExtractorType.harvest)
+    f0_extractor_type: F0ExtractorType = Field(default=F0ExtractorType.rmvpe)
     input_boost: float = Field(default=1.0)
     rmvpe_model_file: Path = Field(default=Path())
 

@@ -70,7 +70,7 @@ class AutocompleteCombobox[T](ttk.Combobox):
             self.insert(0, self._hits[self._hit_index])
             self.select_range(self.position, tkinter.END)
 
-    def handle_keyrelease(self, event: "Event[Any]"):
+    def handle_keyrelease(self, event: Event[Any]):
         """event handler for the keyrelease event on this widget"""
         if event.keysym == "BackSpace":
             self.delete(self.index(tkinter.INSERT), tkinter.END)

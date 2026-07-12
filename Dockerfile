@@ -1,6 +1,6 @@
 # requirements-pod.txt は requires-python = ">=3.12,<3.13" で解決した uv.lock から
 # 生成されるので、イメージもその範囲に収まっていなければならない。
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 RUN apt-get update && apt-get install -y gcc g++ curl
@@ -16,7 +16,7 @@ RUN chmod +x download
 # 素の `./download` は非対話ビルドで "unexpected end of file" になって落ちる。
 RUN yes y | ./download -o voicevox --exclude c-api --devices cpu
 
-FROM python:3.12-slim
+FROM python:3.14-slim
 ENV PYTHONUNBUFFERED=1
 # Onnxruntime.load_once() は libvoicevox_onnxruntime.so.<version> を dlopen する。
 # バージョン付きの名前を焼き込まずに済むよう、検索パスだけを通す。

@@ -19,7 +19,7 @@ from vspeech.worker.tts import voicevox_worker
 
 
 class FakeVoicevox:
-    instances: list["FakeVoicevox"] = []
+    instances: list[FakeVoicevox] = []
 
     def __init__(self, open_jtalk_dict_dir=None, model_dir=None, onnxruntime_path=None):
         self.init_args = (open_jtalk_dict_dir, model_dir, onnxruntime_path)

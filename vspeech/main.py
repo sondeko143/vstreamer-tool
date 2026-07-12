@@ -1,7 +1,8 @@
 from asyncio import CancelledError
 from asyncio import Task
 from asyncio import TaskGroup
-from asyncio import get_event_loop
+from asyncio import new_event_loop
+from asyncio import set_event_loop
 from traceback import format_exception
 from typing import IO
 from typing import Any
@@ -93,7 +94,10 @@ def cmd(config_file: IO[bytes] | None):
         max_samples=config.telemetry.max_samples,
         jsonl_path=config.telemetry.jsonl_path,
     )
-    loop = get_event_loop()
+    # 3.14 で get_event_loop() は running loop が無いと RuntimeError を投げる
+    # (暗黙生成が撤廃された)。明示的に新しいループを作って current に据える。
+    loop = new_event_loop()
+    set_event_loop(loop)
     try:
         loop.run_until_complete(vspeech_coro(config=config))
         loop.stop()

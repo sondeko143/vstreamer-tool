@@ -2,7 +2,6 @@ from typing import Any
 from typing import cast
 
 import numpy as np
-import pyworld
 from numpy.typing import NDArray
 from onnxruntime import InferenceSession
 from scipy import signal
@@ -18,12 +17,27 @@ class PitchExtractor:
 RMVPE_THRESHOLD = 0.3
 
 
+def _pyworld():
+    """pyworld を遅延 import する。cp314 wheel が無く runtime 依存から外したため、
+    dio/harvest を選んだときだけ必要。既定の rmvpe では読み込まない。"""
+    try:
+        import pyworld  # ty: ignore[unresolved-import]
+    except ImportError as e:
+        raise ImportError(
+            "f0_extractor_type 'dio'/'harvest' には optional な 'pyworld' が必要です "
+            "(cp314 wheel 無し; 手動導入してください: `uv pip install pyworld`)。"
+            "既定の 'rmvpe' はこれを必要としません。"
+        ) from e
+    return pyworld
+
+
 def pitch_extract_harvest(
     audio: NDArray[np.float32],
     f0_max: int,
     sr: int,
 ) -> NDArray[np.double]:
-    f0_, t = pyworld.harvest(  # type: ignore
+    pyworld = _pyworld()
+    f0_, t = pyworld.harvest(
         audio.astype(np.double),
         fs=sr,
         f0_ceil=f0_max,
@@ -31,7 +45,7 @@ def pitch_extract_harvest(
     )
     f0 = cast(
         NDArray[np.double],
-        pyworld.stonemask(audio.astype(np.double), f0_, t, sr),  # type: ignore
+        pyworld.stonemask(audio.astype(np.double), f0_, t, sr),
     )
     return signal.medfilt(f0, 3)
 
@@ -42,7 +56,8 @@ def pitch_extract_dio(
     f0_min: int,
     sr: int,
 ):
-    f0_, t = pyworld.dio(  # type: ignore
+    pyworld = _pyworld()
+    f0_, t = pyworld.dio(
         audio.astype(np.double),
         sr,
         f0_floor=f0_min,
@@ -52,7 +67,7 @@ def pitch_extract_dio(
     )
     return cast(
         NDArray[np.double],
-        pyworld.stonemask(audio.astype(np.double), f0_, t, sr),  # type: ignore
+        pyworld.stonemask(audio.astype(np.double), f0_, t, sr),
     )
 
 

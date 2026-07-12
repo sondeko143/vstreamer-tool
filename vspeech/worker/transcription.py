@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     import numpy as np
 
 
-def pcm_to_waveform(sound: SoundInput) -> "np.ndarray":
+def pcm_to_waveform(sound: SoundInput) -> np.ndarray:
     """Decode INT16 PCM bytes into a mono float32 waveform in [-1, 1].
 
     faster-whisper accepts a float32 ndarray directly, so this lets the
@@ -138,7 +138,7 @@ async def transcript_worker_whisper(
     config: TranscriptionConfig,
     whisper_config: WhisperConfig,
     in_queue: Queue[WorkerInput],
-) -> AsyncGenerator[WorkerOutput, None]:
+) -> AsyncGenerator[WorkerOutput]:
     from faster_whisper import WhisperModel
 
     from vspeech.lib.cuda_util import get_device
@@ -213,7 +213,7 @@ async def transcript_worker_google(
     config: TranscriptionConfig,
     gcp_config: GcpConfig,
     in_queue: Queue[WorkerInput],
-) -> AsyncGenerator[WorkerOutput, None]:
+) -> AsyncGenerator[WorkerOutput]:
     credentials, _ = get_credentials(gcp_config)
     client = SpeechAsyncClient(credentials=credentials)
     logger.info("transcript worker [google] started")
@@ -270,7 +270,7 @@ async def transcript_worker_ami(
     config: TranscriptionConfig,
     ami_config: AmiConfig,
     in_queue: Queue[WorkerInput],
-) -> AsyncGenerator[WorkerOutput, None]:
+) -> AsyncGenerator[WorkerOutput]:
     logger.info("transcript worker [ami] started")
     while True:
         async with AsyncClient(timeout=ami_config.request_timeout) as client:

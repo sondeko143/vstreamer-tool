@@ -1,4 +1,3 @@
-import audioop
 from asyncio import CancelledError
 from asyncio import Queue
 from asyncio import Task
@@ -6,23 +5,22 @@ from asyncio import TaskGroup
 from asyncio import to_thread
 from collections import deque
 from collections.abc import AsyncGenerator
-from collections.abc import Callable
 from dataclasses import dataclass
 from math import log
 from time import perf_counter
 from time import time
-from typing import Any
 from typing import NoReturn
 from uuid import uuid4
 
-from pyaudio import PyAudio
+import audioop
+import sounddevice as sd
 
 from vspeech.config import EventType
 from vspeech.config import RecordingConfig
 from vspeech.config import get_sample_size
 from vspeech.exceptions import shutdown_worker
 from vspeech.lib.audio import get_device_name
-from vspeech.lib.audio import get_pa_format
+from vspeech.lib.audio import get_sd_dtype
 from vspeech.lib.audio import search_device
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
@@ -31,16 +29,10 @@ from vspeech.shared_context import SoundOutput
 from vspeech.shared_context import WorkerOutput
 
 
-def open_input_stream(
-    audio: PyAudio,
-    config: RecordingConfig,
-    stream_callback: Callable[[bytes | None, int, Any, int], tuple[bytes | None, int]]
-    | None = None,
-):
+def open_input_stream(config: RecordingConfig) -> sd.RawInputStream:
     input_device_index = config.input_device_index
     if input_device_index is None:
         input_device = search_device(
-            audio,
             host_api_type=config.input_host_api_name,
             name=config.input_device_name,
             input=True,
@@ -48,18 +40,17 @@ def open_input_stream(
         if not input_device:
             raise TypeError("not found input device")
         input_device_index = input_device.index
-    input_device_name = get_device_name(audio, input_device_index)
+    input_device_name = get_device_name(input_device_index)
     logger.info("use input device %s: %s", input_device_index, input_device_name)
-    return audio.open(
-        input_device_index=input_device_index,
-        format=get_pa_format(config.format),
+    stream = sd.RawInputStream(
+        samplerate=config.rate,
+        blocksize=config.chunk,
+        device=input_device_index,
         channels=config.channels,
-        rate=config.rate,
-        input=True,
-        output=False,
-        frames_per_buffer=config.chunk,
-        stream_callback=stream_callback,
+        dtype=get_sd_dtype(config.format),
     )
+    stream.start()
+    return stream
 
 
 def get_dbfs(interval_frames: bytes, sample_width: int):
@@ -95,7 +86,7 @@ def record_recording_metrics(
 
 async def pyaudio_recording_worker(
     config: RecordingConfig,
-) -> AsyncGenerator[RecordedUtterance, None]:
+) -> AsyncGenerator[RecordedUtterance]:
     while True:
         interval_frame_count = 0
         interval_frames: bytes = b""
@@ -106,14 +97,14 @@ async def pyaudio_recording_worker(
         total_seconds_of_this_recording = 0
         status = "waiting"
         last_voice_ts = perf_counter()
-        audio = PyAudio()
-        stream = open_input_stream(audio, config)
+        stream = open_input_stream(config)
         sample_width = get_sample_size(config.format)
         n_move_avg_amp = config.gradually_stopping_interval
         approx_max_amps: list[float] = []
         try:
-            while stream.is_active():
-                in_data = await to_thread(stream.read, config.chunk)
+            while stream.active:
+                chunk_data, _overflowed = await to_thread(stream.read, config.chunk)
+                in_data = bytes(chunk_data)
                 interval_frame_count += config.chunk
                 interval_frames += in_data
                 if interval_frame_count >= config.rate * config.interval_sec:
@@ -170,11 +161,10 @@ async def pyaudio_recording_worker(
                     last_interval_frames_buffer.append(interval_frames)
                     interval_frame_count = 0
                     interval_frames = b""
-        except OSError as e:
+        except (OSError, sd.PortAudioError) as e:
             logger.warning("retry for %e", e)
         finally:
             stream.close()
-            audio.terminate()
 
 
 def build_recording_output(

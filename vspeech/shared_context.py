@@ -195,7 +195,7 @@ class EventAddress:
         )
 
     @classmethod
-    def from_pb(cls, op_route: OperationRoute) -> "EventAddress":
+    def from_pb(cls, op_route: OperationRoute) -> EventAddress:
         return cls(
             event=operation_to_event(op_route.operation),
             remote=op_route.remote,
@@ -243,7 +243,7 @@ class SoundOutput:
         )
 
     @staticmethod
-    def from_input(input: "SoundInput") -> "SoundOutput":
+    def from_input(input: SoundInput) -> SoundOutput:
         return SoundOutput(
             data=input.data,
             rate=input.rate,
@@ -292,7 +292,7 @@ class WorkerOutput:
         )
 
     @classmethod
-    def from_input(cls, worker_input: "WorkerInput"):
+    def from_input(cls, worker_input: WorkerInput):
         return cls(
             input_id=worker_input.input_id,
             followings=worker_input.following_events,
@@ -329,7 +329,7 @@ class SoundInput(BaseModel):
         )
 
     @classmethod
-    def invalid(cls) -> "SoundInput":
+    def invalid(cls) -> SoundInput:
         return cls(data=b"", rate=0, format=SampleFormat.INVALID, channels=0)
 
 
@@ -374,7 +374,7 @@ class WorkerInput(BaseModel):
         ]
 
     @classmethod
-    def from_command(cls, command: Command) -> list["WorkerInput"]:
+    def from_command(cls, command: Command) -> list[WorkerInput]:
         input_id = uuid4()
         trace_id, origin_ts = decode_trace(command.operand)
         events = command_to_events(command)

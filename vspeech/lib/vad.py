@@ -77,7 +77,7 @@ def apply_vad_gate(
     return np.clip(out_f, -32768.0, 32767.0).astype(np.int16)
 
 
-def create_vad_session(model_file: Path) -> "InferenceSession":
+def create_vad_session(model_file: Path) -> InferenceSession:
     """Build a CPU onnxruntime session for the Silero VAD model (v6.2.1).
 
     Fails loudly on a missing file or a model lacking the shared v5/v6

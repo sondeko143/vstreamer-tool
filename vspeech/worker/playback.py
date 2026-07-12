@@ -1,4 +1,3 @@
-import audioop
 from asyncio import CancelledError
 from asyncio import Queue
 from asyncio import Task
@@ -10,8 +9,8 @@ from dataclasses import field
 from time import time
 from typing import NoReturn
 
-from pyaudio import PyAudio
-from pyaudio import Stream as PaStream
+import audioop
+import sounddevice as sd
 
 from vspeech.config import PlaybackConfig
 from vspeech.config import SampleFormat
@@ -20,7 +19,7 @@ from vspeech.config import get_sample_size
 from vspeech.exceptions import shutdown_worker
 from vspeech.lib.audio import DeviceInfo
 from vspeech.lib.audio import get_device_info
-from vspeech.lib.audio import get_pa_format
+from vspeech.lib.audio import get_sd_dtype
 from vspeech.lib.audio import search_device
 from vspeech.lib.audio import search_device_by_name
 from vspeech.lib.telemetry import telemetry
@@ -67,13 +66,11 @@ class OutputStream:
     rate: int = 0
     format: SampleFormat = SampleFormat.INVALID
     channels: int = 0
-    stream: PaStream | None = None
-    audio: PyAudio = field(init=False)
+    stream: sd.RawOutputStream | None = None
     device: DeviceInfo = field(init=False)
 
     def __post_init__(self, config: PlaybackConfig) -> None:
-        self.audio = PyAudio()
-        self.device = get_output_device(audio=self.audio, config=config)
+        self.device = get_output_device(config=config)
         logger.info("setting device %s: %s", self.device.index, self.device.name)
 
     def update_stream_if_changed(
@@ -82,7 +79,7 @@ class OutputStream:
         format: SampleFormat,
         channels: int,
     ):
-        output_device = get_device_info(self.audio, self.device.index)
+        output_device = get_device_info(self.device.index)
         if (
             self.stream
             and self.rate == rate
@@ -93,25 +90,23 @@ class OutputStream:
             logger.debug("stream is reused.")
             return
 
-        self.audio.terminate()
-        del self.audio
-        self.audio = PyAudio()
+        if self.stream:
+            self.stream.close()
         self.device = self.search_appropriate_device()
         logger.info("use device %s: %s", self.device.index, self.device.name)
         self.rate = rate
         self.format = format
         self.channels = channels
-        self.stream = self.audio.open(
-            format=get_pa_format(format),
+        self.stream = sd.RawOutputStream(
+            samplerate=rate,
             channels=channels,
-            rate=rate,
-            output=True,
-            output_device_index=self.device.index,
+            device=self.device.index,
+            dtype=get_sd_dtype(format),
         )
+        self.stream.start()
 
     def search_appropriate_device(self):
         output_device = search_device_by_name(
-            self.audio,
             host_api_index=self.device.host_api,
             name=self.device.name,
             output=True,
@@ -130,11 +125,10 @@ class OutputStream:
         await to_thread(self.stream.write, _data)
 
 
-def get_output_device(audio: PyAudio, config: PlaybackConfig):
+def get_output_device(config: PlaybackConfig):
     output_device_index = config.output_device_index
     if output_device_index is None:
         output_device = search_device(
-            audio,
             host_api_type=config.output_host_api_name,
             name=config.output_device_name,
             output=True,
@@ -142,7 +136,7 @@ def get_output_device(audio: PyAudio, config: PlaybackConfig):
         if not output_device:
             raise TypeError("not found output device")
         output_device_index = output_device.index
-    return get_device_info(audio, output_device_index)
+    return get_device_info(output_device_index)
 
 
 async def pyaudio_playback_worker(
@@ -179,8 +173,8 @@ async def pyaudio_playback_worker(
             except Exception as e:
                 logger.warning("%s", e)
     finally:
-        output_stream.audio.terminate()
-        del output_stream.audio
+        if output_stream.stream:
+            output_stream.stream.close()
 
 
 async def playback_worker(

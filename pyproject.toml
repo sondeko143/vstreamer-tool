@@ -3,12 +3,12 @@ name = "voicerecog"
 version = "0.1.0"
 description = ""
 authors = [{ name = "sondeko", email = "sondeko143@gmail.com" }]
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.14,<3.15"
 readme = "README.md"
 license = "MIT"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
     "google-cloud-translate>=3.11.1,<4",
@@ -24,6 +24,9 @@ dependencies = [
     "colorlog>=6.7.0,<7",
     "emoji>=2.6.0,<3",
     "ctranslate2>=4.6.1,<5",
+    # 3.13+ で stdlib から外れる audioop の後方移植 (C ポート)。recording/playback/vc の
+    # 音量・dBFS 経路が `import audioop` のまま、飽和セマンティクスを保ったまま動く。
+    "audioop-lts ; python_version >= '3.13'",
 ]
 
 [project.optional-dependencies]
@@ -40,7 +43,9 @@ whisper = [
 ]
 rvc = [
     "torch ; sys_platform == 'win32'",
-    "pyworld>=0.3.3,<0.4",
+    # pyworld (dio/harvest の f0 抽出) は runtime 依存から外した: cp314 wheel が無く、
+    # 既定は rmvpe。dio/harvest を使う場合のみ手動導入 (`uv pip install pyworld`)。
+    # pitch_extract.py が遅延 import する。
     "faiss-cpu>=1.7.2,<2 ; sys_platform == 'win32'",
     # >=1.27: CUDA 13 (nvidia-*-cu13) を採用し torch +cu130 と揃える (roadmap フェーズ2)。
     "onnxruntime-gpu>=1.27,<2",
@@ -50,7 +55,9 @@ rvc = [
 ]
 mozc = ["mozcpy>=0.1.1,<0.2"]
 vroid2 = ["pyvcroid2 ; sys_platform == 'win32'"]
-audio = ["PyAudio>=0.2.13,<0.3"]
+# sounddevice: PortAudio 同梱の py3-none wheel (ABI 非依存) なので cp314 でも wheel が入る。
+# PyAudio は cp314 wheel が無く sdist ビルドに PortAudio が要る (roadmap フェーズ3 で移行)。
+audio = ["sounddevice>=0.5,<0.6"]
 gui = [
     "ttkbootstrap>=1.10.1,<2",
     "pillow>=12.1.1,<13",
@@ -98,8 +105,8 @@ voicevox-core = [
     { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl", marker = "sys_platform == 'win32'" },
     { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-manylinux_2_34_x86_64.whl", marker = "sys_platform == 'linux'" },
 ]
-torch = { url = "https://download.pytorch.org/whl/cu130/torch-2.10.0%2Bcu130-cp312-cp312-win_amd64.whl" }
-torchaudio = { url = "https://download.pytorch.org/whl/cu130/torchaudio-2.10.0%2Bcu130-cp312-cp312-win_amd64.whl" }
+torch = { url = "https://download.pytorch.org/whl/cu130/torch-2.10.0%2Bcu130-cp314-cp314-win_amd64.whl" }
+torchaudio = { url = "https://download.pytorch.org/whl/cu130/torchaudio-2.10.0%2Bcu130-cp314-cp314-win_amd64.whl" }
 pyvcroid2 = { git = "https://github.com/Nkyoku/pyvcroid2" }
 
 [tool.uv.build-backend]
@@ -126,7 +133,7 @@ markers = [
 core = "sysmon"
 
 [tool.ty.environment]
-python-version = "3.12"
+python-version = "3.14"
 
 # scripts/convert_hubert.py と scripts/export_hubert_onnx.py はオフライン専用ツール。
 # その依存 (fairseq / transformers / onnx / safetensors) は poe task の `uv run --with`

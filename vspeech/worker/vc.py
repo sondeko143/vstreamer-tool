@@ -4,12 +4,12 @@ from asyncio import CancelledError
 from asyncio import Queue
 from asyncio import TaskGroup
 from asyncio import to_thread
-from audioop import mul
 from collections.abc import Sequence
 from functools import partial
 from typing import Any
 
 import numpy as np
+from audioop import mul
 from numpy.typing import NDArray
 
 from vspeech.config import EventType

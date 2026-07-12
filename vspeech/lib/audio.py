@@ -1,78 +1,71 @@
-from humps import camelize
-from pyaudio import PyAudio
-from pyaudio import paFloat32
-from pyaudio import paInt8
-from pyaudio import paInt16
-from pyaudio import paInt24
-from pyaudio import paUInt8
+import sounddevice as sd
+from pydantic import AliasChoices
 from pydantic import BaseModel
 from pydantic import ConfigDict
+from pydantic import Field
 
 from vspeech.config import SampleFormat
 
 
 class HostAPIInfo(BaseModel):
-    model_config = ConfigDict(alias_generator=camelize)
-
     index: int
     name: str
 
 
 class DeviceInfo(BaseModel):
-    model_config = ConfigDict(alias_generator=camelize)
+    # sounddevice の device dict は snake_case。host api の key だけ `hostapi` なので別名で拾う。
+    model_config = ConfigDict(populate_by_name=True)
 
-    host_api: int
-    max_input_channels: float
-    max_output_channels: float
+    host_api: int = Field(validation_alias=AliasChoices("hostapi", "host_api"))
+    max_input_channels: int
+    max_output_channels: int
     name: str
     index: int
 
 
 def list_all_devices(input: bool = False, output: bool = False):
-    p = PyAudio()
     results: dict[str, int] = {}
-    for i in range(p.get_device_count()):
-        d = DeviceInfo.model_validate(p.get_device_info_by_index(i))
+    host_apis = sd.query_hostapis()
+    for raw in sd.query_devices():
+        d = DeviceInfo.model_validate(dict(raw))
         if input and d.max_input_channels <= 0:
             continue
         if output and d.max_output_channels <= 0:
             continue
-        h = HostAPIInfo.model_validate(p.get_host_api_info_by_index(d.host_api))
-        results[f"{h.name}: {d.name}"] = d.index
-    p.terminate()
+        host_name = host_apis[d.host_api]["name"]
+        results[f"{host_name}: {d.name}"] = d.index
     return results
 
 
-def get_device_name(p: PyAudio, index: int):
-    return DeviceInfo.model_validate(p.get_device_info_by_index(index)).name
+def get_device_name(index: int) -> str:
+    return DeviceInfo.model_validate(dict(sd.query_devices(index))).name
 
 
-def get_device_info(p: PyAudio, index: int):
-    return DeviceInfo.model_validate(p.get_device_info_by_index(index))
+def get_device_info(index: int) -> DeviceInfo:
+    return DeviceInfo.model_validate(dict(sd.query_devices(index)))
 
 
-def search_host_api_by_type(p: PyAudio, name: str):
-    for i in range(p.get_host_api_count()):
-        host_api = HostAPIInfo.model_validate(p.get_host_api_info_by_index(i))
-        if host_api.name == name:
-            return host_api
+def search_host_api_by_type(name: str):
+    for i, host_api in enumerate(sd.query_hostapis()):
+        if host_api["name"] == name:
+            return HostAPIInfo(index=i, name=host_api["name"])
 
 
 def search_device_by_name(
-    p: PyAudio,
     name: str | None,
     host_api_index: int | None,
     input: bool = False,
     output: bool = False,
 ):
     if not name:
+        default_input, default_output = sd.default.device
         if input:
-            return DeviceInfo.model_validate(p.get_default_input_device_info())
+            return get_device_info(default_input)
         elif output:
-            return DeviceInfo.model_validate(p.get_default_output_device_info())
+            return get_device_info(default_output)
         return None
-    for i in range(p.get_device_count()):
-        device = DeviceInfo.model_validate(p.get_device_info_by_index(i))
+    for raw in sd.query_devices():
+        device = DeviceInfo.model_validate(dict(raw))
         if host_api_index and host_api_index != device.host_api:
             continue
         if input and device.max_input_channels <= 0:
@@ -84,7 +77,6 @@ def search_device_by_name(
 
 
 def search_device(
-    p: PyAudio,
     host_api_type: str | None,
     name: str | None,
     input: bool = False,
@@ -92,22 +84,22 @@ def search_device(
 ):
     host_api_index = None
     if host_api_type:
-        info = search_host_api_by_type(p, host_api_type)
+        info = search_host_api_by_type(host_api_type)
         if info:
             host_api_index = info.index
-    return search_device_by_name(p, name, host_api_index, input=input, output=output)
+    return search_device_by_name(name, host_api_index, input=input, output=output)
 
 
-def get_pa_format(format: SampleFormat) -> int:
+def get_sd_dtype(format: SampleFormat) -> str:
     if format == SampleFormat.UINT8:
-        return paUInt8
+        return "uint8"
     if format == SampleFormat.INT8:
-        return paInt8
+        return "int8"
     if format == SampleFormat.INT16:
-        return paInt16
+        return "int16"
     if format == SampleFormat.INT24:
-        return paInt24
+        return "int24"
     if format == SampleFormat.FLOAT32:
-        return paFloat32
+        return "float32"
 
     raise ValueError(f"Invalid format: {format}")

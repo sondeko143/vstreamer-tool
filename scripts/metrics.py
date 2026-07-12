@@ -404,7 +404,7 @@ def collect_depdegree(pkgs: list[str]) -> list[tuple[str, str, int]] | None:
         try:
             source = path.read_text(encoding="utf-8")
             file_rows = compute_depdegree(source)
-        except (OSError, SyntaxError):
+        except OSError, SyntaxError:
             continue
         file_key = normalize_path(str(path))
         for name, _line, dep in file_rows:

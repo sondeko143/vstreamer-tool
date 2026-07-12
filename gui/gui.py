@@ -105,7 +105,7 @@ class TextHandler(Handler):
     # This class allows you to log to a Tkinter Text or ScrolledText widget
     # Adapted from Moshe Kaplan: https://gist.github.com/moshekaplan/c425f861de7bbf28ef06
 
-    def __init__(self, text: "Text | ScrolledText"):
+    def __init__(self, text: Text | ScrolledText):
         # run the regular Handler __init__
         Handler.__init__(self)
         # Store a reference to the Text it will log to
@@ -1255,7 +1255,7 @@ class VspeechGUI(Frame):
         self.templates.set(self.config.template_texts)
         self.filters.set([str(f) for f in self.config.filters])
 
-    def set_config(self, widget: "Widgets", event: Any):
+    def set_config(self, widget: Widgets, event: Any):
         value = widget.get_value()
         name = self.config_entry_map[widget]
         logger.debug(f"set {name}: {value}")
@@ -1324,7 +1324,7 @@ class VspeechGUI(Frame):
             except grpc.RpcError:
                 sleep(0.5)
 
-    def send_text(self, text: "Text | ScrolledText"):
+    def send_text(self, text: Text | ScrolledText):
         if self.thread:
             lines = text.get("1.0", "end-1c").splitlines()
             for line in lines:

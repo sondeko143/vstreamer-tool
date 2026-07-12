@@ -6,6 +6,8 @@ annotated-types==0.7.0 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via pydantic
 anyio==4.13.0 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via httpx
+audioop-lts==0.2.2 ; sys_platform == 'linux' or sys_platform == 'win32'
+    # via voicerecog
 certifi==2026.5.20 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via
     #   httpcore
@@ -29,7 +31,7 @@ ctranslate2==4.8.0 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via voicerecog
 emoji==2.15.0 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via voicerecog
-google-api-core==2.31.0 ; sys_platform == 'linux' or sys_platform == 'win32'
+google-api-core==2.25.2 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via
     #   google-cloud-core
     #   google-cloud-speech
@@ -120,7 +122,6 @@ toml==0.10.2 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via voicerecog
 typing-extensions==4.15.0 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via
-    #   anyio
     #   grpcio
     #   pydantic
     #   pydantic-core

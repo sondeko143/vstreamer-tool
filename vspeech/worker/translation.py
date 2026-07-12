@@ -63,7 +63,7 @@ class TranslationBlock:
             original=input,
         )
 
-    def samey(self, other: "TranslationBlock"):
+    def samey(self, other: TranslationBlock):
         return (
             self.source_language_code == other.source_language_code
             and self.target_language_code == other.target_language_code
@@ -72,7 +72,7 @@ class TranslationBlock:
 
 async def translation_worker_google(
     config: TranslationConfig, gcp_config: GcpConfig, in_queue: Queue[WorkerInput]
-) -> AsyncGenerator[WorkerOutput, None]:
+) -> AsyncGenerator[WorkerOutput]:
     credentials, project_id = get_credentials(gcp_config)
     client = TranslationServiceAsyncClient(credentials=credentials)
     logger.info("translation worker [google] started")
