@@ -55,6 +55,7 @@ class App(Frame):
         self.listbox = Listbox(left, width=32)
         self.listbox.pack(fill=Y, expand=True, pady=(0, 4))
         self.listbox.bind("<<ListboxSelect>>", self._on_select)
+        self.listbox.bind("<Button-1>", self._ignore_empty_click)
         Button(left, text="+ new", command=self.new_pipeline).pack(fill="x")
         Button(left, text="del", command=self.delete_pipeline).pack(fill="x")
 
@@ -99,6 +100,18 @@ class App(Frame):
             self.listbox.insert(END, f"{ramp} {entry.name}  :{entry.port}")
         if selection:
             self.listbox.selection_set(selection[0])
+
+    def _ignore_empty_click(self, event: Any) -> str | None:
+        # A Listbox selects the last item when you click the empty space below
+        # the items. Swallow clicks that land below the last row so that area is
+        # inert (the current selection and editor stay put).
+        if not self.profile.pipelines:
+            return "break"
+        index = self.listbox.nearest(event.y)
+        bbox = self.listbox.bbox(index)
+        if bbox is None or event.y > bbox[1] + bbox[3]:
+            return "break"
+        return None
 
     def _on_select(self, _event: Any) -> None:
         selection = self.listbox.curselection()
