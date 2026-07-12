@@ -7,6 +7,35 @@
 
 ---
 
+## CUDA 13 化（フェーズ2、branch `feat/cuda13-on-312`、2026-07-12）— ctranslate2 が CUDA 12 に取り残される
+
+**whisper ホストは CUDA 12.x の cuBLAS + cuDNN 9 が必要。** `ctranslate2` 4.8.x（faster-whisper が使う）は
+**CUDA 12 専用**で、推論時に `cublas64_12.dll` を要求する。**CUDA 13 ビルドは存在しない**
+（faster-whisper [#1431](https://github.com/SYSTRAN/faster-whisper/issues/1431) 未対応）。
+
+CUDA 12 時代（torch `+cu128`）は torch 同梱の `torch/lib/cublas64_12.dll` が供給していたが、フェーズ2の
+`+cu130` 化で torch が持つのは `cublas64_13.dll` になり、供給元が消えた:
+`whisper warmup failed: Library cublas64_12.dll is not found`。
+
+**今回の対処（2026-07-12、実機）**: whisper ホストに **CUDA Toolkit 12.8** を入れて cuBLAS を供給し、動作確認済み。
+CUDA 13.2 ドライバは CUDA 12 アプリも走らせるので、torch/onnxruntime(CUDA13) と ctranslate2(CUDA12) が共存する。
+
+**今回直さなかった理由**: 実機に toolkit を入れれば直り、コード変更ゼロで済んだ。恒久策は 2 案あるがどちらも
+検証コスト（実機 whisper 推論）が要るのでスコープ外にした:
+
+1. whisper extra に `nvidia-cublas-cu12` + `nvidia-cudnn-cu12` を足し、whisper worker で `os.add_dll_directory`
+   してそれらの `bin` を DLL 探索に載せる。CUDA Toolkit のインストールを不要にできるが、Windows の DLL 探索が
+   面倒で壊れやすい（faster-whisper [#1276](https://github.com/SYSTRAN/faster-whisper/issues/1276) の沼）。
+2. **CUDA 13 化そのものを巻き戻す**（torch `cu130→cu128`・onnxruntime `1.27→<1.27`、cp314 は維持）。全部
+   CUDA 12 に揃い whisper は無改修で動く。CUDA 13 の唯一の利点（onnxruntime を 1.27+ に保つ）は runtime 中立
+   なので損失は小さい。
+
+**教訓**: フェーズ2の「混在 CUDA」検証を `ctranslate2.get_cuda_device_count()`（デバイス数照会だけで cuBLAS を
+ロードしない）で済ませたのが漏れ。実際の whisper 推論を 1 回回していれば、コミット前に気づけた。
+
+**デプロイ時の必須事項**: whisper を GPU で回すホストには **CUDA Toolkit 12.x（cuBLAS + cuDNN 9）** を入れること
+（R580+ ドライバとは別に）。vc/RVC 専用ホスト（torch + onnxruntime のみ）は CUDA 13 のドライバだけでよい。
+
 ## Python 3.12 化（spec ③、branch `feat/python-312`、2026-07-10）
 
 ### 次の昇格（3.13）の障害
