@@ -77,6 +77,8 @@ class AutocompleteCombobox[T](ttk.Entry):
     # --- popup lifecycle ------------------------------------------------
 
     def _open(self) -> None:
+        if self.instate(["disabled"]):
+            return
         matches = self._matches()
         if not matches:
             self._close()
