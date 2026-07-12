@@ -17,6 +17,10 @@ key.json
 /tests/assets/rvc_golden/
 /download-voicevox.exe
 
+# pytest-cov / coverage.py の出力（.coverage 本体と並列/sysmon の分割データ）
+.coverage
+.coverage.*
+
 # Claude Code: track project skills only; ignore local settings / worktrees / scratch
 .claude/*
 !.claude/skills/
