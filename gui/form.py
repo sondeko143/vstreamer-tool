@@ -107,9 +107,9 @@ class PipelineForm(Frame):
             if not widget.winfo_exists():
                 continue
             value = widget.get_value()
-            if value is None or value == "":
-                # A blank widget: an unselected combo (None) or a cleared field
-                # (""). Classify by the field's type:
+            if value is None or (isinstance(value, str) and not value.strip()):
+                # A blank widget: an unselected combo (None) or a cleared/
+                # whitespace-only field. Classify by the field's type:
                 types = _field_types(config, path)
                 if type(None) in types:
                     # Optional -> clear to None. Leaves a fresh unset field
