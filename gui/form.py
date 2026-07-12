@@ -86,9 +86,9 @@ class PipelineForm(Frame):
         self.config = None
         # widget -> (config_path, coerce fn from widget value to config value)
         self.bindings: dict[Any, tuple[str, Callable[[Any], Any]]] = {}
-        # (box, enable-checkbutton) per worker section, so the section's fields
-        # can be enabled/disabled to follow its `enable` toggle.
-        self._section_enables: list[tuple[Any, Checkbutton]] = []
+        # (box, enable-checkbutton, title) per worker section, so the section's
+        # fields + its box styling can follow its `enable` toggle.
+        self._section_enables: list[tuple[Any, Checkbutton, str]] = []
         # A scrollable body so the full field list is reachable on a small
         # window; the vertical scrollbar shows whenever the content overflows.
         self.body = ScrolledFrame(self, autohide=False)
@@ -109,17 +109,24 @@ class PipelineForm(Frame):
 
     # --- enable-driven disabling ----------------------------------------
 
-    def _register_section(self, box: Any, enable: Checkbutton) -> None:
+    def _register_section(self, box: Any, enable: Checkbutton, title: str) -> None:
         # The enable checkbox drives whether the rest of the section is editable.
         enable.configure(command=lambda: (self.on_change(), self._apply_all_enables()))
-        self._section_enables.append((box, enable))
+        self._section_enables.append((box, enable, title))
 
     def _apply_all_enables(self) -> None:
-        for box, enable in self._section_enables:
-            self._apply_enable(box, enable)
+        for box, enable, title in self._section_enables:
+            self._apply_enable(box, enable, title)
 
-    def _apply_enable(self, box: Any, enable: Checkbutton) -> None:
-        state = "normal" if enable.get_value() else "disabled"
+    def _apply_enable(self, box: Any, enable: Checkbutton, title: str) -> None:
+        enabled = enable.get_value()
+        # Recolour the whole group so on/off reads at a glance: a muted grey
+        # ("secondary") box titled "… (無効)" when off, the normal box when on.
+        box.configure(
+            text=title if enabled else f"{title}  (無効)",
+            bootstyle="default" if enabled else "secondary",
+        )
+        state = "normal" if enabled else "disabled"
         for widget in self._descendants(box):
             if widget is enable:
                 continue
@@ -265,7 +272,7 @@ class PipelineForm(Frame):
         box = self._section_box("recording")
         enable = self._check(box, "recording.enable", "enable recording")
         enable.pack(anchor=W)
-        self._register_section(box, enable)
+        self._register_section(box, enable, "recording")
         self._device_combo(
             box, "recording.input_device_index", "input device", input=True
         ).pack(fill=X)
@@ -278,7 +285,7 @@ class PipelineForm(Frame):
         box = self._section_box("playback")
         enable = self._check(box, "playback.enable", "enable playback")
         enable.pack(anchor=W)
-        self._register_section(box, enable)
+        self._register_section(box, enable, "playback")
         self._device_combo(
             box, "playback.output_device_index", "output device", input=False
         ).pack(fill=X)
@@ -288,7 +295,7 @@ class PipelineForm(Frame):
         box = self._section_box("transcription")
         enable = self._check(box, "transcription.enable", "enable transcription")
         enable.pack(anchor=W)
-        self._register_section(box, enable)
+        self._register_section(box, enable, "transcription")
         combo = self._enum_combo(
             box, "transcription.worker_type", "worker_type", TranscriptionWorkerType
         )
@@ -334,7 +341,7 @@ class PipelineForm(Frame):
         box = self._section_box("tts")
         enable = self._check(box, "tts.enable", "enable tts")
         enable.pack(anchor=W)
-        self._register_section(box, enable)
+        self._register_section(box, enable, "tts")
         combo = self._enum_combo(box, "tts.worker_type", "worker_type", TtsWorkerType)
         backend = Frame(box)
         backend.pack(fill=X)
@@ -375,7 +382,7 @@ class PipelineForm(Frame):
         box = self._section_box("vc")
         enable = self._check(box, "vc.enable", "enable vc")
         enable.pack(anchor=W)
-        self._register_section(box, enable)
+        self._register_section(box, enable, "vc")
         self._entry(box, "rvc.model_file", "rvc model_file").pack(fill=X)
         self._entry(box, "rvc.hubert_model_file", "hubert asset dir").pack(fill=X)
         self._entry(box, "rvc.rmvpe_model_file", "rmvpe model_file").pack(fill=X)
