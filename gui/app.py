@@ -37,6 +37,7 @@ LOG_BUFFER_MAX = 2000
 class App(Frame):
     def __init__(self, master: Any, profile_dir: Path | None):
         super().__init__(master)
+        self._disable_input_mousewheel()
         self.pack(fill=BOTH, expand=True)
         self.paths = resolve_paths(profile_dir)
         self.paths.root.mkdir(parents=True, exist_ok=True)
@@ -68,6 +69,15 @@ class App(Frame):
         self.editor.pack(side=RIGHT, fill=BOTH, expand=True)
 
         self._refresh_list()
+
+    def _disable_input_mousewheel(self) -> None:
+        # ttk Spinbox/Combobox grab the mouse wheel to change their own value,
+        # so scrolling the form over one silently changes it. Drop the class-
+        # level wheel bindings (app-wide) so the wheel only scrolls the
+        # ScrolledFrame form body instead of mutating whatever is under it.
+        for widget_class in ("TSpinbox", "TCombobox"):
+            for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                self.unbind_class(widget_class, sequence)
 
     # --- pipeline list --------------------------------------------------
 

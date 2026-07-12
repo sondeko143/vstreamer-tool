@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
+from tkinter import BOTH
 from tkinter import W
 from tkinter import X
 from typing import Any
@@ -10,6 +11,7 @@ from pydantic import SecretStr
 from ttkbootstrap import Frame
 from ttkbootstrap import Label
 from ttkbootstrap import Labelframe
+from ttkbootstrap.widgets.scrolled import ScrolledFrame
 
 from gui.autocomplete_combobox import AutocompleteCombobox
 from gui.widgets import Checkbutton
@@ -83,8 +85,10 @@ class PipelineForm(Frame):
         self.config = None
         # widget -> (config_path, coerce fn from widget value to config value)
         self.bindings: dict[Any, tuple[str, Callable[[Any], Any]]] = {}
-        self.body = Frame(self)
-        self.body.pack(fill=X)
+        # A scrollable body so the full field list is reachable on a small
+        # window; the vertical scrollbar shows whenever the content overflows.
+        self.body = ScrolledFrame(self, autohide=False)
+        self.body.pack(fill=BOTH, expand=True)
 
     def bind_config(self, config: Config) -> None:
         self.config = config
