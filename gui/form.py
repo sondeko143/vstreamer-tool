@@ -218,11 +218,9 @@ class PipelineForm(Frame):
         if devices:
             combo = AutocompleteCombobox[int](frame)
             combo.set_completion_list(devices)
-            combo_label = (
-                combo.get_label_for_item_value(current) if current is not None else None
-            )
-            if combo_label:
-                combo.set(combo_label)
+            # Keeps a configured-but-absent device index from being wiped to None
+            # on read-back (see AutocompleteCombobox.ensure_value).
+            combo.ensure_value(current)
             combo.bind("<<ComboboxSelected>>", lambda _e: self.on_change())
             self.bindings[combo] = (path, lambda v: v)
             combo.pack(fill=X)

@@ -6,6 +6,7 @@ from tkinter import END
 from tkinter import LEFT
 from tkinter import RIGHT
 from tkinter import Listbox
+from tkinter import TclError
 from tkinter import Y
 from typing import Any
 from uuid import uuid4
@@ -186,17 +187,29 @@ class App(Frame):
             runner.send_text(text, config.text_send_operations)
 
     def _schedule_log(self, pipeline_id: str, line: str) -> None:
-        self.after(0, self._on_log, pipeline_id, line)
+        # Fired from the runner's reader thread. after() raises once the root is
+        # gone (window closed while a child is still terminating) — swallow it.
+        try:
+            self.after(0, self._on_log, pipeline_id, line)
+        except TclError, RuntimeError:
+            pass
 
     def _schedule_exit(self, pipeline_id: str, code: int) -> None:
-        self.after(0, self._on_exit, pipeline_id, code)
+        try:
+            self.after(0, self._on_exit, pipeline_id, code)
+        except TclError, RuntimeError:
+            pass
 
     def _on_log(self, pipeline_id: str, line: str) -> None:
+        if pipeline_id not in self.runners:
+            return  # pipeline was deleted; drop its late in-flight output
         self.logs.setdefault(pipeline_id, deque(maxlen=LOG_BUFFER_MAX)).append(line)
         if self.editor.entry is not None and self.editor.entry.id == pipeline_id:
             self.editor.append_log(line)
 
     def _on_exit(self, pipeline_id: str, code: int) -> None:
+        if pipeline_id not in self.runners:
+            return  # deleted while its process was terminating — nothing to show
         message = f"process exited: {code}"
         self.logs.setdefault(pipeline_id, deque(maxlen=LOG_BUFFER_MAX)).append(message)
         if self.editor.entry is not None and self.editor.entry.id == pipeline_id:

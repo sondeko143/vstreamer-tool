@@ -54,6 +54,21 @@ class AutocompleteCombobox[T](ttk.Entry):
         self.delete(0, END)
         self.insert(0, "" if label is None else str(label))
 
+    def ensure_value(self, value: T | None) -> None:
+        """Display `value`, round-tripping it through get_value() even when it
+        isn't among the known completions — e.g. a configured device index whose
+        device isn't plugged into this host. Registering a synthetic label keeps
+        the value from being silently wiped on the next read_into.
+        """
+        if value is None:
+            self.set("")
+            return
+        label = self.get_label_for_item_value(value)
+        if label is None:
+            label = f"{value}  (未検出)"
+            self._label_value_map[label] = value
+        self.set(label)
+
     def set_completion_list(self, label_value_map: dict[str, T]) -> None:
         self._label_value_map = label_value_map.copy()
         self._completion_list = sorted(label_value_map.keys(), key=str.lower)
@@ -69,15 +84,19 @@ class AutocompleteCombobox[T](ttk.Entry):
     # --- filtering ------------------------------------------------------
 
     def _matches(self) -> list[str]:
-        needle = self.get().strip().lower()
-        if not needle:
+        text = self.get().strip()
+        # Empty, or the text is exactly a committed label (a selection, not a
+        # partial filter) -> show the whole list so the user can browse instead
+        # of seeing only the item that's already picked.
+        if not text or text in self._label_value_map:
             return self._completion_list
+        needle = text.lower()
         return [item for item in self._completion_list if needle in item.lower()]
 
     # --- popup lifecycle ------------------------------------------------
 
     def _open(self) -> None:
-        if self.instate(["disabled"]):
+        if not self.winfo_exists() or self.instate(["disabled"]):
             return
         matches = self._matches()
         if not matches:
@@ -206,6 +225,10 @@ class AutocompleteCombobox[T](ttk.Entry):
     def _on_click(self, _event: Event[Any]) -> None:
         # Click anywhere in the field opens the (filtered) list. after() lets Tk
         # finish placing the cursor first.
+        if self.get() in self._label_value_map:
+            # A committed value is showing — select it so typing replaces it
+            # (and _matches then shows the whole list to browse).
+            self.select_range(0, END)
         self.after(1, self._open)
 
     def _on_down(self, _event: Event[Any]) -> str:
