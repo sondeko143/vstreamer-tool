@@ -66,7 +66,7 @@ def search_device_by_name(
         return None
     for raw in sd.query_devices():
         device = DeviceInfo.model_validate(dict(raw))
-        if host_api_index and host_api_index != device.host_api:
+        if host_api_index is not None and host_api_index != device.host_api:
             continue
         if input and device.max_input_channels <= 0:
             continue

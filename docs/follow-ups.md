@@ -36,6 +36,25 @@ CUDA 13.2 ドライバは CUDA 12 アプリも走らせるので、torch/onnxrun
 **デプロイ時の必須事項**: whisper を GPU で回すホストには **CUDA Toolkit 12.x（cuBLAS + cuDNN 9）** を入れること
 （R580+ ドライバとは別に）。vc/RVC 専用ホスト（torch + onnxruntime のみ）は CUDA 13 のドライバだけでよい。
 
+## sounddevice 移行（フェーズ3、branch `feat/python-314`、2026-07-12）— レビュー指摘の繰り延べ
+
+PyAudio → sounddevice 移行の `/code-review high` で出た軽微な指摘のうち、今回スコープ外にしたもの。
+実機（録音・再生）は検証済みで、いずれも固定デバイス構成では無害。overflow ログ（recording）と
+host-API フィルタの `is not None` 化（audio.py）はレビュー後に修正済み。
+
+### playback: ストリーム再構築時に PortAudio のデバイス一覧を再取得しない — [`playback.py`](../vspeech/worker/playback.py)
+
+旧 PyAudio 版は `update_stream_if_changed` で `PyAudio()` を作り直して PortAudio を再初期化し、
+デバイスを再列挙していた。sounddevice 版は `sd.query_devices()`（初期化時のキャッシュ）を見るだけで、
+起動後に抜き差し／再接続されたデバイスを拾えない。**今回直さなかった理由**: ランタイムのデバイス
+変更という縁ケースで、固定デバイス（`Line 4` 等）の実運用では起きない。再列挙には
+`sd._terminate()` / `sd._initialize()`（private API）が要り、副作用の検証コストが見合わない。
+
+### `pyaudio_recording_worker` / `pyaudio_playback_worker` の名前が実装と食い違う — recording.py / playback.py
+
+sounddevice 化したのに関数名に `pyaudio_` が残っている。**今回直さなかった理由**: 純粋な rename で
+`create_*_task` の呼び出し箇所に波及するだけ。機能価値ゼロ。次にこのファイルを触るとき一緒に直す。
+
 ## Python 3.12 化（spec ③、branch `feat/python-312`、2026-07-10）
 
 ### 次の昇格（3.13）の障害

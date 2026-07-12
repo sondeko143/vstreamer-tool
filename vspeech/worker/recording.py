@@ -103,7 +103,11 @@ async def pyaudio_recording_worker(
         approx_max_amps: list[float] = []
         try:
             while stream.active:
-                chunk_data, _overflowed = await to_thread(stream.read, config.chunk)
+                chunk_data, overflowed = await to_thread(stream.read, config.chunk)
+                if overflowed:
+                    # sounddevice は overflow で例外を投げず flag で返す。旧 PyAudio は
+                    # exception_on_overflow=True で送出していたので、最低限ログは残す。
+                    logger.warning("recording input overflow: samples were dropped")
                 in_data = bytes(chunk_data)
                 interval_frame_count += config.chunk
                 interval_frames += in_data
