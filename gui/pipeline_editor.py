@@ -173,10 +173,13 @@ class PipelineEditor(Frame):
         if self.notebook.select() == str(self.raw) and self.config is not None:
             failed = self.sync_form_to_config()
             self.raw.set_config(self.config)
-            if failed:
-                self.banner.configure(
-                    text=f"⚠ フォームで反映できなかった項目: {', '.join(failed)}"
+            self.banner.configure(
+                text=(
+                    f"⚠ フォームで反映できなかった項目: {', '.join(failed)}"
+                    if failed
+                    else ""
                 )
+            )
 
     def sync_form_to_config(self) -> list[str]:
         if self.config is not None:

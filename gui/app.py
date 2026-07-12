@@ -204,8 +204,12 @@ class App(Frame):
         index = selection[0]
         entry = self.profile.pipelines.pop(index)
         if entry.id in self.runners:
-            self.runners[entry.id].stop()
-            del self.runners[entry.id]
+            # Stop off-thread (same as _stop_current) so deleting a RUNNING
+            # pipeline doesn't freeze the UI for stop()'s terminate→wait→kill.
+            # The thread keeps its own reference, so we can drop it from the
+            # dict immediately.
+            runner = self.runners.pop(entry.id)
+            Thread(target=runner.stop, daemon=True).start()
         self.logs.pop(entry.id, None)
         config_path = self.paths.pipeline_config(entry.id)
         if config_path.exists():

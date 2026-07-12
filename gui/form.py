@@ -93,8 +93,15 @@ class PipelineForm(Frame):
         for widget, (path, coerce) in self.bindings.items():
             if not widget.winfo_exists():
                 continue
+            value = widget.get_value()
+            if value is None or value == "":
+                # An unset/blank widget — an unselected combo (None) or a cleared
+                # numeric/text field ("") — leaves the config field unchanged.
+                # This is a normal state (e.g. no device picked, gpu_id unset),
+                # not an error, so it must not be reported as a failed field.
+                continue
             try:
-                _set(config, path, coerce(widget.get_value()))
+                _set(config, path, coerce(value))
             except ValueError, KeyError:
                 failed.append(path)
         return failed

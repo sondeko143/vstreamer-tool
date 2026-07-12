@@ -21,8 +21,11 @@ class AutocompleteCombobox[T](ttk.Combobox):
     _hits: list[str]
     _label_value_map: dict[str, T]
 
-    def get_value(self) -> T:
-        return self._label_value_map[self.get()]
+    def get_value(self) -> T | None:
+        # Returns None when the current text isn't a known label (e.g. an
+        # unselected/blank combo, or a partial autocomplete). Callers treat
+        # None as "no selection" rather than an error.
+        return self._label_value_map.get(self.get())
 
     def get_label_for_item_value(self, value: T) -> str | None:
         for label, _value in self._label_value_map.items():

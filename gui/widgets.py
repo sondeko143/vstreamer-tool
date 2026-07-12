@@ -19,7 +19,9 @@ class Spinbox(ttkSpinbox):
 
     def set(self, value: Any):
         self.delete(0, END)
-        self.insert(0, str(value))
+        # None (an unset Optional numeric, e.g. gpu_id) shows as blank, not the
+        # literal "None" — which would fail int() coercion on read-back.
+        self.insert(0, "" if value is None else str(value))
 
 
 class Checkbutton(ttkCheckbutton):
