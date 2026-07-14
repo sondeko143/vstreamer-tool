@@ -33,6 +33,21 @@ from vspeech.shared_context import SharedContext
 from vspeech.shared_context import WorkerInput
 from vspeech.shared_context import WorkerOutput
 
+# gRPC の既定再接続バックオフ（min 20s / max 120s）は、receiver より先に sender を
+# 起動して初回接続に失敗すると致命的に遅い: バックオフ待ちの間に来た RPC は
+# wait_for_ready=False のため即失敗し、キャッシュ済みの前回接続エラー（例: WSA 10060
+# Connection timed out）をそのまま返し続ける。チャネルは永続再利用（ADR-0004）なので
+# 新規チャネルでバックオフがリセットされることもない。よって receiver 起動後も同じ
+# エラーが数十秒〜最大2分出続ける。これを有界化し、冷起動からの復帰を高速化する。
+#  - initial: 初回リトライまでの待ち
+#  - min:     1回の接続試行のデッドライン下限（SYN 黙殺=10060 時に各試行が張り付く上限）
+#  - max:     試行間バックオフの上限（既定 120s → 数秒へ）
+RECONNECT_CHANNEL_OPTIONS: list[tuple[str, int]] = [
+    ("grpc.initial_reconnect_backoff_ms", 500),
+    ("grpc.min_reconnect_backoff_ms", 1000),
+    ("grpc.max_reconnect_backoff_ms", 5000),
+]
+
 
 def async_secure_authorized_channel(
     credentials: GcpIDTokenCredentials, request: Request, target: str
@@ -44,7 +59,9 @@ def async_secure_authorized_channel(
     composite_credentials = composite_channel_credentials(
         ssl_credentials, google_auth_credentials
     )
-    return secure_channel(target, composite_credentials)
+    return secure_channel(
+        target, composite_credentials, options=RECONNECT_CHANNEL_OPTIONS
+    )
 
 
 def get_channel(address: str, credentials: GcpIDTokenCredentials | None):
@@ -64,7 +81,7 @@ def get_channel(address: str, credentials: GcpIDTokenCredentials | None):
             logger.warning(
                 "Could not obtain credentials, so transport with insecure channel."
             )
-        return insecure_channel(address.strip("/"))
+        return insecure_channel(address.strip("/"), options=RECONNECT_CHANNEL_OPTIONS)
 
 
 REMOTE_QUEUE_MAXSIZE = 16

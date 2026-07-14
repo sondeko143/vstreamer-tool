@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 from asyncio import Queue
+from typing import cast
 from uuid import uuid4
 
 from vstreamer_protos.commander.commander_pb2 import SUBTITLE
@@ -18,6 +19,7 @@ from vspeech.config import Config
 from vspeech.config import EventType
 from vspeech.config import SampleFormat
 from vspeech.exceptions import WorkerShutdown
+from vspeech.lib.gcp import GcpIDTokenCredentials
 from vspeech.shared_context import EventAddress
 from vspeech.shared_context import SharedContext
 from vspeech.shared_context import SoundOutput
@@ -220,6 +222,53 @@ def test_dispatch_empty_remote_uses_local_process_command():
     wi = worker.in_queue.get_nowait()
     assert wi.current_event == EventType.subtitle
     assert wi.text == "hello"
+
+
+def test_get_channel_insecure_bounds_reconnect_backoff(monkeypatch):
+    """An insecure channel must be opened with a bounded reconnect backoff so a
+    sender started before its receiver recovers promptly once the receiver is up,
+    instead of waiting out gRPC's default backoff (min 20s / max 120s)."""
+    captured: dict = {}
+
+    def fake_insecure_channel(target, options=None):
+        captured["target"] = target
+        captured["options"] = options
+        return object()
+
+    monkeypatch.setattr(sender_mod, "insecure_channel", fake_insecure_channel)
+    sender_mod.get_channel("//windesk:8083", None)
+    opts = dict(captured["options"] or [])
+    # Bounded well below gRPC defaults (min 20000 / max 120000).
+    assert opts["grpc.max_reconnect_backoff_ms"] <= 10_000
+    assert opts["grpc.min_reconnect_backoff_ms"] <= 5_000
+    assert "grpc.initial_reconnect_backoff_ms" in opts
+
+
+def test_get_channel_secure_bounds_reconnect_backoff(monkeypatch):
+    """The secure (GCP-authorized) channel path must bound the backoff too."""
+    captured: dict = {}
+
+    def fake_secure_channel(target, credentials, options=None):
+        captured["target"] = target
+        captured["options"] = options
+        return object()
+
+    monkeypatch.setattr(sender_mod, "secure_channel", fake_secure_channel)
+
+    class FakeCred:
+        def with_target_audience(self, audience):
+            return self
+
+        def refresh(self, request):
+            pass
+
+    sender_mod.get_channel(
+        "https://securehost/", cast(GcpIDTokenCredentials, FakeCred())
+    )
+    opts = dict(captured["options"] or [])
+    assert opts["grpc.max_reconnect_backoff_ms"] <= 10_000
+    assert opts["grpc.min_reconnect_backoff_ms"] <= 5_000
+    assert "grpc.initial_reconnect_backoff_ms" in opts
 
 
 async def test_sender_dispatches_to_remote_end_to_end(monkeypatch):
