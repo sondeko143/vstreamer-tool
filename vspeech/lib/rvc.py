@@ -144,6 +144,10 @@ def _bind_torch_input(io_binding: Any, name: str, tensor: torch.Tensor) -> torch
     """
     tensor = tensor.contiguous()
     device = tensor.device
+    # `device.index` can be None (a bare torch.device("cuda")), so the `else 0`
+    # is a real branch. ty narrows index to non-optional and marks it
+    # unreachable (ty check still exits 0) -- keep it; do not reshape correct
+    # code to satisfy the tool. (Same pattern in extract_features / infer.)
     io_binding.bind_input(
         name=name,
         device_type="cuda",
@@ -164,7 +168,13 @@ def _ort_output_to_torch(ort_output: Any, device: torch.device) -> torch.Tensor:
         except AttributeError:
             dlp = ort_output.to_dlpack()
         return dlpack.from_dlpack(dlp).clone()
-    except Exception:
+    except Exception as e:  # noqa: BLE001 - any failure must still return output
+        # Zero-copy dlpack is the fast path; on ANY failure fall back to a numpy
+        # copy so inference still returns. Warn -- a broad except here would
+        # otherwise turn a real dlpack bug into a silent slow path (in spec 2,
+        # the twin except in export_graph read a UnicodeEncodeError as "dynamo
+        # failed" and quietly dropped to the legacy exporter).
+        logger.warning("dlpack transfer failed; using numpy fallback: %s", e)
         return torch.tensor(ort_output.numpy(), device=device)
 
 
@@ -243,7 +253,6 @@ def infer(
         del tensors
         return audio1.unsqueeze(0)
 
-    # Fallback for CPU
     if is_half:
         input_feed = {
             "feats": feats.cpu().numpy().astype(np.float16),
@@ -469,7 +478,6 @@ def change_voice(
     pitch, pitchf = _align_pitch_to_feats(pitch, pitchf, feats_len)
     p_len_tensor = torch.tensor([feats_len], device=device).long()
 
-    # 推論実行
     with torch.inference_mode():
         audio1 = _to_int16(
             infer(
@@ -484,12 +492,10 @@ def change_voice(
         )
 
     del feats, p_len_tensor
-    # torch.cuda.empty_cache()
 
     vc_end_time = time.time()
     logger.info("rvc: inferred: elapsed time: %s", vc_end_time - vc_start_time)
 
     result = _postprocess(audio1, t_pad_tgt)
     del pitch, pitchf, sid
-    # torch.cuda.empty_cache()
     return result

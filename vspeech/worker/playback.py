@@ -106,6 +106,12 @@ class OutputStream:
         self.stream.start()
 
     def search_appropriate_device(self):
+        # Deferred: search_device_by_name reads sd.query_devices(), whose device
+        # list is cached at PortAudio init, so a device hot-plugged/reconnected
+        # after startup is not seen (the old PyAudio path re-created PyAudio() to
+        # re-enumerate). Fixed-device setups (e.g. "Line 4") never hit this;
+        # re-enumerating needs sd._terminate()/_initialize() (private API) whose
+        # side effects aren't worth verifying for this edge case.
         output_device = search_device_by_name(
             host_api_index=self.device.host_api,
             name=self.device.name,
@@ -139,7 +145,7 @@ def get_output_device(config: PlaybackConfig):
     return get_device_info(output_device_index)
 
 
-async def pyaudio_playback_worker(
+async def sd_playback_worker(
     config: PlaybackConfig,
     telemetry_config: TelemetryConfig,
     in_queue: Queue[WorkerInput],
@@ -183,7 +189,7 @@ async def playback_worker(
     try:
         while True:
             context.reset_need_reload()
-            async for output in pyaudio_playback_worker(
+            async for output in sd_playback_worker(
                 config=context.config.playback,
                 telemetry_config=context.config.telemetry,
                 in_queue=in_queue,

@@ -8,13 +8,13 @@ VStreamer Tool is a real-time speech pipeline for live streaming. It chains reco
 
 ## Commands
 
-This project uses **uv** (migrated from Poetry). Python **3.12 only** (`>=3.12,<3.13`).
+This project uses **uv** (migrated from Poetry). Python **3.14 only** (`>=3.14,<3.15`).
 
 ```sh
 # Install. Base = transcription/subtitle only; add extras for other subsystems.
 uv sync
 uv sync --extra audio       # recording/playback (needs portaudio)
-uv sync --extra whisper     # faster-whisper (needs CUDA 11.8/cu128)
+uv sync --extra whisper     # faster-whisper; GPU run needs a host CUDA 12 toolkit for ctranslate2 (ADR-0039)
 uv sync --extra vroid2      # VOICEROID2 TTS
 uv sync --extra voicevox    # VOICEVOX TTS
 uv sync --extra rvc         # RVC voice changer (a lone --extra deselects the others; prefer 'uv sync --all-extras')
@@ -43,7 +43,7 @@ make
 
 `config.toml.example` documents every setting; `vspeech/config.py` is the source of truth for defaults and shapes. Config files (`config*.toml`, `config*.json`, `key.json`, `*.log`, `*.wav`) are gitignored.
 
-[docs/follow-ups.md](docs/follow-ups.md) tracks review findings that were deliberately deferred out of a branch's scope — with the reason each was deferred. Check it before touching the code it names.
+Review findings deliberately deferred out of a branch's scope are recorded as comments **at the code they concern** — each with the reason it was deferred — not in a separate tracking doc, so the note surfaces for whoever next touches that code. (A former `docs/follow-ups.md` did the opposite and drifted out of sync with the code; don't recreate it.)
 
 **Docs are a 3-doc model** — keep each layer thin and in its lane:
 - **spec** ([`docs/superpowers/specs/`](docs/superpowers/specs)) is **thin**: exactly the four sections 問題 / ゴール / 非ゴール / 受入基準. 受入基準 are observable conditions that stay true after implementation — no function/file names, no how. A spec must not accumulate architecture, config schemas, test plans, or decision rationale; those go elsewhere. This keeps specs from going stale as the code moves.
@@ -68,7 +68,7 @@ overlay — never in `pyproject.toml` or `uv.lock`:
 uv run poe convert-hubert --input ~/.config/vstreamer/hubert_base.pt \
     --output ./hubert_contentvec --golden ./hubert_golden
 
-# hubert_contentvec/ -> hubert_fp32.onnx + hubert_fp16.onnx. Runs on the project env (cu128
+# hubert_contentvec/ -> hubert_fp32.onnx + hubert_fp16.onnx. Runs on the project env (cu130
 # torch) because the fp16 graph is exported on CUDA. Self-verifies against the golden.
 uv run poe export-hubert-onnx --asset ./hubert_contentvec --golden ./hubert_golden
 ```
@@ -112,8 +112,8 @@ The single shared object threaded through everything: holds the live `Config`, t
 
 - **Pydantic v2** (`pydantic>=2,<3`). Code uses v2 APIs: `model_config = ConfigDict(...)` / `SettingsConfigDict(...)`, `model_validate`, `model_dump`, `model_dump_json`, `model_validator(mode="after")`, `field_serializer`, `populate_by_name`, `from_attributes`, `AliasChoices`, `SecretStr`. `BaseSettings` is imported from **`pydantic-settings`**. SecretStr secrets that must serialize to plaintext JSON (for the GUI→main handoff) use `@field_serializer(..., when_used="json")` — note `json_encoders` does NOT affect `model_dump_json()` for SecretStr in v2. Do **not** reintroduce v1 APIs (`parse_obj`/`.dict()`/`.json()`/`root_validator`/`orm_mode`/`Field(env=)`/`json_encoders`).
 - **Config loading** (`Config` in `config.py`): from a `--config` file (TOML, or JSON if the name ends in `.json`) or, with no file, from environment variables (prefix `vspeech_`, nested delimiter `__`). Secrets (`ami.appkey`, `gcp.service_account_info`) are `SecretStr`.
-- **Imports are one-per-line** (`ruff` `force-single-line = true`) and auto-sorted on save. Type checking is **ty** (Astral, configured under `[tool.ty.environment]`, Python 3.12) — the project migrated off pyright. Custom type stubs live in `typings/`.
+- **Imports are one-per-line** (`ruff` `force-single-line = true`) and auto-sorted on save. Type checking is **ty** (Astral, configured under `[tool.ty.environment]`, Python 3.14) — the project migrated off pyright. Custom type stubs live in `typings/`.
 - **Platform constraints** (encoded in `pyproject.toml`): `torch`, `torchaudio`, `pyvcroid2` are **Windows-only** wheels pinned to specific release URLs in `[tool.uv.sources]`. `voicevox-core` is pinned per-platform there (a `marker`ed list: `win_amd64` for dev, `manylinux_2_34_x86_64` for the Docker image) — don't put a `sys_platform` marker back on the `voicevox` extra itself, or `uv export` silently drops it from `requirements-pod.txt`. `fairseq` and `transformers` are **not** runtime dependencies and are absent from both `pyproject.toml` and `uv.lock` — the HuBERT content encoder runs as ONNX, and the two offline conversion tools (`poe convert-hubert` / `poe export-hubert-onnx`) supply those libs from a `uv run --with` overlay (see *HuBERT assets*). Dev target is Windows; the Docker image targets Linux. The CPU `onnxruntime` is force-overridden out (`override-dependencies`) because it clobbers `onnxruntime-gpu`'s CUDA binary — both expose the same `onnxruntime` module. `voicevox-core` is pinned to **0.16.4** (`cp310-abi3`, pydantic-free). Its ONNX Runtime, OpenJTalk dictionary, and `.vvm` voice models are **not** bundled in the wheel — fetch them with the VOICEVOX downloader (`make voicevox-assets`) and point `voicevox.openjtalk_dir` / `model_dir` / `onnxruntime_path` at them. VOICEVOX uses its own `voicevox_onnxruntime` build, distinct from the `onnxruntime-gpu` used by whisper/rvc; set `onnxruntime_path` explicitly so the correct DLL is loaded.
-- **Version-specific features in use**: `TaskGroup` and `except*` exception groups (3.11+); PEP 695 `type X = ...` aliases and `class C[T]` type parameters (3.12+, required by ruff's `UP040`/`UP046` since `requires-python` is 3.12). Don't lower the floor. Going **up** to 3.13 has **two** blockers, not one — see [docs/follow-ups.md](docs/follow-ups.md): (1) `audioop`, which PEP 594 removes; (2) the `numpy>=1.23,<2` cap — numpy 1.26.4 has no cp313 wheel and its `Requires-Python` is uncapped, so a resolver won't skip it, it'll fail building the sdist on 3.13. 3.13 buys **zero** runtime perf here (incremental GC was reverted before 3.13.0 final; free-threading is experimental until 3.14 and moot for this GPU/buffer-bound workload); if you ever move, target **3.14** (same enabling work, one more support year) — its one gap is `pyworld` (no cp314 wheel).
+- **Version-specific features in use**: `TaskGroup` and `except*` exception groups (3.11+); PEP 695 `type X = ...` aliases and `class C[T]` type parameters (3.12+, required by ruff's `UP040`/`UP046`). The floor is **3.14** (`requires-python = ">=3.14,<3.15"`), reached by a phased migration off 3.10 — numpy 2, then CUDA 13, then 3.14 itself ([ADR-0025](docs/adr/0025-target-python-314-phased.md) through [0031](docs/adr/0031-audio-pyaudio-to-sounddevice.md)). The former 3.13/3.14 blockers are all resolved: `audioop` (PEP 594 removal) → `audioop-lts`; the old `numpy>=1.23,<2` cap → numpy 2; `pyworld` (no cp314 wheel) → lazy import + default f0 extractor `rmvpe` ([ADR-0030](docs/adr/0030-pyworld-lazy-default-rmvpe.md)); `PyAudio` (no cp314 wheel) → sounddevice ([ADR-0031](docs/adr/0031-audio-pyaudio-to-sounddevice.md)). Don't lower the floor; 3.13 was deliberately skipped (zero runtime gain here — incremental GC was reverted before 3.13.0 final, free-threading is experimental until 3.14 and moot for this GPU/buffer-bound workload — and it is dominated by 3.14).
 - `vstreamer-protos` (the gRPC/protobuf contract) is an external wheel dependency, not vendored here — changes to the wire format happen in that repo.
 - Tests live in `tests/`, run under `pytest` with `asyncio_mode = "auto"` (no `@pytest.mark.asyncio` needed). The most load-bearing tests are `test_event_chains.py` (routing/`EventAddress`/`Command` conversion) — keep them green when touching `command.py` or `shared_context.py`.

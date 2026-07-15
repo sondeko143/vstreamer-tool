@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from math import log
 from time import perf_counter
 from time import time
+from typing import Literal
 from typing import NoReturn
 from uuid import uuid4
 
@@ -66,7 +67,7 @@ class RecordedUtterance:
     frames: bytes
     capture_sec: float
     silence_lag: float
-    stop_reason: str  # "silence" | "maxlen"
+    stop_reason: Literal["silence", "maxlen"]
 
 
 def utterance_capture_sec(frames: bytes, config: RecordingConfig) -> float:
@@ -84,7 +85,7 @@ def record_recording_metrics(
         telemetry.record("rec_silence_lag", silence_lag, trace_id=trace_id)
 
 
-async def pyaudio_recording_worker(
+async def sd_recording_worker(
     config: RecordingConfig,
 ) -> AsyncGenerator[RecordedUtterance]:
     while True:
@@ -191,7 +192,7 @@ async def recording_worker(context: SharedContext, out_queue: Queue[WorkerOutput
         while True:
             context.reset_need_reload()
             rec_config = context.config.recording
-            async for utterance in pyaudio_recording_worker(
+            async for utterance in sd_recording_worker(
                 config=rec_config,
             ):
                 if not context.running.is_set():

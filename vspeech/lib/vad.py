@@ -32,6 +32,14 @@ def should_skip_vc(
 
     Returns (skip, speech_ratio) where speech_ratio is the fraction of windows
     whose speech probability reaches threshold. An empty chunk is skipped.
+
+    Deferred limitation: this is a *ratio*, so recording's lookback +
+    gradual-stop silence padding inflates the denominator for short utterances
+    and can drop a ~0.4s aizuchi below vad_min_speech_ratio -- at odds with the
+    filler-preservation goal (ADR-0037). config.toml.example recommends a low
+    ratio (0.03-0.05) as a workaround. A robust fix (a floor on the *absolute*
+    speech-window count) needs a new knob and would touch the vc gate too, since
+    this decision is shared -- left as an independent design call.
     """
     if probs.shape[0] == 0:
         return True, 0.0
