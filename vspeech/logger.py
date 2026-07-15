@@ -40,6 +40,17 @@ class TaskFileHandler(logging.FileHandler):
 
 
 def configure_logger(config: Config):
+    # stdout/stderr がコンソール以外 (GUI サブプロセスの pipe, リダイレクト) だと
+    # encoding が cp1252 等になり、日本語ログで UnicodeEncodeError を投げて emit が
+    # 落ちる → preflight の失敗理由が stdout に出ない (ADR-0038 Goal 1 を潰す)。
+    # UTF-8 + backslashreplace で「読める UTF-8 を出す」かつ「絶対に落ちない」を両立。
+    for _stream in (stdout, stderr):
+        try:
+            _stream.reconfigure(  # ty: ignore[unresolved-attribute]
+                encoding="utf-8", errors="backslashreplace"
+            )
+        except AttributeError, ValueError:
+            pass
     log_file_format = logging.Formatter(
         "%(asctime)s %(thread)s[%(task)s] %(levelname)s : %(message)s"
     )
