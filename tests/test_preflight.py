@@ -9,7 +9,18 @@ from vspeech.config import GcpConfig
 from vspeech.config import TranscriptionConfig
 from vspeech.config import TranscriptionWorkerType
 from vspeech.exceptions import ConfigError
+from vspeech.lib.audio import DeviceInfo
 from vspeech.preflight import preflight
+
+
+def _device(index: int = 1):
+    return DeviceInfo(
+        host_api=0,
+        max_input_channels=2,
+        max_output_channels=2,
+        name="Line 4",
+        index=index,
+    )
 
 
 def _acp(**ami_kw):
@@ -97,3 +108,29 @@ def test_cmd_exits_on_config_error(monkeypatch):
     with pytest.raises(SystemExit) as ei:
         cmd.callback(config_file=None)
     assert ei.value.code == 1
+
+
+def test_recording_device_not_found_is_reported(monkeypatch):
+    from vspeech.config import RecordingConfig
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(audio, "search_device", lambda **kw: None)
+    cfg = Config(recording=RecordingConfig(enable=True, input_device_name="Ghost"))
+    with pytest.raises(ConfigError) as ei:
+        preflight(cfg)
+    assert any(p.worker == "recording" for p in ei.value.problems)
+
+
+def test_recording_bad_route_is_reported(monkeypatch):
+    from vspeech.config import RecordingConfig
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(audio, "get_device_info", lambda i: _device(i))
+    cfg = Config(
+        recording=RecordingConfig(
+            enable=True, input_device_index=1, routes_list=[["not_an_event"]]
+        )
+    )
+    with pytest.raises(ConfigError) as ei:
+        preflight(cfg)
+    assert any("routes_list" in p.detail for p in ei.value.problems)

@@ -51,3 +51,9 @@ class WorkerStartupError(Exception):
         self.worker = worker
         self.detail = detail
         super().__init__(f"[{worker}] {detail}")
+
+
+class DeviceNotFoundError(Exception):
+    """設定で指定したオーディオデバイスが解決できない。"""
+
+    pass

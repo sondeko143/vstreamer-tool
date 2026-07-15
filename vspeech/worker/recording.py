@@ -20,9 +20,8 @@ from vspeech.config import EventType
 from vspeech.config import RecordingConfig
 from vspeech.config import get_sample_size
 from vspeech.exceptions import shutdown_worker
-from vspeech.lib.audio import get_device_name
 from vspeech.lib.audio import get_sd_dtype
-from vspeech.lib.audio import search_device
+from vspeech.lib.audio import resolve_input_device
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
 from vspeech.shared_context import SharedContext
@@ -31,22 +30,12 @@ from vspeech.shared_context import WorkerOutput
 
 
 def open_input_stream(config: RecordingConfig) -> sd.RawInputStream:
-    input_device_index = config.input_device_index
-    if input_device_index is None:
-        input_device = search_device(
-            host_api_type=config.input_host_api_name,
-            name=config.input_device_name,
-            input=True,
-        )
-        if not input_device:
-            raise TypeError("not found input device")
-        input_device_index = input_device.index
-    input_device_name = get_device_name(input_device_index)
-    logger.info("use input device %s: %s", input_device_index, input_device_name)
+    device = resolve_input_device(config)
+    logger.info("use input device %s: %s", device.index, device.name)
     stream = sd.RawInputStream(
         samplerate=config.rate,
         blocksize=config.chunk,
-        device=input_device_index,
+        device=device.index,
         channels=config.channels,
         dtype=get_sd_dtype(config.format),
     )

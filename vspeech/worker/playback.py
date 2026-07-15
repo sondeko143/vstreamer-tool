@@ -20,7 +20,7 @@ from vspeech.exceptions import shutdown_worker
 from vspeech.lib.audio import DeviceInfo
 from vspeech.lib.audio import get_device_info
 from vspeech.lib.audio import get_sd_dtype
-from vspeech.lib.audio import search_device
+from vspeech.lib.audio import resolve_output_device
 from vspeech.lib.audio import search_device_by_name
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
@@ -132,17 +132,7 @@ class OutputStream:
 
 
 def get_output_device(config: PlaybackConfig):
-    output_device_index = config.output_device_index
-    if output_device_index is None:
-        output_device = search_device(
-            host_api_type=config.output_host_api_name,
-            name=config.output_device_name,
-            output=True,
-        )
-        if not output_device:
-            raise TypeError("not found output device")
-        output_device_index = output_device.index
-    return get_device_info(output_device_index)
+    return resolve_output_device(config)
 
 
 async def sd_playback_worker(

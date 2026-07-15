@@ -83,8 +83,43 @@ def _check_transcription(config: Config) -> list[ConfigProblem]:
     return problems
 
 
+def _check_recording(config: Config) -> list[ConfigProblem]:
+    if not config.recording.enable:
+        return []
+    from vspeech.exceptions import DeviceNotFoundError
+    from vspeech.lib.audio import resolve_input_device
+    from vspeech.shared_context import WorkerOutput
+
+    w = "recording"
+    problems: list[ConfigProblem] = []
+    try:
+        resolve_input_device(config.recording)
+    except DeviceNotFoundError as e:
+        problems.append(ConfigProblem(w, str(e)))
+    try:
+        WorkerOutput.from_routes_list(config.recording.routes_list)
+    except Exception as e:
+        problems.append(ConfigProblem(w, f"recording.routes_list が不正です: {e}"))
+    return problems
+
+
+def _check_playback(config: Config) -> list[ConfigProblem]:
+    if not config.playback.enable:
+        return []
+    from vspeech.exceptions import DeviceNotFoundError
+    from vspeech.lib.audio import resolve_output_device
+
+    try:
+        resolve_output_device(config.playback)
+    except DeviceNotFoundError as e:
+        return [ConfigProblem("playback", str(e))]
+    return []
+
+
 _CHECKERS: list[Checker] = [
     _check_transcription,
+    _check_recording,
+    _check_playback,
 ]
 
 

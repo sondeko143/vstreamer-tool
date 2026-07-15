@@ -4,7 +4,10 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
+from vspeech.config import PlaybackConfig
+from vspeech.config import RecordingConfig
 from vspeech.config import SampleFormat
+from vspeech.exceptions import DeviceNotFoundError
 
 
 class HostAPIInfo(BaseModel):
@@ -88,6 +91,58 @@ def search_device(
         if info:
             host_api_index = info.index
     return search_device_by_name(name, host_api_index, input=input, output=output)
+
+
+def resolve_input_device(config: RecordingConfig) -> DeviceInfo:
+    """録音入力デバイスを解決する。見つからなければ DeviceNotFoundError。
+
+    preflight と recording worker が同じ経路を通る (ADR-0038)。index 指定が
+    あれば優先し、無ければ host_api / name で検索する。
+    """
+    if config.input_device_index is not None:
+        try:
+            return get_device_info(config.input_device_index)
+        except Exception as e:
+            raise DeviceNotFoundError(
+                f"recording.input_device_index={config.input_device_index} "
+                f"が無効です: {e}"
+            ) from e
+    device = search_device(
+        host_api_type=config.input_host_api_name,
+        name=config.input_device_name,
+        input=True,
+    )
+    if device is None:
+        raise DeviceNotFoundError(
+            "入力デバイスが見つかりません "
+            f"(recording.input_host_api_name={config.input_host_api_name!r}, "
+            f"recording.input_device_name={config.input_device_name!r})"
+        )
+    return device
+
+
+def resolve_output_device(config: PlaybackConfig) -> DeviceInfo:
+    """再生出力デバイスを解決する。見つからなければ DeviceNotFoundError。"""
+    if config.output_device_index is not None:
+        try:
+            return get_device_info(config.output_device_index)
+        except Exception as e:
+            raise DeviceNotFoundError(
+                f"playback.output_device_index={config.output_device_index} "
+                f"が無効です: {e}"
+            ) from e
+    device = search_device(
+        host_api_type=config.output_host_api_name,
+        name=config.output_device_name,
+        output=True,
+    )
+    if device is None:
+        raise DeviceNotFoundError(
+            "出力デバイスが見つかりません "
+            f"(playback.output_host_api_name={config.output_host_api_name!r}, "
+            f"playback.output_device_name={config.output_device_name!r})"
+        )
+    return device
 
 
 def get_sd_dtype(format: SampleFormat) -> str:
