@@ -36,8 +36,6 @@ from vspeech.lib.ami import parse_response
 from vspeech.lib.gcp import get_credentials
 from vspeech.lib.telemetry import telemetry
 from vspeech.lib.vad import create_vad_session
-from vspeech.lib.vad import should_skip_vc
-from vspeech.lib.vad import speech_probs
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
