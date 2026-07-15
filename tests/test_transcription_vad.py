@@ -3,6 +3,8 @@ from typing import TYPE_CHECKING
 from typing import cast
 
 import numpy as np
+import pytest
+from pydantic import ValidationError
 
 from vspeech.config import SampleFormat
 from vspeech.config import TranscriptionConfig
@@ -127,3 +129,17 @@ async def test_vad_gate_failure_fails_open_and_dedups_warning():
         assert await vad_should_skip(session, _sound_16k_int16(), cfg, "") is False
     finally:
         tx._vad_gate_warned.discard("RuntimeError")
+
+
+def test_transcription_vad_bounds_reject_out_of_range():
+    with pytest.raises(ValidationError):
+        TranscriptionConfig(vad_threshold=1.5)
+    with pytest.raises(ValidationError):
+        TranscriptionConfig(vad_threshold=-0.1)
+    with pytest.raises(ValidationError):
+        TranscriptionConfig(vad_min_speech_ratio=1.5)
+    with pytest.raises(ValidationError):
+        TranscriptionConfig(vad_min_speech_ratio=-0.1)
+    # boundaries (0.0 / 1.0) are allowed
+    TranscriptionConfig(vad_threshold=0.0, vad_min_speech_ratio=1.0)
+    TranscriptionConfig(vad_threshold=1.0, vad_min_speech_ratio=0.0)

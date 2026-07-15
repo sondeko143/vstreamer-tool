@@ -37,11 +37,12 @@ VAD セッション生成を whisper backend では WhisperModel ロード + war
 どちらも「起動時・チャンク処理前」で受入基準は満たす。速く落としたいなら
 `create_transcription_vad_session(config)` をモデルロードより前へ上げるだけの並べ替え。
 
-### `transcription.vad_threshold` / `vad_min_speech_ratio` に範囲バリデーションが無い — [`config.py`](../vspeech/config.py)
+### ✅ 解決済み: `vad_threshold` / `vad_min_speech_ratio` の範囲バリデーション — [`config.py`](../vspeech/config.py)
 
-`ge=0, le=1` の境界が無い（既存の `vc.vad_*` と同形にそろえた）。範囲外でも degenerate だが安全
-（常に skip / 常に通す）でクラッシュはしない。**今回直さなかった理由**: shipped の vc 側との一貫を優先。
-両方に足すなら別途まとめて。
+当初は vc との一貫を優先して見送っていたが、**2026-07-16 に vc・transcription 両方**の `vad_threshold` /
+`vad_min_speech_ratio` へ `ge=0.0, le=1.0` を追加（確率・割合なので [0,1]）。範囲外の設定はロード時に
+`ValidationError` で弾く。既定（0.5 / 0.1）と境界（0.0 / 1.0）は許容。両方を
+`tests/test_vad_gate.py` / `tests/test_transcription_vad.py` の bounds テストでゲート。
 
 ### （敵対的レビュー）reload でゲートを有効化＋モデル不在だとパイプライン全体が落ちる — [`transcription.py`](../vspeech/worker/transcription.py) / [`vc.py`](../vspeech/worker/vc.py)
 

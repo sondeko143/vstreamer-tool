@@ -175,8 +175,8 @@ class TranscriptionConfig(BaseModel):
     # 音声比率が閾値未満のチャンクを音声認識前に落とす。出力ダックは無し。
     vad_gate: bool = False
     vad_model_file: Path = Field(default=Path())
-    vad_threshold: float = 0.5
-    vad_min_speech_ratio: float = 0.1
+    vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    vad_min_speech_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
 
 
 class TtsConfig(BaseModel):
@@ -245,8 +245,8 @@ class VcConfig(BaseModel):
     volume_adjust_window_ms: float = 25.0
     vad_gate: bool = False
     vad_model_file: Path = Field(default=Path())
-    vad_threshold: float = 0.5
-    vad_min_speech_ratio: float = 0.1
+    vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    vad_min_speech_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
     vad_speech_pad_ms: float = 100.0
     vad_min_gain: float = 0.0
 

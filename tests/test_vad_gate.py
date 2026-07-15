@@ -157,3 +157,21 @@ def test_vc_config_vad_defaults_are_off_and_sane():
     assert config.vad_min_speech_ratio == 0.1
     assert config.vad_speech_pad_ms == 100.0
     assert config.vad_min_gain == 0.0
+
+
+def test_vc_config_vad_bounds_reject_out_of_range():
+    from pydantic import ValidationError
+
+    from vspeech.config import VcConfig
+
+    with pytest.raises(ValidationError):
+        VcConfig(vad_threshold=1.5)
+    with pytest.raises(ValidationError):
+        VcConfig(vad_threshold=-0.1)
+    with pytest.raises(ValidationError):
+        VcConfig(vad_min_speech_ratio=1.5)
+    with pytest.raises(ValidationError):
+        VcConfig(vad_min_speech_ratio=-0.1)
+    # boundaries (0.0 / 1.0) are allowed
+    VcConfig(vad_threshold=0.0, vad_min_speech_ratio=1.0)
+    VcConfig(vad_threshold=1.0, vad_min_speech_ratio=0.0)
