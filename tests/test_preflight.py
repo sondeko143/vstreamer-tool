@@ -174,6 +174,17 @@ def test_vr2_tts_passes_without_files():
     preflight(Config(tts=TtsConfig(enable=True)))  # 既定 worker_type=VR2
 
 
+def test_vc_unconfigured_hubert_dir_is_reported():
+    from vspeech.config import VcConfig
+
+    # RvcConfig defaults leave hubert_model_file = Path() (== "."), which is a
+    # real directory; the check must still report it as unconfigured.
+    cfg = Config(vc=VcConfig(enable=True))
+    with pytest.raises(ConfigError) as ei:
+        preflight(cfg)
+    assert any("rvc.hubert_model_file" in p.detail for p in ei.value.problems)
+
+
 def test_vc_missing_model_files_reported():
     from vspeech.config import RvcConfig
     from vspeech.config import VcConfig
