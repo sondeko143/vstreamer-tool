@@ -19,6 +19,7 @@ from vspeech.config import SampleFormat
 from vspeech.config import VcConfig
 from vspeech.config import get_sample_size
 from vspeech.exceptions import shutdown_worker
+from vspeech.exceptions import worker_startup
 from vspeech.lib.telemetry import telemetry
 from vspeech.lib.vad import VAD_SAMPLE_RATE
 from vspeech.lib.vad import apply_vad_gate
@@ -174,29 +175,30 @@ async def rvc_worker(
     from vspeech.lib.rvc import half_precision_available
     from vspeech.lib.rvc import load_hubert_model
 
-    device, device_name = get_device(rvc_config.gpu_id, rvc_config.gpu_name)
-    logger.info("vc worker device: %s, %s", device, device_name)
-    half_available = half_precision_available(id=device.index)
-    hubert_model = load_hubert_model(
-        file_name=rvc_config.hubert_model_file,
-        device=device,
-        is_half=half_available,
-    )
-    session = create_session(rvc_config.model_file, device)
-    check_cuda_provider(session.get_providers())
-    if rvc_config.f0_extractor_type == F0ExtractorType.rmvpe:
-        rmvpe_session = create_session(rvc_config.rmvpe_model_file, device)
-    else:
-        rmvpe_session = None
-    if vc_config.vad_gate:
-        vad_session = create_vad_session(vc_config.vad_model_file)
-        logger.info("vad gate enabled: %s", vc_config.vad_model_file)
-    else:
-        vad_session = None
-    modelmeta: Any = session.get_modelmeta()
-    metadata: dict[str, Any] = json.loads(modelmeta.custom_metadata_map["metadata"])
-    target_sample_rate = metadata["samplingRate"]
-    f0_enabled = metadata["f0"]
+    with worker_startup("vc"):
+        device, device_name = get_device(rvc_config.gpu_id, rvc_config.gpu_name)
+        logger.info("vc worker device: %s, %s", device, device_name)
+        half_available = half_precision_available(id=device.index)
+        hubert_model = load_hubert_model(
+            file_name=rvc_config.hubert_model_file,
+            device=device,
+            is_half=half_available,
+        )
+        session = create_session(rvc_config.model_file, device)
+        check_cuda_provider(session.get_providers())
+        if rvc_config.f0_extractor_type == F0ExtractorType.rmvpe:
+            rmvpe_session = create_session(rvc_config.rmvpe_model_file, device)
+        else:
+            rmvpe_session = None
+        if vc_config.vad_gate:
+            vad_session = create_vad_session(vc_config.vad_model_file)
+            logger.info("vad gate enabled: %s", vc_config.vad_model_file)
+        else:
+            vad_session = None
+        modelmeta: Any = session.get_modelmeta()
+        metadata: dict[str, Any] = json.loads(modelmeta.custom_metadata_map["metadata"])
+        target_sample_rate = metadata["samplingRate"]
+        f0_enabled = metadata["f0"]
     # Warm up: pay the onnxruntime graph-build / CUDA kernel autotune cost at
     # startup. The first real inference would otherwise stall for seconds
     # (observed up to ~145s) while these build lazily.

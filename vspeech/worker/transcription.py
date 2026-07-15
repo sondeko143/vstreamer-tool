@@ -33,6 +33,7 @@ from vspeech.config import TranscriptionWorkerType
 from vspeech.config import WhisperConfig
 from vspeech.config import get_sample_size
 from vspeech.exceptions import shutdown_worker
+from vspeech.exceptions import worker_startup
 from vspeech.lib.ami import parse_response
 from vspeech.lib.gcp import get_credentials
 from vspeech.lib.telemetry import telemetry
@@ -317,19 +318,20 @@ async def transcript_worker_whisper(
 
     from vspeech.lib.cuda_util import get_device
 
-    device, device_name = get_device(whisper_config.gpu_id, whisper_config.gpu_name)
-    logger.info("transcript worker device: %s, %s", device, device_name)
+    with worker_startup("transcription"):
+        device, device_name = get_device(whisper_config.gpu_id, whisper_config.gpu_name)
+        logger.info("transcript worker device: %s, %s", device, device_name)
 
-    model = WhisperModel(
-        whisper_config.model,
-        device="cuda",
-        compute_type="float16",
-        device_index=device.index,
-    )
-    logger.info("transcript worker [whisper] started")
-    # Created before warmup (like GCP/AMI, right after "started") so a missing
-    # VAD model fails loud before whisper's cold start, not after it.
-    vad_session = create_transcription_vad_session(config)
+        model = WhisperModel(
+            whisper_config.model,
+            device="cuda",
+            compute_type="float16",
+            device_index=device.index,
+        )
+        logger.info("transcript worker [whisper] started")
+        # Created before warmup (like GCP/AMI, right after "started") so a missing
+        # VAD model fails loud before whisper's cold start, not after it.
+        vad_session = create_transcription_vad_session(config)
     # Warm up: pay the one-off cold-start cost (model graph build / kernel
     # compilation that happens on the first decode) at startup instead of
     # penalizing the first real utterance.
@@ -400,10 +402,11 @@ async def transcript_worker_google(
     gcp_config: GcpConfig,
     in_queue: Queue[WorkerInput],
 ) -> AsyncGenerator[WorkerOutput]:
-    credentials, _ = get_credentials(gcp_config)
-    client = SpeechAsyncClient(credentials=credentials)
-    logger.info("transcript worker [google] started")
-    vad_session = create_transcription_vad_session(config)
+    with worker_startup("transcription"):
+        credentials, _ = get_credentials(gcp_config)
+        client = SpeechAsyncClient(credentials=credentials)
+        logger.info("transcript worker [google] started")
+        vad_session = create_transcription_vad_session(config)
     while True:
         recorded = await in_queue.get()
         if await vad_should_skip(
@@ -463,7 +466,8 @@ async def transcript_worker_ami(
     in_queue: Queue[WorkerInput],
 ) -> AsyncGenerator[WorkerOutput]:
     logger.info("transcript worker [ami] started")
-    vad_session = create_transcription_vad_session(config)
+    with worker_startup("transcription"):
+        vad_session = create_transcription_vad_session(config)
     while True:
         # Deferred: the skip check runs inside this `async with`, so skipped
         # chunks still build/tear down a client. AsyncClient opens no connection

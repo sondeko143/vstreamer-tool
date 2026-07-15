@@ -1,4 +1,5 @@
 from asyncio import current_task
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 
@@ -57,3 +58,14 @@ class DeviceNotFoundError(Exception):
     """設定で指定したオーディオデバイスが解決できない。"""
 
     pass
+
+
+@contextmanager
+def worker_startup(worker: str):
+    """worker 起動時のリソース取得失敗を WorkerStartupError へ変換する (層B, ADR-0038)。"""
+    try:
+        yield
+    except WorkerStartupError:
+        raise
+    except Exception as e:
+        raise WorkerStartupError(worker, str(e)) from e

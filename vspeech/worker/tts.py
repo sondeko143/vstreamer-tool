@@ -15,6 +15,7 @@ from vspeech.config import VoicevoxConfig
 from vspeech.config import VoicevoxParam
 from vspeech.config import Vr2Config
 from vspeech.exceptions import shutdown_worker
+from vspeech.exceptions import worker_startup
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
@@ -50,11 +51,12 @@ async def vroid2_worker(vr2_: Any, vr2_config: Vr2Config, in_queue: Queue[Worker
 async def voicevox_worker(vvox_config: VoicevoxConfig, in_queue: Queue[WorkerInput]):
     from vspeech.lib.voicevox import Voicevox
 
-    vvox = Voicevox(
-        vvox_config.openjtalk_dir,
-        vvox_config.model_dir,
-        vvox_config.onnxruntime_path,
-    )
+    with worker_startup("tts"):
+        vvox = Voicevox(
+            vvox_config.openjtalk_dir,
+            vvox_config.model_dir,
+            vvox_config.onnxruntime_path,
+        )
     loaded_models: list[int] = []
     logger.info("tts worker [voicevox] started")
     while True:
@@ -112,25 +114,27 @@ async def tts_worker(
             if config.worker_type == TtsWorkerType.VR2:
                 from vspeech.lib.voiceroid import VR2
 
-                vr2 = VR2()
+                with worker_startup("tts"):
+                    vr2 = VR2()
                 with vr2.vc_roid2:
-                    lang_list: list[str] = vr2.list_languages()
-                    if "standard" in lang_list:
-                        vr2.load_language("standard")
-                    elif lang_list:
-                        vr2.load_language(lang_list[0])
-                    else:
-                        raise Exception("No language library")
-                    if context.config.vr2.voice_name:
-                        voice_name = context.config.vr2.voice_name
-                    else:
-                        voice_list: list[str] = vr2.list_voices()
-                        if voice_list:
-                            voice_name = voice_list[0]
+                    with worker_startup("tts"):
+                        lang_list: list[str] = vr2.list_languages()
+                        if "standard" in lang_list:
+                            vr2.load_language("standard")
+                        elif lang_list:
+                            vr2.load_language(lang_list[0])
                         else:
-                            raise Exception("No voice library")
-                    logger.info("vr2 voice: %s", voice_name)
-                    vr2.load_voice(voice_name, context.config.vr2.params)
+                            raise Exception("No language library")
+                        if context.config.vr2.voice_name:
+                            voice_name = context.config.vr2.voice_name
+                        else:
+                            voice_list: list[str] = vr2.list_voices()
+                            if voice_list:
+                                voice_name = voice_list[0]
+                            else:
+                                raise Exception("No voice library")
+                        logger.info("vr2 voice: %s", voice_name)
+                        vr2.load_voice(voice_name, context.config.vr2.params)
                     worker = partial(vroid2_worker, vr2_config=context.config.vr2)
                     async for output in worker(vr2_=vr2, in_queue=in_queue):
                         out_queue.put_nowait(output)

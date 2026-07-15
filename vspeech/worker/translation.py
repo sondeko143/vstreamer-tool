@@ -17,6 +17,7 @@ from google.cloud.translate_v3 import TranslationServiceAsyncClient
 from vspeech.config import GcpConfig
 from vspeech.config import TranslationConfig
 from vspeech.exceptions import shutdown_worker
+from vspeech.exceptions import worker_startup
 from vspeech.lib.gcp import get_credentials
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
@@ -73,8 +74,9 @@ class TranslationBlock:
 async def translation_worker_google(
     config: TranslationConfig, gcp_config: GcpConfig, in_queue: Queue[WorkerInput]
 ) -> AsyncGenerator[WorkerOutput]:
-    credentials, project_id = get_credentials(gcp_config)
-    client = TranslationServiceAsyncClient(credentials=credentials)
+    with worker_startup("translation"):
+        credentials, project_id = get_credentials(gcp_config)
+        client = TranslationServiceAsyncClient(credentials=credentials)
     logger.info("translation worker [google] started")
     while True:
         transcribed = await in_queue.get()

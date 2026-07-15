@@ -17,6 +17,7 @@ from vspeech.config import SampleFormat
 from vspeech.config import TelemetryConfig
 from vspeech.config import get_sample_size
 from vspeech.exceptions import shutdown_worker
+from vspeech.exceptions import worker_startup
 from vspeech.lib.audio import DeviceInfo
 from vspeech.lib.audio import get_device_info
 from vspeech.lib.audio import get_sd_dtype
@@ -140,7 +141,8 @@ async def sd_playback_worker(
     telemetry_config: TelemetryConfig,
     in_queue: Queue[WorkerInput],
 ):
-    output_stream = OutputStream(config)
+    with worker_startup("playback"):
+        output_stream = OutputStream(config)
     try:
         logger.info("playback worker started.")
         while True:
