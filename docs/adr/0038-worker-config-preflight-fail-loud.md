@@ -1,6 +1,6 @@
 # 0038. 設定不備は起動時 preflight で fail-loud に集約する（全 worker へ一般化）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-16
 - Related: spec [2026-07-16-worker-config-preflight-design.md](../superpowers/specs/2026-07-16-worker-config-preflight-design.md); [ADR-0019](0019-vc-silero-vad-gate.md) / [ADR-0037](0037-transcription-vad-skip-gate.md)（VAD モデル不在の起動時 fail-loud、本 ADR がその原則を全設定へ一般化）; [ADR-0031](0031-audio-pyaudio-to-sounddevice.md)（デバイス解決の基盤）
 
