@@ -171,6 +171,12 @@ class TranscriptionConfig(BaseModel):
     transliterate_with_mozc: bool = False
     recording_log: bool = False
     recording_log_dir: Path = Path("./rec")
+    # Silero VAD スキップゲート (opt-in)。vc.vad_* とは独立 (ADR-0037)。
+    # 音声比率が閾値未満のチャンクを音声認識前に落とす。出力ダックは無し。
+    vad_gate: bool = False
+    vad_model_file: Path = Field(default=Path())
+    vad_threshold: float = 0.5
+    vad_min_speech_ratio: float = 0.1
 
 
 class TtsConfig(BaseModel):
