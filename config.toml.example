@@ -46,14 +46,22 @@ input_device_index = 0
 enable = true
 worker_type = "ACP"
 transliterate_with_mozc = false
-# Silero VAD スキップゲート (opt-in)。音声比率の低いチャンクを音声認識前に落とす。
-# vc.vad_* とは独立した設定 (同一感度にしたい場合は手動で揃える)。既定 OFF。
+# Silero VAD スキップゲート (opt-in)。音声比率の低いチャンクを音声認識前に落とす
+# (無音での whisper 幻聴・無駄な GPU 推論を防ぐ)。vc.vad_* とは独立した設定。既定 OFF。
+# スキップされたチャンクは字幕・翻訳に流れず、recording_log にも記録されない。
 vad_gate = false
 # vc と同じ silero_vad.onnx (v6.2.1) を指す。
 # vad_model_file = "~/.config/vstreamer/silero_vad.onnx"
+# 注意: recording が 16kHz 以外で録るとき、ゲートの 16kHz 変換に PyAV が要る
+# (whisper extra 同梱)。ACP/GCP のみで whisper extra 無しだと非 16kHz 入力では
+# ゲートは無効化される (fail-open で素通し・警告1回)。recording.rate=16000 なら不要。
 # speech 確率の閾値 (窓 32ms ごとにこれ以上で speech 扱い)。
 vad_threshold = 0.5
 # speech 窓の割合がこれ未満のチャンクは認識をスキップ (字幕・翻訳にも流れない)。
+# 重要: この比率は「録音チャンク全体」に対する割合。recording は発話前の lookback
+# (last_interval_frames_buffer) と gradual-stop の余韻で前後に無音を足すので、短い
+# フィラー (「え」「うん」等) は比率が下がりやすい。既定 0.1 でも短い相槌が落ちること
+# がある → フィラーを残したいなら低め (例 0.03-0.05) にする。
 vad_min_speech_ratio = 0.1
 
 [tts]

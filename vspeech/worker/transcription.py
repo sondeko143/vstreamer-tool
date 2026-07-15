@@ -48,6 +48,7 @@ from vspeech.shared_context import WorkerOutput
 
 if TYPE_CHECKING:
     import numpy as np
+    from numpy.typing import NDArray
     from onnxruntime import InferenceSession
 
 
@@ -151,6 +152,23 @@ def create_transcription_vad_session(
     return session
 
 
+# Fail-open gate errors are logged, but a *persistent* failure (e.g. non-16kHz
+# input on an ACP/GCP install without PyAV, which lives in the whisper extra)
+# would warn on every chunk. Warn once per distinct error type; drop the rest to
+# debug. Mutated only on the event loop (the except runs there, not in-thread).
+_vad_gate_warned: set[str] = set()
+
+
+def _vad_probs(vad_session: InferenceSession, sound: SoundInput) -> NDArray[np.float64]:
+    """Decode to 16kHz mono then run Silero VAD.
+
+    Both steps run inside the caller's ``to_thread`` so the bounded PyAV
+    decode/resample (``pcm_to_waveform``) never blocks the event loop -- for the
+    ACP/GCP backends this is the only audio decode on the request path.
+    """
+    return speech_probs(vad_session, pcm_to_waveform(sound))
+
+
 async def vad_should_skip(
     vad_session: InferenceSession | None,
     sound: SoundInput,
@@ -168,8 +186,7 @@ async def vad_should_skip(
     if vad_session is None:
         return False
     try:
-        waveform = pcm_to_waveform(sound)
-        probs = await to_thread(speech_probs, vad_session, waveform)
+        probs = await to_thread(_vad_probs, vad_session, sound)
         skip, ratio = should_skip_vc(
             probs, config.vad_threshold, config.vad_min_speech_ratio
         )
@@ -183,7 +200,17 @@ async def vad_should_skip(
             return True
         return False
     except Exception as e:  # noqa: BLE001 - gate failure must not drop speech
-        logger.warning("transcription vad gate failed; passing chunk ungated: %s", e)
+        key = type(e).__name__
+        if key in _vad_gate_warned:
+            logger.debug("transcription vad gate failed; passing ungated: %s", e)
+        else:
+            _vad_gate_warned.add(key)
+            logger.warning(
+                "transcription vad gate failed; passing chunk ungated"
+                " (further %s warnings suppressed): %s",
+                key,
+                e,
+            )
         return False
 
 

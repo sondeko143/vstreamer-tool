@@ -106,3 +106,24 @@ async def test_vad_skip_records_transc_skip_telemetry():
     finally:
         telemetry.reset()
         telemetry.configure(enabled=False, max_samples=5000)
+
+
+async def test_vad_gate_failure_fails_open_and_dedups_warning():
+    from vspeech.worker import transcription as tx
+    from vspeech.worker.transcription import vad_should_skip
+
+    class _Boom:
+        def run(self, *args):
+            raise RuntimeError("boom")
+
+    cfg = TranscriptionConfig(vad_gate=True)
+    session = cast("InferenceSession", _Boom())
+    tx._vad_gate_warned.discard("RuntimeError")
+    try:
+        # First failure fails open (True never returned) and remembers the error
+        # type; a second identical failure still fails open without re-warning.
+        assert await vad_should_skip(session, _sound_16k_int16(), cfg, "") is False
+        assert "RuntimeError" in tx._vad_gate_warned
+        assert await vad_should_skip(session, _sound_16k_int16(), cfg, "") is False
+    finally:
+        tx._vad_gate_warned.discard("RuntimeError")

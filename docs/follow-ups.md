@@ -16,11 +16,12 @@ transcription ワーカーに opt-in の Silero VAD skip 判定を足した（vc
 
 ### whisper 経路で `pcm_to_waveform` が二重に走る — [`transcription.py`](../vspeech/worker/transcription.py)
 
-`vad_should_skip` 内で 16k 波形を作り、skip されなかったチャンクは whisper 本体でもう一度同じ bytes を
-デコード/リサンプルする（最初の波形は捨てる）。**今回直さなかった理由**: whisper backend 限定かつゲート
-有効かつ通過チャンクのときだけで、コストは数 ms（後段の whisper GPU 推論に対して無視可能）。消すには
-`vad_should_skip` が波形も返す（`(skip, waveform)`）形にしてシグネチャを複雑化する必要があり、利得に見合わない。
-ACP/GCP は raw PCM を使うので無関係。
+`vad_should_skip` がゲート用に 16k 波形を作り、skip されなかったチャンクは whisper 本体でもう一度同じ bytes を
+デコード/リサンプルする（最初の波形は捨てる）。**敵対的レビューで一部対処済み**: ゲート側のデコードは
+`_vad_probs` として `to_thread` 内へ移し、event loop をブロックしなくなった（ACP/GCP はこれで request path の
+loop デコードがゼロに）。残るのは whisper 通過チャンクの CPU 二重デコードのみ。**残りを直さなかった理由**:
+whisper backend 限定・通過時のみで数 ms（後段 GPU 推論に対し無視可能）。消すには `vad_should_skip` が波形も返す
+（`(skip, waveform)`）形にしてシグネチャを複雑化する必要があり利得に見合わない。
 
 ### AMI backend が skip するチャンクにも httpx クライアントを開く — [`transcription.py`](../vspeech/worker/transcription.py)
 
@@ -41,6 +42,35 @@ VAD セッション生成を whisper backend では WhisperModel ロード + war
 `ge=0, le=1` の境界が無い（既存の `vc.vad_*` と同形にそろえた）。範囲外でも degenerate だが安全
 （常に skip / 常に通す）でクラッシュはしない。**今回直さなかった理由**: shipped の vc 側との一貫を優先。
 両方に足すなら別途まとめて。
+
+### （敵対的レビュー）reload でゲートを有効化＋モデル不在だとパイプライン全体が落ちる — [`transcription.py`](../vspeech/worker/transcription.py) / [`vc.py`](../vspeech/worker/vc.py)
+
+`vad_gate=false` で稼働中にモデル未取得のまま `vad_gate=true` へ編集して `reload` を送ると、次の発話で
+generator が再構築され `create_transcription_vad_session` が `FileNotFoundError` を投げる。これは
+`transcription_worker` の `except CancelledError` に捕まらず TaskGroup を抜け、`main.py` の
+`except* WorkerShutdown` にも一致せず `exit(1)` → **同一ホストの playback/tts/vc/sender/receiver まで巻き込んで
+全落ち**。**vc ゲートと同一の挙動**（`vc.py:192` も worker 起動時に同じ crash 経路）で、ADR-0019 の
+「モデル不在は起動時 fail-loud」契約どおり。**今回直さなかった理由**: 起動時 fail-loud は意図どおり正しく、
+reload 時だけ「gate-off へ縮退＋loud error で存続」に変えると (a) vc と挙動が乖離し (b) ADR-0019 の契約を
+変える設計判断になる。**ユーザーに提示済み** — 両ゲートを reload-safe にするなら ADR-0019 を amend し、
+vc/transcription 両方の session 生成を外側 worker へ持ち上げる。
+
+### （敵対的レビュー）skip 指標が「比率」なので silence-padding で短フィラーが落ちる — [`transcription.py`](../vspeech/worker/transcription.py) / [`lib/vad.py`](../vspeech/lib/vad.py)
+
+`should_skip_vc` は「speech 窓 / 全窓」の比率で判定するが、recording は lookback + gradual-stop で
+チャンク前後に無音を足すため、短い発話ほど分母が水増しされ比率が下がる。config.toml.example の
+`interval_sec=0.8` だと lookback 最大 4s になり、~0.4s の相槌は既定 `vad_min_speech_ratio=0.1` を割って落ちる
+— フィラー保持という本機能の目的（ADR-0037）と衝突する。config コメントに注意書きと推奨値（0.03-0.05）を
+追記済み。**根本策は未実施（ユーザー判断待ち）**: 比率でなく「speech 窓の絶対数の下限」で判定する（可変長・
+無音水増しのチャンクでは比率の分母が不適切）。ただし `should_skip_vc` は vc と共有なので新指標は両ゲートに
+波及し、新 config knob も要る設計変更 → 独立した判断として提示済み。
+
+### （敵対的レビュー）ACP/GCP はゲートが mono downmix で判定するが送信は raw stereo — [`transcription.py`](../vspeech/worker/transcription.py)
+
+ゲートは `pcm_to_waveform`→`_pcm_to_float32_mono` で mono 化して VAD にかけるが、GCP/AMI は raw の
+多チャンネル WAV をクラウドへ送る。逆相ステレオ（L≈−R、一部の仮想オーディオ構成）だと mono downmix≈0 で
+VAD が無音判定して skip する一方、クラウドなら文字起こしできた。**今回直さなかった理由**: `channels>1`
+（既定は 1）かつ逆相という狭い縁ケース。whisper backend は元々 `pcm_to_waveform` 経由なのでゲートと一致し無関係。
 
 ---
 
