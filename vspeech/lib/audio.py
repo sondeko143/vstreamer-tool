@@ -40,10 +40,6 @@ def list_all_devices(input: bool = False, output: bool = False):
     return results
 
 
-def get_device_name(index: int) -> str:
-    return DeviceInfo.model_validate(dict(sd.query_devices(index))).name
-
-
 def get_device_info(index: int) -> DeviceInfo:
     return DeviceInfo.model_validate(dict(sd.query_devices(index)))
 
@@ -93,56 +89,72 @@ def search_device(
     return search_device_by_name(name, host_api_index, input=input, output=output)
 
 
+def _resolve_device(
+    *,
+    index: int | None,
+    index_key: str,
+    host_api_type: str | None,
+    host_api_key: str,
+    name: str | None,
+    name_key: str,
+    input: bool = False,
+    output: bool = False,
+) -> DeviceInfo:
+    """`resolve_input_device` / `resolve_output_device` の共有本体 (ADR-0038)。
+
+    index 指定があれば優先し、無ければ host_api / name で検索する。見つから
+    なければ DeviceNotFoundError（メッセージは呼び出し側の config key を含む）。
+    """
+    if index is not None:
+        try:
+            return get_device_info(index)
+        except Exception as e:
+            raise DeviceNotFoundError(f"{index_key}={index} が無効です: {e}") from e
+    device = search_device(
+        host_api_type=host_api_type,
+        name=name,
+        input=input,
+        output=output,
+    )
+    if device is None:
+        kind = "入力" if input else "出力"
+        raise DeviceNotFoundError(
+            f"{kind}デバイスが見つかりません "
+            f"({host_api_key}={host_api_type!r}, {name_key}={name!r})"
+        )
+    return device
+
+
 def resolve_input_device(config: RecordingConfig) -> DeviceInfo:
     """録音入力デバイスを解決する。見つからなければ DeviceNotFoundError。
 
-    preflight と recording worker が同じ経路を通る (ADR-0038)。index 指定が
-    あれば優先し、無ければ host_api / name で検索する。
+    preflight と recording worker が同じ経路を通る (ADR-0038)。
     """
-    if config.input_device_index is not None:
-        try:
-            return get_device_info(config.input_device_index)
-        except Exception as e:
-            raise DeviceNotFoundError(
-                f"recording.input_device_index={config.input_device_index} "
-                f"が無効です: {e}"
-            ) from e
-    device = search_device(
+    return _resolve_device(
+        index=config.input_device_index,
+        index_key="recording.input_device_index",
         host_api_type=config.input_host_api_name,
+        host_api_key="recording.input_host_api_name",
         name=config.input_device_name,
+        name_key="recording.input_device_name",
         input=True,
     )
-    if device is None:
-        raise DeviceNotFoundError(
-            "入力デバイスが見つかりません "
-            f"(recording.input_host_api_name={config.input_host_api_name!r}, "
-            f"recording.input_device_name={config.input_device_name!r})"
-        )
-    return device
 
 
 def resolve_output_device(config: PlaybackConfig) -> DeviceInfo:
-    """再生出力デバイスを解決する。見つからなければ DeviceNotFoundError。"""
-    if config.output_device_index is not None:
-        try:
-            return get_device_info(config.output_device_index)
-        except Exception as e:
-            raise DeviceNotFoundError(
-                f"playback.output_device_index={config.output_device_index} "
-                f"が無効です: {e}"
-            ) from e
-    device = search_device(
+    """再生出力デバイスを解決する。見つからなければ DeviceNotFoundError。
+
+    preflight と playback worker が同じ経路を通る (ADR-0038)。
+    """
+    return _resolve_device(
+        index=config.output_device_index,
+        index_key="playback.output_device_index",
         host_api_type=config.output_host_api_name,
+        host_api_key="playback.output_host_api_name",
         name=config.output_device_name,
+        name_key="playback.output_device_name",
         output=True,
     )
-    if device is None:
-        raise DeviceNotFoundError(
-            "出力デバイスが見つかりません "
-            f"(playback.output_host_api_name={config.output_host_api_name!r}, "
-            f"playback.output_device_name={config.output_device_name!r})"
-        )
-    return device
 
 
 def get_sd_dtype(format: SampleFormat) -> str:
