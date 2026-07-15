@@ -10,10 +10,13 @@ from typing import Any
 import click
 
 from vspeech.config import Config
+from vspeech.exceptions import ConfigError
 from vspeech.exceptions import WorkerShutdown
+from vspeech.exceptions import WorkerStartupError
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import configure_logger
 from vspeech.logger import logger
+from vspeech.preflight import preflight
 from vspeech.shared_context import SharedContext
 from vspeech.worker.receiver import create_receiver_task
 from vspeech.worker.sender import create_sender_task
@@ -66,6 +69,9 @@ async def vspeech_coro(config: Config):
                 from vspeech.worker.vc import create_vc_task
 
                 create_vc_task(tg=tg, context=context)
+    except* WorkerStartupError as eg:
+        for e in eg.exceptions:
+            logger.error("worker startup failed: %s", e)
     except* WorkerShutdown as eg:
         for e in eg.exceptions:
             logger.warning("workers shutdown: %s", e.args)
@@ -94,6 +100,13 @@ def cmd(config_file: IO[bytes] | None):
         max_samples=config.telemetry.max_samples,
         jsonl_path=config.telemetry.jsonl_path,
     )
+    try:
+        preflight(config)
+    except ConfigError as e:
+        logger.error("起動中止: 設定不備 %d 件", len(e.problems))
+        for problem in e.problems:
+            logger.error("  %s", problem)
+        exit(1)
     # 3.14 で get_event_loop() は running loop が無いと RuntimeError を投げる
     # (暗黙生成が撤廃された)。明示的に新しいループを作って current に据える。
     loop = new_event_loop()
