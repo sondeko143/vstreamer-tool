@@ -46,6 +46,15 @@ input_device_index = 0
 enable = true
 worker_type = "ACP"
 transliterate_with_mozc = false
+# Silero VAD スキップゲート (opt-in)。音声比率の低いチャンクを音声認識前に落とす。
+# vc.vad_* とは独立した設定 (同一感度にしたい場合は手動で揃える)。既定 OFF。
+vad_gate = false
+# vc と同じ silero_vad.onnx (v6.2.1) を指す。
+# vad_model_file = "~/.config/vstreamer/silero_vad.onnx"
+# speech 確率の閾値 (窓 32ms ごとにこれ以上で speech 扱い)。
+vad_threshold = 0.5
+# speech 窓の割合がこれ未満のチャンクは認識をスキップ (字幕・翻訳にも流れない)。
+vad_min_speech_ratio = 0.1
 
 [tts]
 enable = true
