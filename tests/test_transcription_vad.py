@@ -1,10 +1,15 @@
 from pathlib import Path
+from typing import TYPE_CHECKING
+from typing import cast
 
 import numpy as np
 
 from vspeech.config import SampleFormat
 from vspeech.config import TranscriptionConfig
 from vspeech.shared_context import SoundInput
+
+if TYPE_CHECKING:
+    from onnxruntime import InferenceSession
 
 
 def test_transcription_config_vad_defaults_are_off_and_sane():
@@ -57,7 +62,8 @@ async def test_vad_skip_low_speech_returns_true():
     cfg = TranscriptionConfig(
         vad_gate=True, vad_threshold=0.5, vad_min_speech_ratio=0.1
     )
-    assert await vad_should_skip(_StubVad(0.1), _sound_16k_int16(), cfg, "") is True
+    session = cast("InferenceSession", _StubVad(0.1))
+    assert await vad_should_skip(session, _sound_16k_int16(), cfg, "") is True
 
 
 async def test_vad_pass_high_speech_returns_false():
@@ -66,7 +72,8 @@ async def test_vad_pass_high_speech_returns_false():
     cfg = TranscriptionConfig(
         vad_gate=True, vad_threshold=0.5, vad_min_speech_ratio=0.1
     )
-    assert await vad_should_skip(_StubVad(0.9), _sound_16k_int16(), cfg, "") is False
+    session = cast("InferenceSession", _StubVad(0.9))
+    assert await vad_should_skip(session, _sound_16k_int16(), cfg, "") is False
 
 
 async def test_vad_exception_passes_through_ungated():
@@ -77,4 +84,5 @@ async def test_vad_exception_passes_through_ungated():
             raise RuntimeError("boom")
 
     cfg = TranscriptionConfig(vad_gate=True)
-    assert await vad_should_skip(_Boom(), _sound_16k_int16(), cfg, "") is False
+    session = cast("InferenceSession", _Boom())
+    assert await vad_should_skip(session, _sound_16k_int16(), cfg, "") is False
