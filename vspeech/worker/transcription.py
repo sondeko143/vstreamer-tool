@@ -35,6 +35,9 @@ from vspeech.exceptions import shutdown_worker
 from vspeech.lib.ami import parse_response
 from vspeech.lib.gcp import get_credentials
 from vspeech.lib.telemetry import telemetry
+from vspeech.lib.vad import create_vad_session
+from vspeech.lib.vad import should_skip_vc
+from vspeech.lib.vad import speech_probs
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
@@ -45,6 +48,7 @@ from vspeech.shared_context import WorkerOutput
 
 if TYPE_CHECKING:
     import numpy as np
+    from onnxruntime import InferenceSession
 
 
 WHISPER_SAMPLE_RATE = 16000
@@ -128,6 +132,23 @@ def pcm_to_waveform(sound: SoundInput) -> np.ndarray:
     if sound.rate != WHISPER_SAMPLE_RATE:
         samples = _resample_to_16k(samples, sound.rate)
     return samples
+
+
+def create_transcription_vad_session(
+    config: TranscriptionConfig,
+) -> InferenceSession | None:
+    """Build the Silero VAD session for the transcription skip gate, or None.
+
+    Returns None when the gate is disabled so the hot loop can cheaply skip it.
+    When enabled, a missing or malformed model raises inside create_vad_session
+    (fail loudly at startup, ADR-0019/0037) rather than silently passing every
+    chunk through. CPU-fixed session (ADR-0024 の意図的例外).
+    """
+    if not config.vad_gate:
+        return None
+    session = create_vad_session(config.vad_model_file)
+    logger.info("transcription vad gate enabled: %s", config.vad_model_file)
+    return session
 
 
 def join_transcribed_segments(segments: list, whisper_config: WhisperConfig) -> str:
