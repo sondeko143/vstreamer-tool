@@ -10,6 +10,7 @@ from io import BytesIO
 from logging import DEBUG
 from pathlib import Path
 from typing import TYPE_CHECKING
+from typing import assert_never
 from wave import Error as WavError
 from wave import open as wav_open
 
@@ -244,21 +245,37 @@ def _run_whisper(model, waveform, whisper_config: WhisperConfig) -> list:
     return list(segments)
 
 
+_rec_log_warned: set[str] = set()
+
+
 async def log_transcribed(log_dir_parent: Path, wav_file: BytesIO, text: str):
-    now = datetime.now()
-    log_dir = Path(log_dir_parent.expanduser() / now.strftime("%Y%m%d"))
-    log_dir.mkdir(exist_ok=True, parents=True)
-    log_wav_name = now.strftime("%Y%m%d%H%M%S.wav")
-    log_txt_name = now.strftime("%Y%m%d%H%M%S.txt")
-    async with aio_open(log_dir / log_wav_name, "wb") as log:
-        wav_file.seek(0)
-        await log.write(wav_file.read())
-    if not text:
-        return
-    async with aio_open(
-        log_dir / log_txt_name, "w", encoding="utf-8", errors="backslashreplace"
-    ) as log:
-        await log.write(text)
+    try:
+        now = datetime.now()
+        log_dir = Path(log_dir_parent.expanduser() / now.strftime("%Y%m%d"))
+        log_dir.mkdir(exist_ok=True, parents=True)
+        log_wav_name = now.strftime("%Y%m%d%H%M%S.wav")
+        log_txt_name = now.strftime("%Y%m%d%H%M%S.txt")
+        async with aio_open(log_dir / log_wav_name, "wb") as log:
+            wav_file.seek(0)
+            await log.write(wav_file.read())
+        if not text:
+            return
+        async with aio_open(
+            log_dir / log_txt_name, "w", encoding="utf-8", errors="backslashreplace"
+        ) as log:
+            await log.write(text)
+    except OSError as e:
+        # 録音ログは補助機能: 保存先が書込不可でもパイプラインは止めない (DEGRADE)。
+        key = str(log_dir_parent)
+        if key in _rec_log_warned:
+            logger.debug("recording_log 保存失敗 (継続): %s", e)
+        else:
+            _rec_log_warned.add(key)
+            logger.warning(
+                "recording_log を保存できません (%s) — ログ保存のみ無効化して継続: %s",
+                log_dir_parent,
+                e,
+            )
 
 
 def wav(sound: SoundInput, sample_size: int):
@@ -527,7 +544,7 @@ async def transcription_worker(
                     transcript_worker_whisper, whisper_config=context.config.whisper
                 )
             else:
-                raise ValueError("transcription worker type unknown.")
+                assert_never(config.worker_type)
             async for transcribed in generator(
                 config=context.config.transcription, in_queue=in_queue
             ):

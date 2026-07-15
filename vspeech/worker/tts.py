@@ -4,6 +4,7 @@ from asyncio import TaskGroup
 from asyncio import to_thread
 from functools import partial
 from typing import Any
+from typing import assert_never
 from typing import cast
 
 from emoji import demojize
@@ -146,7 +147,7 @@ async def tts_worker(
                 if not context.running.is_set():
                     await context.running.wait()
             else:
-                raise ValueError("tts worker type unknown.")
+                assert_never(config.worker_type)
     except CancelledError as e:
         raise shutdown_worker(e)
 

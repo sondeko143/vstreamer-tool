@@ -61,8 +61,6 @@ class RecordedUtterance:
 
 def utterance_capture_sec(frames: bytes, config: RecordingConfig) -> float:
     denom = get_sample_size(config.format) * config.channels * config.rate
-    if denom <= 0:
-        return 0.0
     return len(frames) / denom
 
 

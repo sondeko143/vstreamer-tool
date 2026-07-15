@@ -140,9 +140,9 @@ class RecordingConfig(BaseModel):
     enable: bool = False
     routes_list: RoutesList = Field(default_factory=lambda: [["transcription"]])
     format: SampleFormat = SampleFormat.INT16
-    channels: int = Field(default=1, description="recording channels")
-    rate: int = Field(default=16000, description="recording rate")
-    chunk: int = Field(default=1024, description="recording block size")
+    channels: int = Field(default=1, gt=0, description="recording channels")
+    rate: int = Field(default=16000, gt=0, description="recording rate")
+    chunk: int = Field(default=1024, gt=0, description="recording block size")
     interval_sec: float = Field(default=0.1, description="recording interval sec.")
     silence_threshold: int = Field(
         default=-40,

@@ -152,3 +152,18 @@ def test_join_transcribed_segments_drops_low_logprob_and_hot_temperature():
         _segment("採用", no_speech_prob=0.1, avg_logprob=-0.2, temperature=0.0),
     ]
     assert join_transcribed_segments(segments, config) == "採用"
+
+
+async def test_recording_log_write_failure_degrades(monkeypatch, tmp_path):
+    from io import BytesIO
+
+    from vspeech.worker import transcription as tx
+
+    def _boom(*a, **k):
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(tx.Path, "mkdir", _boom)
+    tx._rec_log_warned.clear()
+    # 例外を投げずに返る（プロセスを止めない）
+    await tx.log_transcribed(tmp_path, BytesIO(b"data"), "text")
+    assert str(tmp_path) in tx._rec_log_warned
