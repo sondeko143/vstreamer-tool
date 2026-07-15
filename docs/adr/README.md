@@ -54,3 +54,4 @@
 | [0034](0034-gui-corrupt-file-resilience.md) | 壊れた GUI 入力に対し対象別復旧＋非破壊退避で必ず起動する | Accepted | 2026-07-12 |
 | [0035](0035-bound-sender-reconnect-backoff.md) | sender の永続チャネルの再接続バックオフを有界化する（0004 を refine） | Accepted | 2026-07-15 |
 | [0036](0036-whisper-resample-via-pyav.md) | whisper のリサンプルに PyAV(libswresample) を使い torchaudio/scipy を却下する | Accepted | 2026-07-16 |
+| [0037](0037-transcription-vad-skip-gate.md) | Silero VAD スキップゲートを transcription パスへ拡張する（独立ワーカーを却下、0019 を拡張） | Proposed | 2026-07-16 |
