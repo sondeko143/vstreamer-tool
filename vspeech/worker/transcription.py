@@ -47,19 +47,87 @@ if TYPE_CHECKING:
     import numpy as np
 
 
-def pcm_to_waveform(sound: SoundInput) -> np.ndarray:
-    """Decode INT16 PCM bytes into a mono float32 waveform in [-1, 1].
+WHISPER_SAMPLE_RATE = 16000
 
-    faster-whisper accepts a float32 ndarray directly, so this lets the
-    transcription worker hand audio to the model without a temporary WAV
-    file on disk.
+
+def _pcm_to_float32_mono(sound: SoundInput) -> np.ndarray:
+    """Decode PCM bytes into a mono float32 signal in [-1, 1] at sound.rate.
+
+    Dispatch is keyed on ``sound.format`` (NOT byte width): UINT8 and INT8
+    share a width but differ in sign/bias, so a width-keyed table would decode
+    unsigned-8 as signed and skip its 128 offset (silence -> full-scale DC).
     """
     import numpy as np
 
-    samples = np.frombuffer(sound.data, dtype=np.int16).astype(np.float32) / 32768.0
+    fmt = sound.format
+    if fmt == SampleFormat.FLOAT32:
+        samples = np.frombuffer(sound.data, dtype=np.float32).astype(np.float32)
+    elif fmt == SampleFormat.UINT8:
+        # unsigned 8-bit PCM is biased by 128 (128 == silence).
+        samples = (
+            np.frombuffer(sound.data, dtype=np.uint8).astype(np.float32) - 128.0
+        ) / 128.0
+    elif fmt == SampleFormat.INT8:
+        samples = np.frombuffer(sound.data, dtype=np.int8).astype(np.float32) / 128.0
+    elif fmt == SampleFormat.INT16:
+        samples = np.frombuffer(sound.data, dtype=np.int16).astype(np.float32) / 32768.0
+    elif fmt == SampleFormat.INT24:
+        # 3-byte little-endian signed PCM -> sign-extended int32 -> [-1, 1).
+        b = np.frombuffer(sound.data, dtype=np.uint8).reshape(-1, 3).astype(np.int32)
+        as32 = b[:, 0] | (b[:, 1] << 8) | (b[:, 2] << 16)
+        as32 = (as32 ^ 0x800000) - 0x800000
+        samples = as32.astype(np.float32) / float(1 << 23)
+    else:
+        raise ValueError(f"unsupported PCM format for transcription: {fmt!r}")
     if sound.channels > 1:
         samples = samples.reshape(-1, sound.channels).mean(axis=1)
     return samples.astype(np.float32)
+
+
+def _resample_to_16k(samples: np.ndarray, src_rate: int) -> np.ndarray:
+    """Resample a mono float32 signal to 16 kHz with PyAV (libswresample).
+
+    faster-whisper resamples file/bytes input but never a raw ndarray, so a
+    non-16 kHz recording would otherwise reach the model at the wrong speed
+    and be transcribed as garbage. PyAV ships with faster-whisper, so this
+    needs no extra dependency (torchaudio/scipy are not in the `whisper`
+    extra, and the extra's `torch` is win32-only).
+    """
+    import av
+    import numpy as np
+
+    # An empty buffer would make PyAV push a 0-sample frame into swresample,
+    # which raises av.error.MemoryError (not a ValueError) and would escape the
+    # worker's catch and kill the TaskGroup. Return empty before touching PyAV.
+    if samples.size == 0:
+        return np.zeros(0, dtype=np.float32)
+
+    resampler = av.AudioResampler(format="flt", layout="mono", rate=WHISPER_SAMPLE_RATE)
+    frame = av.AudioFrame.from_ndarray(
+        np.ascontiguousarray(samples.reshape(1, -1)), format="flt", layout="mono"
+    )
+    frame.sample_rate = src_rate
+    out_frames = resampler.resample(frame) + resampler.resample(None)
+    if not out_frames:
+        return np.zeros(0, dtype=np.float32)
+    return np.concatenate([f.to_ndarray().reshape(-1) for f in out_frames]).astype(
+        np.float32
+    )
+
+
+def pcm_to_waveform(sound: SoundInput) -> np.ndarray:
+    """Decode PCM into a mono float32 waveform at 16 kHz for faster-whisper.
+
+    faster-whisper consumes a float32 ndarray as-is *at 16 kHz* (it only
+    resamples file/bytes input, never a raw array). We decode with the dtype
+    that matches sound.format, downmix to mono, and resample sound.rate ->
+    16 kHz when they differ -- without the resample a non-16 kHz recording
+    reaches the model at the wrong speed and is transcribed as garbage.
+    """
+    samples = _pcm_to_float32_mono(sound)
+    if sound.rate != WHISPER_SAMPLE_RATE:
+        samples = _resample_to_16k(samples, sound.rate)
+    return samples
 
 
 def join_transcribed_segments(segments: list, whisper_config: WhisperConfig) -> str:
