@@ -50,10 +50,12 @@ generator が再構築され `create_transcription_vad_session` が `FileNotFoun
 `transcription_worker` の `except CancelledError` に捕まらず TaskGroup を抜け、`main.py` の
 `except* WorkerShutdown` にも一致せず `exit(1)` → **同一ホストの playback/tts/vc/sender/receiver まで巻き込んで
 全落ち**。**vc ゲートと同一の挙動**（`vc.py:192` も worker 起動時に同じ crash 経路）で、ADR-0019 の
-「モデル不在は起動時 fail-loud」契約どおり。**今回直さなかった理由**: 起動時 fail-loud は意図どおり正しく、
-reload 時だけ「gate-off へ縮退＋loud error で存続」に変えると (a) vc と挙動が乖離し (b) ADR-0019 の契約を
-変える設計判断になる。**ユーザーに提示済み** — 両ゲートを reload-safe にするなら ADR-0019 を amend し、
-vc/transcription 両方の session 生成を外側 worker へ持ち上げる。
+「モデル不在は起動時 fail-loud」契約どおり。**対応: 現状維持（fail-loud のまま）に決定**。reload 時のみ
+gate-off へ縮退させる案を一度実装したが撤回した。起動時と reload で fail-loud を一貫させ、vc と transcription
+の挙動も揃える方をユーザーが選択（ADR-0019 の「モデル不在は起動時 fail-loud」契約を維持）。モデル未取得の
+ままゲートを有効化するのは設定ミスであり、パイプラインごと落として明示的に気づかせる方が望ましいという判断。
+将来 reload-safe にしたくなったら ADR-0019 を amend し、vc/transcription 両方の session 生成を外側 worker へ
+持ち上げる（＝撤回した実装）。
 
 ### （敵対的レビュー）skip 指標が「比率」なので silence-padding で短フィラーが落ちる — [`transcription.py`](../vspeech/worker/transcription.py) / [`lib/vad.py`](../vspeech/lib/vad.py)
 
