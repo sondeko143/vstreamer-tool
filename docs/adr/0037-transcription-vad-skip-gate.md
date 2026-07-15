@@ -1,6 +1,6 @@
 # 0037. Silero VAD スキップゲートを transcription パスへ拡張する（独立ワーカーを却下）
 
-- Status: Proposed
+- Status: Accepted (extends [ADR-0019](0019-vc-silero-vad-gate.md))
 - Date: 2026-07-16
 - Related: spec [2026-07-16-transcription-vad-skip-gate-design.md](../superpowers/specs/2026-07-16-transcription-vad-skip-gate-design.md); [ADR-0019](0019-vc-silero-vad-gate.md)（VC ゲート、本 ADR がスコープ拡張）; [ADR-0020](0020-silero-vad-v6.md)（モデル pin）; [ADR-0024](0024-onnx-session-single-factory.md)（VAD の CPU 固定例外）; [ADR-0036](0036-whisper-resample-via-pyav.md)（再利用する PyAV リサンプル経路）
 
