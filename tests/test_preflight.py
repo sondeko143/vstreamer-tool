@@ -134,3 +134,61 @@ def test_recording_bad_route_is_reported(monkeypatch):
     with pytest.raises(ConfigError) as ei:
         preflight(cfg)
     assert any("routes_list" in p.detail for p in ei.value.problems)
+
+
+def test_translation_missing_gcp_key_is_reported():
+    from vspeech.config import GcpConfig
+    from vspeech.config import TranslationConfig
+
+    cfg = Config(
+        translation=TranslationConfig(enable=True),
+        gcp=GcpConfig(service_account_file_path=Path("/no/such/key.json")),
+    )
+    with pytest.raises(ConfigError) as ei:
+        preflight(cfg)
+    assert any(p.worker == "translation" for p in ei.value.problems)
+
+
+def test_voicevox_missing_dirs_reported():
+    from vspeech.config import TtsConfig
+    from vspeech.config import TtsWorkerType
+    from vspeech.config import VoicevoxConfig
+
+    cfg = Config(
+        tts=TtsConfig(enable=True, worker_type=TtsWorkerType.VOICEVOX),
+        voicevox=VoicevoxConfig(
+            openjtalk_dir=Path("/no/dict"), model_dir=Path("/no/models")
+        ),
+    )
+    with pytest.raises(ConfigError) as ei:
+        preflight(cfg)
+    details = [p.detail for p in ei.value.problems]
+    assert any("voicevox.openjtalk_dir" in d for d in details)
+    assert any("voicevox.model_dir" in d for d in details)
+
+
+def test_vr2_tts_passes_without_files():
+    # VR2 は実初期化が層B。preflight は通す。
+    from vspeech.config import TtsConfig
+
+    preflight(Config(tts=TtsConfig(enable=True)))  # 既定 worker_type=VR2
+
+
+def test_vc_missing_model_files_reported():
+    from vspeech.config import RvcConfig
+    from vspeech.config import VcConfig
+
+    cfg = Config(
+        vc=VcConfig(enable=True),
+        rvc=RvcConfig(
+            model_file=Path("/no/model.onnx"),
+            hubert_model_file=Path("/no/hubert"),
+            rmvpe_model_file=Path("/no/rmvpe.onnx"),
+        ),
+    )
+    with pytest.raises(ConfigError) as ei:
+        preflight(cfg)
+    details = [p.detail for p in ei.value.problems]
+    assert any("rvc.model_file" in d for d in details)
+    assert any("rvc.hubert_model_file" in d for d in details)
+    assert any("rvc.rmvpe_model_file" in d for d in details)

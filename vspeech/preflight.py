@@ -10,9 +10,11 @@ from collections.abc import Callable
 from importlib.util import find_spec
 
 from vspeech.config import Config
+from vspeech.config import F0ExtractorType
 from vspeech.config import GcpConfig
 from vspeech.config import TranscriptionConfig
 from vspeech.config import TranscriptionWorkerType
+from vspeech.config import TtsWorkerType
 from vspeech.config import VcConfig
 from vspeech.exceptions import ConfigError
 from vspeech.exceptions import ConfigProblem
@@ -116,8 +118,72 @@ def _check_playback(config: Config) -> list[ConfigProblem]:
     return []
 
 
+def _check_translation(config: Config) -> list[ConfigProblem]:
+    if not config.translation.enable:
+        return []
+    return _check_gcp_credentials(config.gcp, "translation")
+
+
+def _check_tts(config: Config) -> list[ConfigProblem]:
+    if not config.tts.enable:
+        return []
+    if config.tts.worker_type != TtsWorkerType.VOICEVOX:
+        return []  # VR2 の実初期化は層B
+    w = "tts"
+    vv = config.voicevox
+    problems: list[ConfigProblem] = []
+    for name, path in (
+        ("voicevox.openjtalk_dir", vv.openjtalk_dir),
+        ("voicevox.model_dir", vv.model_dir),
+    ):
+        if not path.expanduser().is_dir():
+            problems.append(ConfigProblem(w, f"{name} '{path}' が存在しません"))
+    if (
+        vv.onnxruntime_path is not None
+        and not vv.onnxruntime_path.expanduser().is_file()
+    ):
+        problems.append(
+            ConfigProblem(
+                w, f"voicevox.onnxruntime_path '{vv.onnxruntime_path}' が存在しません"
+            )
+        )
+    return problems
+
+
+def _check_vc(config: Config) -> list[ConfigProblem]:
+    if not config.vc.enable:
+        return []
+    w = "vc"
+    rvc = config.rvc
+    problems: list[ConfigProblem] = []
+    if not rvc.model_file.expanduser().is_file():
+        problems.append(
+            ConfigProblem(w, f"rvc.model_file '{rvc.model_file}' が存在しません")
+        )
+    if not rvc.hubert_model_file.expanduser().is_dir():
+        problems.append(
+            ConfigProblem(
+                w,
+                f"rvc.hubert_model_file '{rvc.hubert_model_file}' "
+                "(資産ディレクトリ) が存在しません",
+            )
+        )
+    if rvc.f0_extractor_type == F0ExtractorType.rmvpe:
+        if not rvc.rmvpe_model_file.expanduser().is_file():
+            problems.append(
+                ConfigProblem(
+                    w, f"rvc.rmvpe_model_file '{rvc.rmvpe_model_file}' が存在しません"
+                )
+            )
+    problems.extend(_check_vad_gate(config.vc, w))
+    return problems
+
+
 _CHECKERS: list[Checker] = [
     _check_transcription,
+    _check_translation,
+    _check_tts,
+    _check_vc,
     _check_recording,
     _check_playback,
 ]
