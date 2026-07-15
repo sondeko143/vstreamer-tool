@@ -53,3 +53,4 @@
 | [0033](0033-gui-manifest-versioning.md) | GUI の version/migration を専用マニフェストに隔離し config は純粋 Config 形状を保つ | Accepted | 2026-07-12 |
 | [0034](0034-gui-corrupt-file-resilience.md) | 壊れた GUI 入力に対し対象別復旧＋非破壊退避で必ず起動する | Accepted | 2026-07-12 |
 | [0035](0035-bound-sender-reconnect-backoff.md) | sender の永続チャネルの再接続バックオフを有界化する（0004 を refine） | Accepted | 2026-07-15 |
+| [0036](0036-whisper-resample-via-pyav.md) | whisper のリサンプルに PyAV(libswresample) を使い torchaudio/scipy を却下する | Accepted | 2026-07-16 |
