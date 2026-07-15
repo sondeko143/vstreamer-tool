@@ -36,6 +36,8 @@ from vspeech.lib.ami import parse_response
 from vspeech.lib.gcp import get_credentials
 from vspeech.lib.telemetry import telemetry
 from vspeech.lib.vad import create_vad_session
+from vspeech.lib.vad import should_skip_vc
+from vspeech.lib.vad import speech_probs
 from vspeech.logger import logger
 from vspeech.shared_context import EventType
 from vspeech.shared_context import SharedContext
@@ -147,6 +149,42 @@ def create_transcription_vad_session(
     session = create_vad_session(config.vad_model_file)
     logger.info("transcription vad gate enabled: %s", config.vad_model_file)
     return session
+
+
+async def vad_should_skip(
+    vad_session: InferenceSession | None,
+    sound: SoundInput,
+    config: TranscriptionConfig,
+    trace_id: str,
+) -> bool:
+    """Return True if this chunk has too little speech to transcribe.
+
+    Reuses the vc gate's pure decision (should_skip_vc) on 16kHz probs from the
+    shared Silero model. Skip-only: transcription emits no audio, so there is no
+    output duck (unlike the vc path). Error handling is asymmetric (ADR-0019):
+    an inference failure passes the chunk through ungated (returns False) rather
+    than dropping speech. Returns False immediately when the gate is disabled.
+    """
+    if vad_session is None:
+        return False
+    try:
+        waveform = pcm_to_waveform(sound)
+        probs = await to_thread(speech_probs, vad_session, waveform)
+        skip, ratio = should_skip_vc(
+            probs, config.vad_threshold, config.vad_min_speech_ratio
+        )
+        if skip:
+            telemetry.record("transc_skip", ratio, trace_id=trace_id)
+            logger.info(
+                "transcription skipped: speech ratio %.3f < %.3f",
+                ratio,
+                config.vad_min_speech_ratio,
+            )
+            return True
+        return False
+    except Exception as e:  # noqa: BLE001 - gate failure must not drop speech
+        logger.warning("transcription vad gate failed; passing chunk ungated: %s", e)
+        return False
 
 
 def join_transcribed_segments(segments: list, whisper_config: WhisperConfig) -> str:
