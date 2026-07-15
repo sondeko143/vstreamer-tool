@@ -185,6 +185,11 @@ async def vad_should_skip(
     """
     if vad_session is None:
         return False
+    # Deferred edge case: the gate mono-downmixes (pcm_to_waveform) before VAD,
+    # but GCP/AMI upload the raw multi-channel WAV. Anti-phase stereo (L approx
+    # -R, some virtual-audio setups) downmixes to approx 0, so the gate can skip
+    # a chunk the cloud would have transcribed. Narrow: needs channels>1
+    # (default 1) AND anti-phase; whisper decodes via pcm_to_waveform too.
     try:
         probs = await to_thread(_vad_probs, vad_session, sound)
         skip, ratio = should_skip_vc(
@@ -305,6 +310,9 @@ async def transcript_worker_whisper(
         device_index=device.index,
     )
     logger.info("transcript worker [whisper] started")
+    # Created before warmup (like GCP/AMI, right after "started") so a missing
+    # VAD model fails loud before whisper's cold start, not after it.
+    vad_session = create_transcription_vad_session(config)
     # Warm up: pay the one-off cold-start cost (model graph build / kernel
     # compilation that happens on the first decode) at startup instead of
     # penalizing the first real utterance.
@@ -319,7 +327,6 @@ async def transcript_worker_whisper(
         logger.info("transcript worker [whisper] warmed up")
     except Exception as e:
         logger.warning("whisper warmup failed: %s", e)
-    vad_session = create_transcription_vad_session(config)
     while True:
         recorded = await in_queue.get()
         if await vad_should_skip(
@@ -328,6 +335,11 @@ async def transcript_worker_whisper(
             continue
         try:
             logger.debug("transcribing...")
+            # Deferred: vad_should_skip already decoded this chunk to 16kHz and
+            # discarded it; gate-passing chunks re-decode here. Only whisper
+            # pays it (ACP/GCP never call pcm_to_waveform), only on gate-pass,
+            # ~a few ms against downstream GPU inference. Returning the waveform
+            # from the gate ((skip, waveform)) isn't worth the signature churn.
             waveform = pcm_to_waveform(recorded.sound)
             with telemetry.timer("transcription", trace_id=recorded.trace_id):
                 segments = await to_thread(
@@ -436,6 +448,10 @@ async def transcript_worker_ami(
     logger.info("transcript worker [ami] started")
     vad_session = create_transcription_vad_session(config)
     while True:
+        # Deferred: the skip check runs inside this `async with`, so skipped
+        # chunks still build/tear down a client. AsyncClient opens no connection
+        # until the first request, so the cost is object creation only; hoist
+        # the client above the gate only if skip rates get high.
         async with AsyncClient(timeout=ami_config.request_timeout) as client:
             recorded = await in_queue.get()
             if await vad_should_skip(

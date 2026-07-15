@@ -104,7 +104,7 @@ class RemoteSender:
             self.queue.put_nowait(command)
         except QueueFull:
             try:
-                self.queue.get_nowait()  # 最古を破棄
+                self.queue.get_nowait()
                 logger.warning("drop oldest command for %s (queue full)", self.remote)
             except QueueEmpty:
                 pass

@@ -56,3 +56,4 @@
 | [0036](0036-whisper-resample-via-pyav.md) | whisper のリサンプルに PyAV(libswresample) を使い torchaudio/scipy を却下する | Accepted | 2026-07-16 |
 | [0037](0037-transcription-vad-skip-gate.md) | Silero VAD スキップゲートを transcription パスへ拡張する（独立ワーカーを却下、0019 を拡張） | Accepted (extends 0019) | 2026-07-16 |
 | [0038](0038-worker-config-preflight-fail-loud.md) | 設定不備は起動時 preflight で fail-loud に集約する（全 worker へ一般化、0019 を一般化） | Proposed | 2026-07-16 |
+| [0039](0039-whisper-hosts-need-cuda12-toolkit.md) | whisper GPU ホストに CUDA 12 ツールキット（cuBLAS + cuDNN 9）を要求する（0028 を refine） | Accepted | 2026-07-16 |

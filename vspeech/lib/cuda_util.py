@@ -6,6 +6,8 @@ import torch
 def get_device(gpu_id: int | None, gpu_name: str) -> tuple[torch.device, str]:
     # `gpu_id is not None` であって `gpu_id` ではない。0 は正当なデバイス番号であり、
     # 「未設定」を表すのは None（config.py の `gpu_id: int | None = None`）。
+    # gpu_id を先に見るので、両方設定された場合は gpu_id が gpu_name に優先する
+    # （意図的だが未テスト。実運用 config はどちらか一方しか設定しないため実害なし）。
     if gpu_id is not None and torch.cuda.is_available():
         prop = torch.cuda.get_device_properties(gpu_id)
         dev = torch.device("cuda", gpu_id)

@@ -172,6 +172,10 @@ def test_ort_output_to_torch_falls_back_to_numpy():
 
     from vspeech.lib.rvc import _ort_output_to_torch
 
+    # 繰り延べ: このスタブは _ortvalue も to_dlpack も持たないので、内側の
+    # `except AttributeError` が想定しない AttributeError で外側の `except Exception`
+    # に落ちて numpy fallback に至る。numpy 経路には到達するが「dlpack が無いので優雅に
+    # 迂回した」のか「dlpack が壊れている」のかをこのテストは区別できない。
     class _NoDlpack:
         def numpy(self):
             return np.arange(6, dtype=np.float32).reshape(1, 2, 3)
