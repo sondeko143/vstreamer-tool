@@ -86,3 +86,23 @@ async def test_vad_exception_passes_through_ungated():
     cfg = TranscriptionConfig(vad_gate=True)
     session = cast("InferenceSession", _Boom())
     assert await vad_should_skip(session, _sound_16k_int16(), cfg, "") is False
+
+
+async def test_vad_skip_records_transc_skip_telemetry():
+    from vspeech.lib.telemetry import telemetry
+    from vspeech.worker.transcription import vad_should_skip
+
+    cfg = TranscriptionConfig(
+        vad_gate=True, vad_threshold=0.5, vad_min_speech_ratio=0.1
+    )
+    session = cast("InferenceSession", _StubVad(0.1))
+    telemetry.reset()
+    telemetry.configure(enabled=True, max_samples=100)
+    try:
+        assert await vad_should_skip(session, _sound_16k_int16(), cfg, "t") is True
+        summary = telemetry.summary()
+        assert "transc_skip" in summary
+        assert summary["transc_skip"]["count"] == 1.0
+    finally:
+        telemetry.reset()
+        telemetry.configure(enabled=False, max_samples=5000)

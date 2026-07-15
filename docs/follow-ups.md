@@ -7,6 +7,43 @@
 
 ---
 
+## transcription VAD スキップゲート（branch `feat/transcription-vad-skip-gate`、2026-07-16）
+
+設計: [docs/superpowers/specs/2026-07-16-transcription-vad-skip-gate-design.md](superpowers/specs/2026-07-16-transcription-vad-skip-gate-design.md) / 決定: [ADR-0037](adr/0037-transcription-vad-skip-gate.md)
+
+transcription ワーカーに opt-in の Silero VAD skip 判定を足した（vc は無変更、skip のみ、`lib/vad.py` 再利用）。
+最終 whole-branch レビュー（opus）で出たが、このブランチのスコープ外として繰り延べた項目。いずれも Minor。
+
+### whisper 経路で `pcm_to_waveform` が二重に走る — [`transcription.py`](../vspeech/worker/transcription.py)
+
+`vad_should_skip` 内で 16k 波形を作り、skip されなかったチャンクは whisper 本体でもう一度同じ bytes を
+デコード/リサンプルする（最初の波形は捨てる）。**今回直さなかった理由**: whisper backend 限定かつゲート
+有効かつ通過チャンクのときだけで、コストは数 ms（後段の whisper GPU 推論に対して無視可能）。消すには
+`vad_should_skip` が波形も返す（`(skip, waveform)`）形にしてシグネチャを複雑化する必要があり、利得に見合わない。
+ACP/GCP は raw PCM を使うので無関係。
+
+### AMI backend が skip するチャンクにも httpx クライアントを開く — [`transcription.py`](../vspeech/worker/transcription.py)
+
+skip チェックが `async with AsyncClient(...)` の内側にあるため、skip されるチャンクごとに使わない
+クライアントを生成/破棄する。**今回直さなかった理由**: `AsyncClient()` は最初のリクエストまで接続を開かないので
+実コストはオブジェクト生成のみ。skip 前に `async with` の外へ出すのが綺麗だが、skip 率が高くなったときの
+最適化候補として繰り延べ。
+
+### whisper だけ fail-loud のタイミングが遅い — [`transcription.py`](../vspeech/worker/transcription.py)
+
+VAD セッション生成を whisper backend では WhisperModel ロード + warmup の後に置いたため、VAD モデル欠如の
+クラッシュが whisper コールドスタートの後になる（GCP/AMI は "started" 直後）。**今回直さなかった理由**:
+どちらも「起動時・チャンク処理前」で受入基準は満たす。速く落としたいなら
+`create_transcription_vad_session(config)` をモデルロードより前へ上げるだけの並べ替え。
+
+### `transcription.vad_threshold` / `vad_min_speech_ratio` に範囲バリデーションが無い — [`config.py`](../vspeech/config.py)
+
+`ge=0, le=1` の境界が無い（既存の `vc.vad_*` と同形にそろえた）。範囲外でも degenerate だが安全
+（常に skip / 常に通す）でクラッシュはしない。**今回直さなかった理由**: shipped の vc 側との一貫を優先。
+両方に足すなら別途まとめて。
+
+---
+
 ## GUI 全面書き直し（マルチ pipeline、branch `feat/gui-multi-pipeline`、2026-07-12）
 
 設計: [docs/superpowers/specs/2026-07-12-gui-multi-pipeline-rewrite-design.md](superpowers/specs/2026-07-12-gui-multi-pipeline-rewrite-design.md)
