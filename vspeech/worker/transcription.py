@@ -292,8 +292,13 @@ async def transcript_worker_whisper(
         logger.info("transcript worker [whisper] warmed up")
     except Exception as e:
         logger.warning("whisper warmup failed: %s", e)
+    vad_session = create_transcription_vad_session(config)
     while True:
         recorded = await in_queue.get()
+        if await vad_should_skip(
+            vad_session, recorded.sound, config, recorded.trace_id
+        ):
+            continue
         try:
             logger.debug("transcribing...")
             waveform = pcm_to_waveform(recorded.sound)
@@ -342,8 +347,13 @@ async def transcript_worker_google(
     credentials, _ = get_credentials(gcp_config)
     client = SpeechAsyncClient(credentials=credentials)
     logger.info("transcript worker [google] started")
+    vad_session = create_transcription_vad_session(config)
     while True:
         recorded = await in_queue.get()
+        if await vad_should_skip(
+            vad_session, recorded.sound, config, recorded.trace_id
+        ):
+            continue
         try:
             sample_size = get_sample_size(recorded.sound.format)
             with wav(recorded.sound, sample_size=sample_size) as wav_file:
@@ -397,9 +407,14 @@ async def transcript_worker_ami(
     in_queue: Queue[WorkerInput],
 ) -> AsyncGenerator[WorkerOutput]:
     logger.info("transcript worker [ami] started")
+    vad_session = create_transcription_vad_session(config)
     while True:
         async with AsyncClient(timeout=ami_config.request_timeout) as client:
             recorded = await in_queue.get()
+            if await vad_should_skip(
+                vad_session, recorded.sound, config, recorded.trace_id
+            ):
+                continue
             try:
                 sample_size = get_sample_size(recorded.sound.format)
                 with wav(recorded.sound, sample_size=sample_size) as wav_file:
