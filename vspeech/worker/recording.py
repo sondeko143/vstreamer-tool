@@ -20,6 +20,7 @@ from vspeech.config import EventType
 from vspeech.config import RecordingConfig
 from vspeech.config import get_sample_size
 from vspeech.exceptions import shutdown_worker
+from vspeech.exceptions import worker_startup
 from vspeech.lib.audio import get_sd_dtype
 from vspeech.lib.audio import resolve_input_device
 from vspeech.lib.telemetry import telemetry
@@ -85,7 +86,8 @@ async def sd_recording_worker(
         total_seconds_of_this_recording = 0
         status = "waiting"
         last_voice_ts = perf_counter()
-        stream = open_input_stream(config)
+        with worker_startup("recording"):
+            stream = open_input_stream(config)
         sample_width = get_sample_size(config.format)
         n_move_avg_amp = config.gradually_stopping_interval
         approx_max_amps: list[float] = []

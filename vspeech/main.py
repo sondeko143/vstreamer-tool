@@ -115,6 +115,8 @@ def cmd(config_file: IO[bytes] | None):
         loop.run_until_complete(vspeech_coro(config=config))
         loop.stop()
         loop.close()
+        # 正常終了はしない: 全 worker 停止 or startup 失敗 (except* で処理済) は
+        # 必ず異常終了させる (fail-loud, ADR-0038)。
         exit(1)
     except (KeyboardInterrupt, CancelledError) as e:
         logger.exception(e)

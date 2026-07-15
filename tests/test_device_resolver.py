@@ -43,3 +43,4 @@ def test_output_resolver_raises_named_error_when_missing(monkeypatch):
     with pytest.raises(DeviceNotFoundError) as ei:
         audio.resolve_output_device(cfg)
     assert "output_device_name" in str(ei.value)
+    assert "Ghost" in str(ei.value)

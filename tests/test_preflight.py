@@ -203,3 +203,44 @@ def test_vc_missing_model_files_reported():
     assert any("rvc.model_file" in d for d in details)
     assert any("rvc.hubert_model_file" in d for d in details)
     assert any("rvc.rmvpe_model_file" in d for d in details)
+
+
+def test_vc_all_present_passes(tmp_path):
+    from vspeech.config import RvcConfig
+    from vspeech.config import VcConfig
+
+    model = tmp_path / "model.onnx"
+    model.write_bytes(b"x")
+    hubert = tmp_path / "hubert"
+    hubert.mkdir()
+    rmvpe = tmp_path / "rmvpe.onnx"
+    rmvpe.write_bytes(b"x")
+    cfg = Config(
+        vc=VcConfig(enable=True),
+        rvc=RvcConfig(
+            model_file=model, hubert_model_file=hubert, rmvpe_model_file=rmvpe
+        ),
+    )
+    preflight(cfg)  # all present -> no ConfigError
+
+
+def test_vc_non_rmvpe_extractor_skips_rmvpe_check(tmp_path):
+    from vspeech.config import F0ExtractorType
+    from vspeech.config import RvcConfig
+    from vspeech.config import VcConfig
+
+    model = tmp_path / "model.onnx"
+    model.write_bytes(b"x")
+    hubert = tmp_path / "hubert"
+    hubert.mkdir()
+    # rmvpe_model_file left at its (missing) default; a non-rmvpe extractor must
+    # NOT trigger the rmvpe existence check.
+    cfg = Config(
+        vc=VcConfig(enable=True),
+        rvc=RvcConfig(
+            model_file=model,
+            hubert_model_file=hubert,
+            f0_extractor_type=F0ExtractorType.dio,
+        ),
+    )
+    preflight(cfg)  # rmvpe not checked -> no ConfigError
