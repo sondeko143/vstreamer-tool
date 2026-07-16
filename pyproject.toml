@@ -24,6 +24,10 @@ dependencies = [
     "colorlog>=6.7.0,<7",
     "emoji>=2.6.0,<3",
     "ctranslate2>=4.6.1,<5",
+    # obs-websocket 5.x クライアント (ADR-0043)。依存ゼロ。websockets の API 変更
+    # (websockets.client.connect -> websockets.asyncio.client.connect) の影響は
+    # lib/obs_ws.py に閉じ込める。
+    "websockets>=14,<17",
     # 3.13+ で stdlib から外れる audioop の後方移植 (C ポート)。recording/playback/vc の
     # 音量・dBFS 経路が `import audioop` のまま、飽和セマンティクスを保ったまま動く。
     "audioop-lts ; python_version >= '3.13'",
