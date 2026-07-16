@@ -1,8 +1,9 @@
+from vspeech.config import Anchor
 from vspeech.config import SubtitleTextConfig
-from vspeech.worker import subtitle as subtitle_mod
-from vspeech.worker.subtitle import Text
-from vspeech.worker.subtitle import Texts
-from vspeech.worker.subtitle import redraw_panel
+from vspeech.lib.subtitle_state import Text
+from vspeech.lib.subtitle_state import Texts
+from vspeech.worker import subtitle_tk as subtitle_tk_mod
+from vspeech.worker.subtitle_tk import redraw_panel
 
 
 class FakeCanvas:
@@ -17,8 +18,16 @@ class FakeCanvas:
     def pack(self):
         self.events.append(("pack",))
 
+    def create_text(self, *args, **kwargs):
+        # Unused: draw_text_with_outline (the only caller) is monkeypatched out
+        # in these tests. Present only so FakeCanvas satisfies redraw_panel's
+        # `_SubtitleCanvas` parameter type.
+        self.events.append(("create_text", args, kwargs))
 
-def make_panel(anchor: str = "s", bb_width: int = 300, bb_height: int = 200) -> Texts:
+
+def make_panel(
+    anchor: Anchor = "s", bb_width: int = 300, bb_height: int = 200
+) -> Texts:
     panel = Texts(
         tag="text",
         anchor=anchor,
@@ -38,7 +47,7 @@ def install_recording_draw(monkeypatch, events: list) -> dict:
         events.append(("draw",))
         captured.update(kwargs)
 
-    monkeypatch.setattr(subtitle_mod, "draw_text_with_outline", fake_draw)
+    monkeypatch.setattr(subtitle_tk_mod, "draw_text_with_outline", fake_draw)
     return captured
 
 

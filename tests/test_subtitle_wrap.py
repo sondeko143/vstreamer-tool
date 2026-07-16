@@ -1,4 +1,4 @@
-from vspeech.worker.subtitle import wrap_text_to_width
+from vspeech.worker.subtitle_tk import wrap_text_to_width
 
 
 def fixed_width(px_per_char: int):

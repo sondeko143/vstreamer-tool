@@ -94,6 +94,11 @@ class TtsWorkerType(Enum):
     VOICEVOX = "VOICEVOX"
 
 
+class SubtitleWorkerType(Enum):
+    TK = "TK"
+    OBS = "OBS"
+
+
 class VR2Param(BaseModel):
     volume: float = 1.0
     speed: float = 1.0
@@ -218,6 +223,7 @@ class SubtitleTextConfig(BaseModel):
 
 class SubtitleConfig(BaseModel):
     enable: bool = False
+    worker_type: SubtitleWorkerType = SubtitleWorkerType.TK
     window_width: int = 1600
     window_height: int = 120
     bg_color: str = "#00ff00"
