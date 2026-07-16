@@ -5,6 +5,7 @@ from asyncio import Task
 from asyncio import TaskGroup
 from asyncio import sleep
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field
 from functools import partial
@@ -38,6 +39,41 @@ def update_display_sec(
     return current_sec + add_sec
 
 
+def wrap_text_to_width(text: str, measure: Callable[[str], int], max_width: int) -> str:
+    """Hard-wrap `text` so no line measures wider than `max_width`.
+
+    `measure` maps a string to its rendered pixel width (e.g. `Font.measure`);
+    injecting it keeps this function pure and Tk-free. `max_width <= 0` disables
+    wrapping and returns `text` unchanged. Existing newlines are preserved and
+    each source line is wrapped independently; a single character that alone
+    exceeds `max_width` is still kept (never dropped) on its own line.
+    """
+    if max_width <= 0:
+        return text
+    wrapped_lines: list[str] = []
+    for line in text.split("\n"):
+        if not line:
+            wrapped_lines.append("")
+            continue
+        if measure(line) <= max_width:
+            wrapped_lines.append(line)
+            continue
+        current_line = ""
+        for char in line:
+            if not current_line:
+                current_line = char
+                continue
+            test_line = current_line + char
+            if measure(test_line) <= max_width:
+                current_line = test_line
+            else:
+                wrapped_lines.append(current_line)
+                current_line = char
+        if current_line:
+            wrapped_lines.append(current_line)
+    return "\n".join(wrapped_lines)
+
+
 def draw_text_with_outline(
     canvas: Canvas,
     text_coord_x: float,
@@ -57,29 +93,7 @@ def draw_text_with_outline(
         weight="bold" if config.font_style.lower() == "bold" else "normal",
     )
 
-    if max_width > 0:
-        wrapped_lines = []
-        for line in texts.split("\n"):
-            if not line:
-                wrapped_lines.append("")
-                continue
-            if font_tuple.measure(line) <= max_width:
-                wrapped_lines.append(line)
-            else:
-                current_line = ""
-                for char in line:
-                    if not current_line:
-                        current_line = char
-                        continue
-                    test_line = current_line + char
-                    if font_tuple.measure(test_line) <= max_width:
-                        current_line = test_line
-                    else:
-                        wrapped_lines.append(current_line)
-                        current_line = char
-                if current_line:
-                    wrapped_lines.append(current_line)
-        texts = "\n".join(wrapped_lines)
+    texts = wrap_text_to_width(texts, font_tuple.measure, max_width)
 
     justify_val = "center"
     if "e" in anchor:
@@ -173,6 +187,26 @@ class Texts:
             return self.config.delimiter.join(t.value for t in self.values)
 
 
+def redraw_panel(canvas: Canvas, ts: Texts):
+    """Clear the panel's previous text for its tag and draw its current state.
+
+    Deletes before drawing so successive frames don't stack, and packs so the
+    canvas re-lays out. `max_width` reserves a `margin`-wide gutter each side.
+    """
+    canvas.delete(ts.tag)
+    draw_text_with_outline(
+        canvas=canvas,
+        texts=ts.texts,
+        text_coord_x=ts.coord_x,
+        text_coord_y=ts.coord_y,
+        text_tag=ts.tag,
+        anchor=ts.anchor,
+        config=ts.config,
+        max_width=ts.bb_width - ts.config.margin * 2,
+    )
+    canvas.pack()
+
+
 def how_many_should_we_pop(texts: deque[Text], max_length: int):
     total_length = 0
     for idx, text in enumerate(reversed(texts)):
@@ -180,6 +214,31 @@ def how_many_should_we_pop(texts: deque[Text], max_length: int):
         if total_length > max_length:
             return len(texts) - (idx + 1)
     return 0
+
+
+def ingest_text(texts: dict[str, Texts], message: WorkerInput) -> Texts:
+    """Route an inbound message to its panel, append it, and trim overflow.
+
+    Picks the panel named by the message's `position` param, falling back to the
+    "n" panel when it is unset/unknown. Appends the text as a new entry whose
+    display duration comes from `update_display_sec`, then drops the oldest
+    entries that overflow `max_text_len`. Returns the panel that needs redrawing.
+    """
+    position = message.current_event.params.position
+    ts = texts[position] if position in texts else texts["n"]
+    t = Text()
+    t.display_remain_sec = update_display_sec(
+        current_sec=t.display_remain_sec,
+        current_text=t.value,
+        add_text=message.text,
+        config=ts.config,
+    )
+    t.value = message.text
+    ts.values.append(t)
+    n_pop = how_many_should_we_pop(ts.values, max_length=ts.config.max_text_len)
+    for _ in range(n_pop):
+        ts.values.popleft()
+    return ts
 
 
 async def subtitle_worker(
@@ -239,53 +298,12 @@ async def subtitle_worker(
                 t.display_remain_sec = max(t.display_remain_sec - interval_sec, 0)
                 if t.display_remain_sec <= 0:
                     texts[p].values.popleft()
-                    canvas.delete(texts[p].tag)
-                    draw_text_with_outline(
-                        canvas=canvas,
-                        texts=texts[p].texts,
-                        text_coord_x=texts[p].coord_x,
-                        text_coord_y=texts[p].coord_y,
-                        text_tag=texts[p].tag,
-                        anchor=texts[p].anchor,
-                        config=texts[p].config,
-                        max_width=texts[p].bb_width - texts[p].config.margin * 2,
-                    )
-                    canvas.pack()
+                    redraw_panel(canvas, texts[p])
             tk_root.update()
             await sleep(interval_sec)
             try:
-                unprocessed_text = in_queue.get_nowait()
-                p = unprocessed_text.current_event.params.position
-                if p in texts:
-                    ts = texts[p]
-                else:
-                    ts = texts["n"]
-                t = Text()
-                t.display_remain_sec = update_display_sec(
-                    current_sec=t.display_remain_sec,
-                    current_text=t.value,
-                    add_text=unprocessed_text.text,
-                    config=ts.config,
-                )
-                t.value = unprocessed_text.text
-                ts.values.append(t)
-                n_pop = how_many_should_we_pop(
-                    ts.values, max_length=ts.config.max_text_len
-                )
-                for _ in range(n_pop):
-                    ts.values.popleft()
-                canvas.delete(ts.tag)
-                draw_text_with_outline(
-                    canvas=canvas,
-                    texts=ts.texts,
-                    text_coord_x=ts.coord_x,
-                    text_coord_y=ts.coord_y,
-                    text_tag=ts.tag,
-                    anchor=ts.anchor,
-                    config=ts.config,
-                    max_width=ts.bb_width - ts.config.margin * 2,
-                )
-                canvas.pack()
+                message = in_queue.get_nowait()
+                redraw_panel(canvas, ingest_text(texts, message))
             except QueueEmpty:
                 pass
     except Exception as e:
