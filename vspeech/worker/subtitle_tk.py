@@ -126,6 +126,18 @@ def draw_text_with_outline(
 
     texts = wrap_text_to_width(texts, font_tuple.measure, max_width)
 
+    # BUG (pre-existing, deliberately not fixed on this branch): `anchor="center"`
+    # lands on `"right"`, because "center" contains an "e" and this substring test
+    # has no `anchor == "center"` guard. `Texts.coord_x` / `coord_y` in
+    # lib/subtitle_state DO guard it first, so only `justify` is affected — the
+    # inconsistency inside the same feature is why this reads as an oversight
+    # rather than intent. `justify` only affects wrapped (multi-line) text, and
+    # the shipped config never sets `anchor="center"` (SubtitleConfig defaults
+    # text→"s", translated→"n"), so it takes an explicit config edit plus a line
+    # that wraps to see it. Left alone because changing TK behaviour is an
+    # explicit non-goal of the OBS-backend branch (ADR-0040); lib/obs_text_settings
+    # .anchor_to_align reproduces it verbatim so the two backends still agree
+    # (ADR-0041). Fixing it means adding the guard in BOTH places at once.
     justify_val: Literal["left", "center", "right"] = "center"
     if "e" in anchor:
         justify_val = "right"
