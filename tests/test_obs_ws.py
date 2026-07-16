@@ -493,10 +493,12 @@ async def test_request_raises_obs_protocol_error_when_comment_is_not_a_string():
 # --- fix pass 5, finding 1 (Critical): repr() 自体が RecursionError を漏らす。
 # fix pass 4 で json.loads() の RecursionError は拾うようになったが、その後
 # 「壊れたメッセージを報告する」ためにエラーメッセージの中で repr() を呼んで
-# いる箇所 (message!r / auth!r / d!r / status!r / response_data!r、計 6 箇所)
-# が同じ問題を持っていた: ネストの深い値の repr() 自体が RecursionError を
-# 送出し、ObsProtocolError を組み立てている最中に素の RecursionError
-# (RuntimeError のサブクラスで許容集合の外) が漏れる。
+# いる箇所 (message!r が 2 箇所 / auth!r が 2 箇所 / d!r / status!r /
+# response_data!r、計 7 箇所) が同じ問題を持っていた: ネストの深い値の
+# repr() 自体が RecursionError を送出し、ObsProtocolError を組み立てている
+# 最中に素の RecursionError (RuntimeError のサブクラスで許容集合の外) が
+# 漏れる。(fix pass 6 で message['op'] の 2 箇所が同じ形で見つかり、計 9 箇所
+# になった — 該当セクションを参照。)
 #
 # 既存のテストはすべて **配列** ("[" * N + "]" * N) のネストを使っていたが、
 # 配列は json.loads() 側が先に力尽きる (~11400 段) ので repr() まで生きて
@@ -658,6 +660,197 @@ async def test_request_raises_obs_protocol_error_when_code_is_a_bool():
     assert not isinstance(e.value, ObsRequestError)
 
 
+# --- fix pass 6, finding 1 (Critical): `op`'s *value* is interpolated raw at
+# the Hello guard and the Identified guard in identify() (the two
+# `op={message['op']} が来た` f-strings). `_recv()` only proves
+# `"op" in message` — nothing constrains the *value*, and an f-string's
+# `{x}` calls format() -> dict.__repr__ exactly like `!r` does, so this is
+# the same repr()-recursion / unbounded-size hazard fix pass 5 closed for
+# message/auth/d/status/response_data, just spelled without `!r` (which is
+# why an audit shaped around bare `repr()`/`!r` call sites missed it).
+#
+# All 11 IDENTIFY_HOSTILE_HELLOS rows above vary d/authentication; the only
+# row that touches op (`op_missing`) *removes* the key rather than making
+# its *value* hostile. These are the first tests that make op itself a
+# hostile value, at both sites where it is interpolated into a message.
+_DEEPLY_NESTED_JSON_OBJECT_AS_OP = '{"op":' + _DEEPLY_NESTED_JSON_OBJECT + ',"d":{}}'
+
+
+async def test_identify_raises_obs_identify_error_on_deeply_nested_op_at_hello():
+    # identify() の 1 回目の _recv() (Hello ガード) を直撃する。
+    server = FakeObsServer(greet=False)
+    server.inject_raw(_DEEPLY_NESTED_JSON_OBJECT_AS_OP)
+    with pytest.raises(ObsIdentifyError):
+        await ObsWsClient(server).identify("")
+
+
+async def test_identify_raises_obs_identify_error_on_deeply_nested_op_at_identified():
+    # identify() の 2 回目の _recv() (Identified ガード) を直撃する。
+    # require_auth=False の FakeObsServer は構築時に正規の Hello (op=0) を
+    # 1 通目として積むので identify() の 1 通目はそのまま消費され認証も
+    # 不要になり、事前に inject_raw() で積んだ hostile な op が 2 通目として
+    # (送信直後にサーバが積む本物の Identified 応答より先に) 消費される。
+    server = FakeObsServer(require_auth=False)
+    server.inject_raw(_DEEPLY_NESTED_JSON_OBJECT_AS_OP)
+    with pytest.raises(ObsIdentifyError):
+        await ObsWsClient(server).identify("")
+
+
+async def test_identify_error_message_is_bounded_when_op_is_a_huge_string_at_hello():
+    server = FakeObsServer(greet=False)
+    server.inject({"op": "x" * 500000, "d": {}})
+    with pytest.raises(ObsIdentifyError) as e:
+        await ObsWsClient(server).identify("")
+    assert len(str(e.value)) < 500
+
+
+async def test_identify_error_message_is_bounded_when_op_is_a_huge_string_at_identified():
+    server = FakeObsServer(require_auth=False)
+    server.inject({"op": "x" * 500000, "d": {}})
+    with pytest.raises(ObsIdentifyError) as e:
+        await ObsWsClient(server).identify("")
+    assert len(str(e.value)) < 500
+
+
+# --- fix pass 6, finding 2 (Important): ObsRequestError.comment is the last
+# unbounded peer->message path. A 500 KB comment must not become a 500 KB
+# exception (and, downstream, a 500 KB retry-loop log line).
+def _comment_is_a_huge_string(rid: str) -> str:
+    return json.dumps(
+        {
+            "op": 7,
+            "d": {
+                "requestId": rid,
+                "requestType": "X",
+                "requestStatus": {
+                    "result": False,
+                    "code": 400,
+                    "comment": "x" * 500000,
+                },
+                "responseData": {},
+            },
+        }
+    )
+
+
+async def test_request_error_message_is_bounded_when_comment_is_a_huge_string():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server)
+    await client.identify("")
+    server.script_raw_response(_comment_is_a_huge_string)
+    with pytest.raises(ObsRequestError) as e:
+        await client.request("SetInputSettings", {"inputName": "x"})
+    assert len(str(e.value)) < 500
+
+
+# --- fix pass 6, finding 4: peer-controlled-field enumeration and coverage.
+# Fields whose *value* the peer picks that reach a message or a comparison
+# in this module:
+#   op (message['op'])             -- newly covered above (message, 2 sites)
+#                                      and below (comparison, request() side)
+#   d (message['d'])                -- already covered (fix pass 4/5):
+#                                      comparison (isinstance) + message
+#   authentication / auth           -- already covered (fix pass 2-5):
+#                                      comparison (isinstance) + message
+#   salt / challenge                -- already covered (fix pass 3-4):
+#                                      comparison (isinstance); the only
+#                                      message built from them is
+#                                      UnicodeError's own str(e), which is
+#                                      bounded regardless of input length
+#   requestId (d.get('requestId'))  -- comparison only, never a message.
+#                                      Covered below: a mismatched type
+#                                      doesn't crash the `!=` comparison
+#                                      (differing types -> NotImplemented ->
+#                                      identity fallback, no repr()/no
+#                                      nested traversal), it is simply
+#                                      ignored like any other mismatch.
+#   requestStatus / status          -- already covered (fix pass 4/5):
+#                                      comparison (isinstance) + message
+#   code                             -- reaches a message (ObsRequestError)
+#                                      and a comparison (== 600), but only
+#                                      isinstance(int) is checked, not digit
+#                                      count. Covered below: JSON integer
+#                                      literals go through json.loads(),
+#                                      which itself enforces CPython's
+#                                      int<->str conversion limit (default
+#                                      4300 digits) and raises ValueError
+#                                      before `code` can ever be bound to a
+#                                      value that large — already caught by
+#                                      _recv()'s existing
+#                                      `except (ValueError, RecursionError)`.
+#   comment                          -- reaches a message; fixed above
+#                                      (finding 2)
+#   responseData                    -- already covered (fix pass 4/5):
+#                                      comparison (isinstance) + message
+#   requestType                     -- caller-controlled (the subtitle
+#                                      worker's own literal, e.g.
+#                                      "GetInputSettings"), not peer-
+#                                      controlled; out of scope
+#   result (status.get('result'))   -- only reaches `if not status.get(...)`,
+#                                      i.e. bool(). dict/list.__bool__() is
+#                                      an O(1) len() check that never
+#                                      recurses into the value's contents,
+#                                      so it has no repr()-style recursion
+#                                      window; no dedicated test needed.
+
+
+# inject_raw() で「本物の応答より前に届くメッセージ」として積む生フレーム
+# なので、実際の requestId を知る必要が無い (どうせ一致しない値にする)。
+_REQUEST_ID_IS_DEEPLY_NESTED_OBJECT = (
+    '{"op":7,"d":{"requestId":'
+    + _DEEPLY_NESTED_JSON_OBJECT
+    + ',"requestType":"X","requestStatus":{"result":true},"responseData":{}}}'
+)
+
+
+async def test_request_ignores_a_deeply_nested_request_id_without_crashing():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server, timeout=0.05)
+    await client.identify("")
+    server.inject_raw(_REQUEST_ID_IS_DEEPLY_NESTED_OBJECT)
+    server.script_response(data={"mine": True})
+    got = await client.request("GetInputSettings", {"inputName": "x"})
+    assert got == {"mine": True}
+
+
+async def test_request_ignores_a_deeply_nested_op_event_without_crashing():
+    # request() 側の同じ op 比較 (`message["op"] != OP_REQUEST_RESPONSE`) も
+    # 型違いの比較は identity 比較に落ちるだけで安全 *なはず* であることを
+    # 固定する: hostile な op のメッセージを無視し、後続の本物の応答を返す。
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server, timeout=0.05)
+    await client.identify("")
+    server.inject_raw(_DEEPLY_NESTED_JSON_OBJECT_AS_OP)
+    server.script_response(data={"mine": True})
+    got = await client.request("GetInputSettings", {"inputName": "x"})
+    assert got == {"mine": True}
+
+
+def _code_exceeds_int_max_str_digits(rid: str) -> str:
+    # sys.get_int_max_str_digits() の既定値 (4300) を超える桁の整数
+    # リテラル。json.loads() 自身がここで ValueError を投げる (実測で確認
+    # 済み)。code の桁数そのものはこのモジュールでは検査していないが、
+    # そこに届く前に _recv() の json.loads() が先に落ちて拾われるはず、
+    # という経路を固定する。
+    return (
+        '{"op":7,"d":{"requestId":"'
+        + rid
+        + '","requestType":"X","requestStatus":{"result":false,"code":'
+        + ("9" * 5000)
+        + ',"comment":"x"}}}'
+    )
+
+
+async def test_request_never_leaks_a_raw_value_error_when_code_exceeds_int_max_str_digits():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server, timeout=0.05)
+    await client.identify("")
+    server.script_raw_response(_code_exceeds_int_max_str_digits)
+    with pytest.raises(ObsProtocolError) as e:
+        await client.request("GetInputSettings", {"inputName": "x"})
+    assert not isinstance(e.value, ObsRequestError)
+
+
 # --- fix pass 2: 契約テスト。個々のバグではなく契約そのものを固定する。
 # identify()/request() に悪意・破損したサーバメッセージを大量に流し込み、どれも
 # 許容集合の外 (KeyError/TypeError/AttributeError/UnicodeDecodeError/TimeoutError
@@ -700,6 +893,11 @@ IDENTIFY_HOSTILE_HELLOS: list[tuple[str, dict]] = [
     ("authentication_present_but_false", {"op": 0, "d": {"authentication": False}}),
     ("authentication_present_but_empty_list", {"op": 0, "d": {"authentication": []}}),
     ("op_missing", {"d": {}}),
+    # fix pass 6, finding 1 (Critical): op キーが *ある* 上で値そのものが
+    # hostile な行 (huge string). 深いネストは python dict を直接組み立てると
+    # json.dumps() 側で別の RecursionError を踏むので raw frame 側
+    # (IDENTIFY_HOSTILE_RAW_FRAMES) に置く。
+    ("op_huge_string", {"op": "x" * 500000, "d": {}}),
 ]
 
 IDENTIFY_HOSTILE_RAW_FRAMES: list[tuple[str, str | bytes]] = [
@@ -720,6 +918,8 @@ IDENTIFY_HOSTILE_RAW_FRAMES: list[tuple[str, str | bytes]] = [
         "deeply_nested_json_object_d_not_a_dict",
         _DEEPLY_NESTED_JSON_OBJECT_D_NOT_A_DICT,
     ),
+    # fix pass 6, finding 1 (Critical): op の値そのものを深くネストする。
+    ("op_deeply_nested_object", _DEEPLY_NESTED_JSON_OBJECT_AS_OP),
 ]
 
 

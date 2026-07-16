@@ -59,7 +59,18 @@ class ObsRequestError(ObsProtocolError):
         self.request_type = request_type
         self.code = code
         self.comment = comment
-        super().__init__(f"{request_type} failed: code={code} {comment}")
+        # comment は OBS 側の自由文字列で長さの取り決めが無い最後の
+        # unbounded な peer->message 経路だった (fix pass 6, finding 2
+        # (Important)): 呼び出し側 (subtitle worker) はこれをリトライループ
+        # 上で毎回ログするので、悪意/単に冗長なピアがリトライのたびに巨大な
+        # ログ行を吐かせられる。属性 (self.comment) は呼び出し側が生の値を
+        # 読めるよう素通しのまま残し、例外メッセージだけ切り詰める。通常長の
+        # comment はそのまま読めるよう、_SAFE_REPR の repr() 化 (クォート付き
+        # で読みにくくなる) ではなくスライスで済ませる。
+        bounded_comment = (
+            comment if len(comment) <= 200 else comment[:200] + "…(truncated)"
+        )
+        super().__init__(f"{request_type} failed: code={code} {bounded_comment}")
 
 
 class ObsResourceNotFoundError(ObsRequestError):
@@ -150,7 +161,14 @@ class ObsWsClient:
         """
         message = await self._recv()
         if message["op"] != OP_HELLO:
-            raise ObsIdentifyError(f"Hello を期待したが op={message['op']} が来た")
+            # message['op'] は _recv() が「キーとして存在する」ことしか保証して
+            # いない生のピア値 (fix pass 6, finding 1 (Critical))。f-string の
+            # {x} は format() 経由で結局 dict.__repr__ を呼ぶので、!r を使って
+            # いなくても fix pass 5 で塞いだのと同じ repr() 再帰ハザードと
+            # 無制限長ハザードを踏む。_SAFE_REPR で両方封じる。
+            raise ObsIdentifyError(
+                f"Hello を期待したが op={_SAFE_REPR.repr(message['op'])} が来た"
+            )
         hello_data = message["d"]
         d: dict[str, Any] = {"rpcVersion": RPC_VERSION}
         # 「authentication キーが無い」と「あるが偽値」を区別する: obs-websocket
@@ -191,7 +209,10 @@ class ObsWsClient:
         await self._send(OP_IDENTIFY, d)
         message = await self._recv()
         if message["op"] != OP_IDENTIFIED:
-            raise ObsIdentifyError(f"Identified を期待したが op={message['op']} が来た")
+            # 上の Hello ガードと同じハザード (fix pass 6, finding 1 (Critical))。
+            raise ObsIdentifyError(
+                f"Identified を期待したが op={_SAFE_REPR.repr(message['op'])} が来た"
+            )
 
     async def request(
         self, request_type: str, request_data: dict[str, Any] | None = None
