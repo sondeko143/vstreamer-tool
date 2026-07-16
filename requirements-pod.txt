@@ -116,7 +116,7 @@ pyyaml==6.0.3 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via ctranslate2
 requests==2.34.2 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via google-api-core
-setuptools==82.0.1 ; sys_platform == 'linux' or sys_platform == 'win32'
+setuptools==83.0.0 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via ctranslate2
 toml==0.10.2 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via voicerecog
