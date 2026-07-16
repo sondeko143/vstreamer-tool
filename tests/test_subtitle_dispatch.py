@@ -45,8 +45,6 @@ def test_importing_the_subtitle_dispatcher_does_not_import_tkinter():
 def test_obs_password_survives_a_toml_round_trip():
     """export_to_toml は SecretStr をハードコードで展開している。新しい secret を
     足したらここも足さないと、GUI の保存が config を壊す。"""
-    from vspeech.config import Config
-
     config = Config()
     config.subtitle.enable = True
     config.subtitle.worker_type = SubtitleWorkerType.OBS
@@ -61,8 +59,6 @@ def test_obs_password_survives_a_toml_round_trip():
 
 
 def _named_bytes_io(data: bytes, name: str):
-    import io
-
     buf = io.BytesIO(data)
     buf.name = name
     return buf

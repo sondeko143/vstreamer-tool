@@ -447,6 +447,9 @@ class Config(BaseSettings):
 
     def export_to_toml(self):
         encoded = self.model_dump()
+        # Every SecretStr field in Config must be hand-unwrapped below, or its
+        # raw value leaks as a masked/repr string; guarded by
+        # tests/test_config_secret.py::test_every_secret_str_field_survives_export_to_toml
         conf_dict = {
             **encoded,
             "ami": {**encoded["ami"], "appkey": self.ami.appkey.get_secret_value()},
