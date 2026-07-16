@@ -1913,6 +1913,7 @@ git commit -m "feat(subtitle): map subtitle config onto text_gdiplus settings (A
     # WebSocketException は下の except が拾って再接続する = fail-open。
 ```
 
+- **例外は `logger` 経由でのみ出すこと（`print` や直接のストリーム書き込みは不可）。** `lib/obs_ws.py` の監査で判明: OBS が `comment` に孤立サロゲートを入れて送ると `str(e)` にそれが残る（`comment` の可読性のためスライスで縛っており、`repr` のようにエスケープしないため）。契約も長さ上限も破らないが、utf-8 ストリームへ直接書くと `UnicodeEncodeError` になる。`logging` のハンドラはこれを握り潰すので `logger.warning(...)` なら安全（実測確認済み）。
 - セッション中の切断・タイムアウト・不正メッセージは外側の `except (OSError, WebSocketException, ObsProtocolError)` で拾って fail-open。**`ObsProtocolError` を必ず含めること**: `lib/obs_ws.py` は recv のタイムアウトと壊れたメッセージをこの型に包む。包まれていないと素の `TimeoutError` / `KeyError` が worker を貫通し、TaskGroup ごとプロセスが死ぬ（＝字幕の都合で音声が止まる。spec の受入基準「OBS を再起動しても音声パイプラインは動き続ける」を破る）。
 - `WorkerStartupError` は `OSError` でも `WebSocketException` でも `ObsProtocolError` でもないので、fail-open の `except` を素通りして上まで飛ぶ。
 
