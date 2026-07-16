@@ -490,6 +490,174 @@ async def test_request_raises_obs_protocol_error_when_comment_is_not_a_string():
     assert not isinstance(e.value, ObsRequestError)
 
 
+# --- fix pass 5, finding 1 (Critical): repr() 自体が RecursionError を漏らす。
+# fix pass 4 で json.loads() の RecursionError は拾うようになったが、その後
+# 「壊れたメッセージを報告する」ためにエラーメッセージの中で repr() を呼んで
+# いる箇所 (message!r / auth!r / d!r / status!r / response_data!r、計 6 箇所)
+# が同じ問題を持っていた: ネストの深い値の repr() 自体が RecursionError を
+# 送出し、ObsProtocolError を組み立てている最中に素の RecursionError
+# (RuntimeError のサブクラスで許容集合の外) が漏れる。
+#
+# 既存のテストはすべて **配列** ("[" * N + "]" * N) のネストを使っていたが、
+# 配列は json.loads() 側が先に力尽きる (~11400 段) ので repr() まで生きて
+# 届かず、この穴を暴けない。**オブジェクト** ('{"a":' * N + ... + '}' * N)
+# は json.loads() が ~9600 段まで生き延びる一方 repr() は ~9000 段から壊れ
+# 始めるので、9000-9600 段の窓でだけ再現する (残り C スタックに依存して
+# 動く境界なので、これより深くすれば必ず壊れるという「魔法の深さ」として
+# 扱わないこと)。9200 段は監査がこの窓の中で実測して渡した深さ。
+_DEEPLY_NESTED_JSON_OBJECT = '{"a":' * 9200 + "1" + "}" * 9200
+
+_DEEPLY_NESTED_JSON_OBJECT_D_NOT_A_DICT = (
+    '{"op":0,"d":"not-a-dict","extra":' + _DEEPLY_NESTED_JSON_OBJECT + "}"
+)
+
+_DEEPLY_NESTED_JSON_OBJECT_AUTHENTICATION = (
+    '{"op":0,"d":{"authentication":' + _DEEPLY_NESTED_JSON_OBJECT + "}}"
+)
+
+
+async def test_recv_raises_obs_protocol_error_on_deeply_nested_json_object_missing_op():
+    # 監査が実機再現した入力そのもの: op キーの無い巨大な JSON オブジェクト。
+    # _recv() の `"op" not in message` ガードに落ちて message!r を組み立てる
+    # ときに RecursionError が漏れていた。
+    server = FakeObsServer(greet=False)
+    server.inject_raw(_DEEPLY_NESTED_JSON_OBJECT)
+    with pytest.raises(ObsProtocolError):
+        await ObsWsClient(server).identify("")
+
+
+async def test_recv_raises_obs_protocol_error_on_deeply_nested_json_object_d_not_a_dict():
+    # 'd' 自体は "not-a-dict" という浅い違反だが、message 全体 (兄弟キー
+    # "extra" 配下) に深いネストを仕込むと message!r の repr() が同じ形で
+    # 落ちる。
+    server = FakeObsServer(greet=False)
+    server.inject_raw(_DEEPLY_NESTED_JSON_OBJECT_D_NOT_A_DICT)
+    with pytest.raises(ObsProtocolError):
+        await ObsWsClient(server).identify("")
+
+
+async def test_identify_raises_obs_identify_error_on_deeply_nested_authentication():
+    # authentication は dict だが salt/challenge を持たない深いネスト。
+    # auth!r の repr() が RecursionError で落ちていた。
+    server = FakeObsServer(greet=False)
+    server.inject_raw(_DEEPLY_NESTED_JSON_OBJECT_AUTHENTICATION)
+    with pytest.raises(ObsIdentifyError):
+        await ObsWsClient(server).identify("irrelevant-password")
+
+
+def _deeply_nested_json_object_requeststatus_not_a_dict(rid: str) -> str:
+    # d!r (request() の「requestStatus が無い」ガード) 用: requestStatus は
+    # "nope" という浅い違反だが、兄弟キー "extra" に深いネストを仕込む。
+    return (
+        '{"op":7,"d":{"requestId":"'
+        + rid
+        + '","requestType":"X","requestStatus":"nope","extra":'
+        + _DEEPLY_NESTED_JSON_OBJECT
+        + "}}"
+    )
+
+
+def _deeply_nested_json_object_code(rid: str) -> str:
+    # status!r (request() の「code/comment が不正な形」ガード) 用: code
+    # 自体を深くネストする。
+    return (
+        '{"op":7,"d":{"requestId":"'
+        + rid
+        + '","requestType":"X","requestStatus":{"result":false,"code":'
+        + _DEEPLY_NESTED_JSON_OBJECT
+        + ',"comment":"x"}}}'
+    )
+
+
+async def test_request_raises_obs_protocol_error_on_deeply_nested_request_status():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server)
+    await client.identify("")
+    server.script_raw_response(_deeply_nested_json_object_requeststatus_not_a_dict)
+    with pytest.raises(ObsProtocolError):
+        await client.request("GetInputSettings", {"inputName": "x"})
+
+
+async def test_request_raises_obs_protocol_error_on_deeply_nested_code():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server)
+    await client.identify("")
+    server.script_raw_response(_deeply_nested_json_object_code)
+    with pytest.raises(ObsProtocolError):
+        await client.request("GetInputSettings", {"inputName": "x"})
+
+
+# fix pass 5, finding 1 (Critical), 副次効果 (milder problem): auth /
+# responseData が dict でないと判定される 2 箇所 (identify() の
+# "authentication が不正な形" ガード、request() の "responseData が不正な形"
+# ガード) は、判定に落ちる値自体が非 dict (JSON では文字列・数値・真偽値・
+# 配列) でなければならない。配列は上の RecursionError の窓を開けない
+# (json.loads() 側が先に力尽きる) ので、この 2 箇所は深いネストによる
+# RecursionError では再現できない。だが同じ bare repr() は、ピアが巨大な
+# 文字列を送れば例外メッセージ (ひいてはログ行) をそのまま巨大化させる、
+# という別の (milder な) 形で漏れる。ここは深さではなく大きさでミューテー
+# ションを殺す。
+async def test_identify_error_message_is_bounded_when_authentication_is_a_huge_string():
+    server = FakeObsServer(greet=False)
+    server.inject({"op": 0, "d": {"authentication": "x" * 5000}})
+    with pytest.raises(ObsIdentifyError) as e:
+        await ObsWsClient(server).identify("irrelevant-password")
+    assert len(str(e.value)) < 500
+
+
+def _response_data_is_a_huge_string(rid: str) -> str:
+    return json.dumps(
+        {
+            "op": 7,
+            "d": {
+                "requestId": rid,
+                "requestType": "X",
+                "requestStatus": {"result": True, "code": 100},
+                "responseData": "x" * 5000,
+            },
+        }
+    )
+
+
+async def test_request_error_message_is_bounded_when_response_data_is_a_huge_string():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server)
+    await client.identify("")
+    server.script_raw_response(_response_data_is_a_huge_string)
+    with pytest.raises(ObsProtocolError) as e:
+        await client.request("GetInputSettings", {"inputName": "x"})
+    assert len(str(e.value)) < 500
+
+
+# --- fix pass 5, finding 3 (Minor): code が bool を素通りさせる。
+# isinstance(True, int) は True (bool は int のサブクラス) なので、bool を
+# 明示的に除外しないと ObsRequestError.code に bool が入ってしまう。今日は
+# 600 と一致しないので実害は無いが、このモジュールで繰り返し踏んでいる
+# 「ガードが証明していることが足りない」形そのもの。
+def _code_is_a_bool(rid: str) -> str:
+    return json.dumps(
+        {
+            "op": 7,
+            "d": {
+                "requestId": rid,
+                "requestType": "X",
+                "requestStatus": {"result": False, "code": True, "comment": "nope"},
+                "responseData": {},
+            },
+        }
+    )
+
+
+async def test_request_raises_obs_protocol_error_when_code_is_a_bool():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server)
+    await client.identify("")
+    server.script_raw_response(_code_is_a_bool)
+    with pytest.raises(ObsProtocolError) as e:
+        await client.request("GetInputSettings", {"inputName": "x"})
+    assert not isinstance(e.value, ObsRequestError)
+
+
 # --- fix pass 2: 契約テスト。個々のバグではなく契約そのものを固定する。
 # identify()/request() に悪意・破損したサーバメッセージを大量に流し込み、どれも
 # 許容集合の外 (KeyError/TypeError/AttributeError/UnicodeDecodeError/TimeoutError
@@ -543,6 +711,14 @@ IDENTIFY_HOSTILE_RAW_FRAMES: list[tuple[str, str | bytes]] = [
     (
         "deeply_nested_json_in_envelope",
         '{"op":0,"d":{"x":' + _DEEPLY_NESTED_JSON_ARRAY + "}}",
+    ),
+    # fix pass 5, finding 1 (Critical): 配列ではなくオブジェクトのネストで
+    # ないと repr() の RecursionError の窓は開かない (定数の定義・解説は上の
+    # fix pass 5 セクション参照)。
+    ("deeply_nested_json_object_missing_op", _DEEPLY_NESTED_JSON_OBJECT),
+    (
+        "deeply_nested_json_object_d_not_a_dict",
+        _DEEPLY_NESTED_JSON_OBJECT_D_NOT_A_DICT,
     ),
 ]
 
@@ -661,8 +837,22 @@ REQUEST_HOSTILE_RESPONSES: list[tuple[str, Callable[[str], str | bytes]]] = [
     ("non_utf8_bytes_frame", _non_utf8_bytes_frame),
     ("deeply_nested_json_array", _deeply_nested_json_array),
     ("responseData_not_a_dict", _response_data_not_a_dict),
-    ("code_not_an_int", _code_not_an_int),
-    ("comment_not_a_string", _comment_not_a_string),
+    # fix pass 5, finding 2 (Important): code_not_an_int / comment_not_a_string
+    # は削除した。ここは `pytest.raises(ObsProtocolError)` しか検査しないが、
+    # 未修正でも ObsRequestError (ObsProtocolError のサブクラス) を投げて
+    # 通ってしまう「絶対に落ちないバッテリー行」だったとミューテーション
+    # テストで確認済み (ガードを消して確認)。実質の検査
+    # (`assert not isinstance(e.value, ObsRequestError)`) は専用テスト
+    # test_request_raises_obs_protocol_error_when_code_is_not_an_int /
+    # ...comment_is_not_a_string が既に持っているので、ここに重複させず
+    # 素通りする行を残さない。
+    # fix pass 5, finding 1 (Critical): オブジェクトのネストで repr() の窓を
+    # 直接叩く (定数・builder の定義は上の fix pass 5 セクション参照)。
+    (
+        "deeply_nested_json_object_requeststatus_not_a_dict",
+        _deeply_nested_json_object_requeststatus_not_a_dict,
+    ),
+    ("deeply_nested_json_object_code", _deeply_nested_json_object_code),
 ]
 
 
