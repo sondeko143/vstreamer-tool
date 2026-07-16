@@ -1897,10 +1897,24 @@ git commit -m "feat(subtitle): map subtitle config onto text_gdiplus settings (A
 - Consumes: `ObsWsClient` / `ObsIdentifyError` / `ObsResourceNotFoundError`（Task 2）、`subtitle_state` の全て（Task 3）、`build_text_settings`（Task 6）
 - Produces: `subtitle_obs_worker(context: SharedContext, in_queue: Queue[WorkerInput]) -> None`
 
-**設計の要:**
-- `connect()` は `worker_startup` の**外**。接続拒否は fail-open だから（ADR-0042）。
-- `identify()` と `_validate_sources()` は `worker_startup` の**中**。認証失敗・ソース不在は fail-loud。`worker_startup` が全 `Exception` を `WorkerStartupError` に変えるので、その中で `OSError` が起きないようにする。
-- セッション中の切断は外側の `except` で拾って fail-open。`WorkerStartupError` は `OSError` でも `ConnectionClosed` でもないので、そこを素通りして上まで飛ぶ。
+**設計の要（Task 2 のレビューを受けて改訂）:**
+- `connect()` は fail-open。接続拒否・切断は外側の `except` が拾って再接続する（ADR-0042）。
+- **`worker_startup` をここで使ってはいけない。** ADR-0038 の層B は通常 `worker_startup` を使うが、あれは `except Exception` で**すべて**を `WorkerStartupError` に変える。この worker では identify 中のタイムアウト（＝リトライすれば直る）まで fail-loud に化けてしまい、「観測できたものだけ即死」（ADR-0042）に反する。代わりに、**観測済みかつ回復不能な 2 種類だけ**を型で拾って `WorkerStartupError` を直接送出する:
+
+```python
+    try:
+        await client.identify(obs.password.get_secret_value())
+        await validate_sources(client, obs)
+    except (ObsIdentifyError, ObsResourceNotFoundError) as e:
+        # 認証失敗とソース不在は、繋がった上で観測できて、かつリトライしても
+        # 直らない。ここだけが fail-loud (ADR-0042)。
+        raise WorkerStartupError("subtitle", str(e)) from e
+    # 他の ObsProtocolError (タイムアウト・不正メッセージ) と OSError /
+    # WebSocketException は下の except が拾って再接続する = fail-open。
+```
+
+- セッション中の切断・タイムアウト・不正メッセージは外側の `except (OSError, WebSocketException, ObsProtocolError)` で拾って fail-open。**`ObsProtocolError` を必ず含めること**: `lib/obs_ws.py` は recv のタイムアウトと壊れたメッセージをこの型に包む。包まれていないと素の `TimeoutError` / `KeyError` が worker を貫通し、TaskGroup ごとプロセスが死ぬ（＝字幕の都合で音声が止まる。spec の受入基準「OBS を再起動しても音声パイプラインは動き続ける」を破る）。
+- `WorkerStartupError` は `OSError` でも `WebSocketException` でも `ObsProtocolError` でもないので、fail-open の `except` を素通りして上まで飛ぶ。
 
 - [ ] **Step 1: 失敗するテストを書く**
 
@@ -2066,9 +2080,15 @@ obs-websocket のクライアントとして OBS の Text (GDI+) ソースへ字
 input の設定値だけを更新する (ADR-0041)。
 
 失敗の扱いは「観測できたものだけ即死」(ADR-0042):
-  - 接続できない        -> fail-open (warn once + バックオフ再接続)
+  - 接続できない / 切断 / タイムアウト / 不正メッセージ -> fail-open
+    (warn once + バックオフ再接続)。字幕は落ちるが音声は生き続ける。
   - 認証失敗 / ソース不在 -> fail-loud (WorkerStartupError)
 繋がるまでは両者を区別できないので、繋がるまで待つ。
+
+ADR-0038 の層B は通常 exceptions.worker_startup を使うが、ここでは使わない:
+あれは except Exception で全てを WorkerStartupError に変えるため、identify 中の
+タイムアウト (リトライで直る) まで fail-loud に化ける。回復不能と観測できた
+2 型だけを拾って WorkerStartupError を送出する。
 """
 
 from asyncio import CancelledError
@@ -2085,10 +2105,13 @@ from websockets.exceptions import WebSocketException
 
 from vspeech.config import SubtitleConfig
 from vspeech.config import SubtitleObsConfig
+from vspeech.exceptions import WorkerStartupError
 from vspeech.exceptions import shutdown_worker
-from vspeech.exceptions import worker_startup
-from vspeech.lib.obs_text_settings import build_text_settings
+from vspeech.lib.obs_ws import ObsIdentifyError
+from vspeech.lib.obs_ws import ObsProtocolError
+from vspeech.lib.obs_ws import ObsResourceNotFoundError
 from vspeech.lib.obs_ws import ObsWsClient
+from vspeech.lib.obs_text_settings import build_text_settings
 from vspeech.lib.subtitle_state import Texts
 from vspeech.lib.subtitle_state import age_panels
 from vspeech.lib.subtitle_state import ingest_text
@@ -2251,11 +2274,14 @@ async def subtitle_obs_worker(
             try:
                 async with connect(obs.url) as ws:
                     client = ObsWsClient(ws)
-                    # 接続できた後だけ fail-loud に切り替える。ここで上がる
-                    # 認証失敗・ソース不在はリトライしても直らない。
-                    with worker_startup("subtitle"):
+                    try:
                         await client.identify(obs.password.get_secret_value())
                         await validate_sources(client, obs)
+                    except (ObsIdentifyError, ObsResourceNotFoundError) as e:
+                        # 繋がった上で観測できて、かつリトライしても直らない。
+                        # ここだけが fail-loud (ADR-0042)。他の ObsProtocolError
+                        # (タイムアウト・不正メッセージ) は下の except へ落ちる。
+                        raise WorkerStartupError("subtitle", str(e)) from e
                     logger.info("subtitle worker [obs] connected to %s", obs.url)
                     backoff = INITIAL_BACKOFF_SEC
                     warned = False
@@ -2263,8 +2289,11 @@ async def subtitle_obs_worker(
                     await push_styles(client, context.config.subtitle, panels)
                     await _push_all_text(client, obs, panels)
                     await _run_session(context, client, in_queue, panels)
-            except (OSError, WebSocketException) as e:
-                # OBS 未起動・切断。字幕は落ちるが音声パイプラインは巻き込まない。
+            except (OSError, WebSocketException, ObsProtocolError) as e:
+                # OBS 未起動・切断・タイムアウト・不正メッセージ。字幕は落ちるが
+                # 音声パイプラインは巻き込まない。ObsProtocolError を external に
+                # 落とさないこと: 素の TimeoutError/KeyError が worker を貫通すると
+                # TaskGroup ごとプロセスが死ぬ。
                 if not warned:
                     logger.warning(
                         "subtitle worker [obs] cannot reach %s (%s); "
