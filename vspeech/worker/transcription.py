@@ -123,13 +123,10 @@ def _resample_to_16k(samples: np.ndarray, src_rate: int) -> np.ndarray:
 
 
 def pcm_to_waveform(sound: SoundInput) -> np.ndarray:
-    """Decode PCM into a mono float32 waveform at 16 kHz for faster-whisper.
+    """Decode PCM to a mono float32 waveform at 16 kHz for faster-whisper.
 
-    faster-whisper consumes a float32 ndarray as-is *at 16 kHz* (it only
-    resamples file/bytes input, never a raw array). We decode with the dtype
-    that matches sound.format, downmix to mono, and resample sound.rate ->
-    16 kHz when they differ -- without the resample a non-16 kHz recording
-    reaches the model at the wrong speed and is transcribed as garbage.
+    Decodes per sound.format, downmixes to mono, and resamples to 16 kHz when
+    sound.rate differs (see _resample_to_16k for why the model needs 16 kHz).
     """
     samples = _pcm_to_float32_mono(sound)
     if sound.rate != WHISPER_SAMPLE_RATE:
@@ -140,12 +137,10 @@ def pcm_to_waveform(sound: SoundInput) -> np.ndarray:
 def create_transcription_vad_session(
     config: TranscriptionConfig,
 ) -> InferenceSession | None:
-    """Build the Silero VAD session for the transcription skip gate, or None.
-
-    Returns None when the gate is disabled so the hot loop can cheaply skip it.
-    When enabled, a missing or malformed model raises inside create_vad_session
-    (fail loudly at startup, ADR-0019/0037) rather than silently passing every
-    chunk through. CPU-fixed session (ADR-0024 の意図的例外).
+    """Build the Silero VAD session for the transcription skip gate, or None
+    when the gate is disabled. When enabled, a missing or malformed model raises
+    in create_vad_session (fail loud at startup, ADR-0019/0037); CPU-fixed
+    session (ADR-0024 の意図的例外).
     """
     if not config.vad_gate:
         return None

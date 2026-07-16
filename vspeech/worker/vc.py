@@ -95,21 +95,19 @@ def apply_input_envelope(
     """Modulate the RVC output by the input voice's relative loudness envelope.
 
     The input PCM is reduced to a per-frame RMS envelope normalized by its own
-    mean, so only the *relative* shape survives (mean 1, independent of mic
-    gain). That shape is linearly interpolated to sample resolution and
-    multiplied onto the RVC output as a clamped gain -- overlaying how the
-    speaker's volume rose and fell. It deliberately does NOT divide by the
-    output's own envelope: doing so saturates the gain wherever the output is
-    quiet (pumping the noise floor into "silent" sections) and inverse-weights
-    by output loudness (an audible compressor when max_gain > 1).
+    mean, so only the *relative* shape survives (mean 1, mic-gain independent).
+    That shape is interpolated to sample resolution and multiplied onto the RVC
+    output as a clamped gain. It deliberately does NOT divide by the output's own
+    envelope: that saturates the gain where the output is quiet (pumping the
+    noise floor into "silent" sections) and inverse-weights by loudness (a
+    compressor when max_gain > 1).
 
-    The RVC output is already a full-level int16 signal, so the gain acts as a
-    downward *duck*: with max_gain <= 1 (the default) it can only attenuate,
-    which is clip-free (|out * gain| <= |out|). A max_gain > 1 boosts the loud
-    parts past int16 range and hard-clips them (audible distortion) -- only use
-    it if the RVC output has headroom. Returns the RVC output unchanged when
-    disabled (strength <= 0), when either side is empty, or when the input is
-    effectively silent.
+    The RVC output is already full-level int16, so the gain is a downward *duck*:
+    max_gain <= 1 (the default) can only attenuate, which is clip-free
+    (|out * gain| <= |out|); max_gain > 1 boosts loud parts past int16 range and
+    hard-clips (audible distortion), so use it only if the output has headroom.
+    Returns the input unchanged when disabled (strength <= 0), either side empty,
+    or the input effectively silent.
     """
     out_len = int(output_i16.shape[0])
     if out_len == 0 or not input_pcm or strength <= 0.0:

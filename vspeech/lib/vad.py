@@ -1,4 +1,4 @@
-"""Silero VAD gate for the vc worker.
+"""Silero VAD gate shared by the vc and transcription workers (ADR-0037).
 
 Pure-numpy gate math plus a thin onnxruntime wrapper. This module must stay
 importable without onnxruntime/torch installed (base extras): onnxruntime is
