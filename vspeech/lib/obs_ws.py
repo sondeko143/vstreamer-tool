@@ -110,7 +110,13 @@ class ObsWsClient:
                 raise ObsProtocolError(f"OBS から UTF-8 でないフレーム: {e}") from e
         try:
             message = json.loads(raw)
-        except ValueError as e:
+        except (ValueError, RecursionError) as e:
+            # json.loads には 2 通りの壊れ方がある: 不正な JSON 構文
+            # (JSONDecodeError, ValueError のサブクラス) と、深すぎるネスト
+            # (RecursionError, RuntimeError のサブクラスで ValueError では
+            # 拾えない)。後者は "[" * N + "]" * N のような数万バイトの ASCII
+            # 文字列だけで作れ、websockets のデフォルト max_size (1 MiB) を
+            # 素通りする transport-valid な入力なので、ここで一緒に拾う。
             raise ObsProtocolError(f"OBS から不正な JSON: {e}") from e
         if not isinstance(message, dict) or "op" not in message:
             raise ObsProtocolError(f"OBS から不正なメッセージ: {message!r}")
@@ -128,9 +134,16 @@ class ObsWsClient:
         message = await self._recv()
         if message["op"] != OP_HELLO:
             raise ObsIdentifyError(f"Hello を期待したが op={message['op']} が来た")
-        auth = message["d"].get("authentication")
+        hello_data = message["d"]
         d: dict[str, Any] = {"rpcVersion": RPC_VERSION}
-        if auth:
+        # 「authentication キーが無い」と「あるが偽値」を区別する: obs-websocket
+        # は認証が要る場合にのみこのキーを載せる。真偽 (`if auth:`) で判定すると
+        # `{}` / `[]` / `0` / `false` / `""` を「認証不要」と誤読して無認証の
+        # Identify を送ってしまい、相手が実際には認証必須なら 4008 で切られて
+        # 呼び出し側が延々リトライすることになる (壊れたハンドシェイクはリトライ
+        # しても直らない)。聞くべきは値の真偽ではなくキーの有無。
+        if "authentication" in hello_data:
+            auth = hello_data["authentication"]
             if not password:
                 raise ObsIdentifyError(
                     "OBS が認証を要求していますが subtitle.obs.password が空です"
@@ -201,7 +214,38 @@ class ObsWsClient:
             if not status.get("result"):
                 code = status.get("code", 0)
                 comment = status.get("comment", "")
+                # ObsRequestError.code/comment のアノテーション (int/str) を
+                # 嘘にしないための型検査。これが無いと 2 つ実害が出る:
+                # (1) `code == STATUS_RESOURCE_NOT_FOUND` は int の 600 としか
+                #     一致しないので、相手が "600" (str) を送ると
+                #     ObsResourceNotFoundError が汎用の ObsRequestError に
+                #     こっそり降格し、呼び出し側の「リソースが無い」専用の
+                #     fail-loud 経路が発火しなくなる。
+                # (2) 検査を通さないと e.code / e.comment が str/list/dict/None
+                #     になりうり、呼び出し側の `e.comment.lower()` のような
+                #     アノテーション通りのコードが素の AttributeError で死ぬ。
+                # ここは requestStatus 自体が壊れているケースなので、
+                # ObsRequestError ではなく ObsProtocolError で fail-loud にする
+                # (`code`/`comment` を捏造して ObsRequestError を作ると同じ嘘を
+                # 一段先送りするだけ)。
+                if not isinstance(code, int) or not isinstance(comment, str):
+                    raise ObsProtocolError(
+                        f"{request_type} の応答の requestStatus.code/comment が"
+                        f" 不正な形: {status!r}"
+                    )
                 if code == STATUS_RESOURCE_NOT_FOUND:
                     raise ObsResourceNotFoundError(request_type, code, comment)
                 raise ObsRequestError(request_type, code, comment)
-            return d.get("responseData") or {}
+            response_data = d.get("responseData")
+            if response_data is None:
+                return {}
+            if not isinstance(response_data, dict):
+                # requestStatus の isinstance 検査と非対称にしない: responseData
+                # だけ無検査だと、呼び出し側 (subtitle worker) の
+                # `result["inputSettings"]` のようなアクセスで同じバグ形が
+                # 1 フレーム先送りされて素の TypeError になる。
+                raise ObsProtocolError(
+                    f"{request_type} の応答の responseData が不正な形:"
+                    f" {response_data!r}"
+                )
+            return response_data

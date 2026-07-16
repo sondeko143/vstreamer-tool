@@ -354,6 +354,52 @@ async def test_identify_raises_obs_identify_error_when_salt_is_not_utf8_encodabl
         await ObsWsClient(server).identify("irrelevant-password")
 
 
+# fix pass 4, finding 5: build_auth_string() が .encode("utf-8") を 2 回呼ぶ
+# (salt 用と challenge 用) のに、salt 側のケースしか無かったテストの穴を埋める。
+# 挙動そのものは fix pass 3 の try/except UnicodeError が両方を包んでいるので
+# 既に直っている (このテストは pass/pass、境界ケースの取りこぼしではない)。
+
+
+async def test_identify_raises_obs_identify_error_when_challenge_is_not_utf8_encodable():
+    server = FakeObsServer(greet=False)
+    server.inject(
+        {
+            "op": 0,
+            "d": {"authentication": {"salt": AUTH_SALT, "challenge": "\ud800"}},
+        }
+    )
+    with pytest.raises(ObsIdentifyError):
+        await ObsWsClient(server).identify("irrelevant-password")
+
+
+# --- fix pass 4, finding 4: `if auth:` は「真偽」を証明するが問うべきは「鍵の
+# 有無」。`{}` / `[]` / `False` / `0` / `""` を「認証不要」と誤読して無認証の
+# Identify を送ってしまい、OBS が実際には認証必須なら 4008 close ->
+# WebSocketException で呼び出し側が延々リトライする (壊れたハンドシェイクは
+# リトライしても直らない)。 ---
+
+
+async def test_identify_raises_when_authentication_present_but_empty_dict_and_password_empty():
+    server = FakeObsServer(greet=False)
+    server.inject({"op": 0, "d": {"authentication": {}}})
+    with pytest.raises(ObsIdentifyError, match="password"):
+        await ObsWsClient(server).identify("")
+
+
+async def test_identify_raises_when_authentication_present_but_false_and_password_empty():
+    server = FakeObsServer(greet=False)
+    server.inject({"op": 0, "d": {"authentication": False}})
+    with pytest.raises(ObsIdentifyError, match="password"):
+        await ObsWsClient(server).identify("")
+
+
+async def test_identify_raises_when_authentication_present_but_not_a_dict_and_password_set():
+    server = FakeObsServer(greet=False)
+    server.inject({"op": 0, "d": {"authentication": []}})
+    with pytest.raises(ObsIdentifyError):
+        await ObsWsClient(server).identify("irrelevant-password")
+
+
 # --- fix pass 2, finding "Minor": 非 UTF-8 バイト列フレームが decode で漏れる ---
 
 
@@ -362,6 +408,86 @@ async def test_recv_raises_obs_protocol_error_on_non_utf8_bytes_frame():
     server.inject_raw(b"\xff\xfe\x00\x01")
     with pytest.raises(ObsProtocolError):
         await ObsWsClient(server).identify("")
+
+
+# --- fix pass 4, finding 1 (Critical): json.loads の RecursionError が _recv()
+# から漏れる。JSONDecodeError (ValueError) は拾うが、深すぎるネスト
+# ("[" * N + "]" * N のような ASCII 文字列だけで作れる) は RecursionError
+# (RuntimeError のサブクラスで ValueError ではない) を投げる。websockets の
+# デフォルト max_size (1 MiB) を素通りする transport-valid な入力なので何も
+# 上流で弾かれない。identify() (bare / op-d envelope に包んだ両方) と
+# request() の両方で実機再現した。---
+
+_DEEPLY_NESTED_JSON_ARRAY = "[" * 12000 + "]" * 12000
+
+
+async def test_identify_raises_obs_protocol_error_on_deeply_nested_json_array():
+    server = FakeObsServer(greet=False)
+    server.inject_raw(_DEEPLY_NESTED_JSON_ARRAY)
+    with pytest.raises(ObsProtocolError):
+        await ObsWsClient(server).identify("")
+
+
+async def test_identify_raises_obs_protocol_error_on_deeply_nested_json_in_envelope():
+    server = FakeObsServer(greet=False)
+    server.inject_raw('{"op":0,"d":{"x":' + _DEEPLY_NESTED_JSON_ARRAY + "}}")
+    with pytest.raises(ObsProtocolError):
+        await ObsWsClient(server).identify("")
+
+
+async def test_request_raises_obs_protocol_error_on_deeply_nested_json_array():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server)
+    await client.identify("")
+    server.script_raw_response(lambda rid: _DEEPLY_NESTED_JSON_ARRAY)
+    with pytest.raises(ObsProtocolError):
+        await client.request("GetInputSettings", {"inputName": "x"})
+
+
+# --- fix pass 4, finding 2 (Important): responseData が return 経路で無検査。
+# requestStatus には isinstance(dict) 検査があるのに responseData には無く、
+# 相手が list/str/int/bool/float を送ると型注釈 (-> dict[str, Any]) に反した
+# 値をそのまま返してしまう。今日はここで例外にならないが、呼び出し側の最初の
+# `result["inputSettings"]` で素の TypeError になる、同じバグ形の 1 フレーム
+# 先送り。builder は後方で定義 (_response_data_not_a_dict)。---
+
+
+async def test_request_raises_obs_protocol_error_when_response_data_is_not_a_dict():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server)
+    await client.identify("")
+    server.script_raw_response(_response_data_not_a_dict)
+    with pytest.raises(ObsProtocolError) as e:
+        await client.request("GetInputSettings", {"inputName": "x"})
+    assert not isinstance(e.value, ObsRequestError)
+
+
+# --- fix pass 4, finding 3 (Important): ObsRequestError の code/comment が
+# 無検査。相手が code を "600" (str) で送ると `code == STATUS_RESOURCE_NOT_FOUND`
+# が一致せず ObsResourceNotFoundError が汎用の ObsRequestError に降格し、
+# 呼び出し側の「リソースが無い」専用の fail-loud 経路が発火しなくなる。
+# comment が dict/None で来ると e.comment.lower() が素の AttributeError で
+# 死ぬ。builder は後方で定義 (_code_not_an_int / _comment_not_a_string)。---
+
+
+async def test_request_raises_obs_protocol_error_when_code_is_not_an_int():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server)
+    await client.identify("")
+    server.script_raw_response(_code_not_an_int)
+    with pytest.raises(ObsProtocolError) as e:
+        await client.request("GetInputSettings", {"inputName": "x"})
+    assert not isinstance(e.value, ObsRequestError)
+
+
+async def test_request_raises_obs_protocol_error_when_comment_is_not_a_string():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server)
+    await client.identify("")
+    server.script_raw_response(_comment_not_a_string)
+    with pytest.raises(ObsProtocolError) as e:
+        await client.request("SetInputSettings", {"inputName": "x"})
+    assert not isinstance(e.value, ObsRequestError)
 
 
 # --- fix pass 2: 契約テスト。個々のバグではなく契約そのものを固定する。
@@ -390,6 +516,21 @@ IDENTIFY_HOSTILE_HELLOS: list[tuple[str, dict]] = [
             "d": {"authentication": {"salt": "\ud800", "challenge": AUTH_CHALLENGE}},
         },
     ),
+    (
+        "authentication_challenge_not_utf8_encodable",
+        {
+            "op": 0,
+            "d": {"authentication": {"salt": AUTH_SALT, "challenge": "\ud800"}},
+        },
+    ),
+    # fix pass 4, finding 4: 値が偽 (falsy) でも authentication キーが present
+    # なら「認証必要」と読まなければいけない。password は非空
+    # ("irrelevant-password") で呼ばれるので、ここでの ObsIdentifyError は
+    # 全部 shape 違反 (`{}`/`False`/`[]` は dict でも str/challenge を持つ dict
+    # でもない) 由来。
+    ("authentication_present_but_empty_dict", {"op": 0, "d": {"authentication": {}}}),
+    ("authentication_present_but_false", {"op": 0, "d": {"authentication": False}}),
+    ("authentication_present_but_empty_list", {"op": 0, "d": {"authentication": []}}),
     ("op_missing", {"d": {}}),
 ]
 
@@ -397,6 +538,12 @@ IDENTIFY_HOSTILE_RAW_FRAMES: list[tuple[str, str | bytes]] = [
     ("invalid_json", "{not valid json"),
     ("json_array_instead_of_object", "[1, 2, 3]"),
     ("non_utf8_bytes_frame", b"\xff\xfe\x00\x01"),
+    # fix pass 4, finding 1.
+    ("deeply_nested_json_array", _DEEPLY_NESTED_JSON_ARRAY),
+    (
+        "deeply_nested_json_in_envelope",
+        '{"op":0,"d":{"x":' + _DEEPLY_NESTED_JSON_ARRAY + "}}",
+    ),
 ]
 
 
@@ -455,6 +602,56 @@ def _non_utf8_bytes_frame(rid: str) -> bytes:
     return b"\xff\xfe\x00\x01"
 
 
+def _deeply_nested_json_array(rid: str) -> str:
+    return _DEEPLY_NESTED_JSON_ARRAY
+
+
+def _response_data_not_a_dict(rid: str) -> str:
+    return json.dumps(
+        {
+            "op": 7,
+            "d": {
+                "requestId": rid,
+                "requestType": "X",
+                "requestStatus": {"result": True, "code": 100},
+                "responseData": [1, 2, 3],
+            },
+        }
+    )
+
+
+def _code_not_an_int(rid: str) -> str:
+    return json.dumps(
+        {
+            "op": 7,
+            "d": {
+                "requestId": rid,
+                "requestType": "X",
+                "requestStatus": {"result": False, "code": "600", "comment": "nope"},
+                "responseData": {},
+            },
+        }
+    )
+
+
+def _comment_not_a_string(rid: str) -> str:
+    return json.dumps(
+        {
+            "op": 7,
+            "d": {
+                "requestId": rid,
+                "requestType": "X",
+                "requestStatus": {
+                    "result": False,
+                    "code": 400,
+                    "comment": {"nope": True},
+                },
+                "responseData": {},
+            },
+        }
+    )
+
+
 REQUEST_HOSTILE_RESPONSES: list[tuple[str, Callable[[str], str | bytes]]] = [
     ("requestStatus_missing", _request_status_missing),
     ("requestStatus_not_a_dict", _request_status_not_a_dict),
@@ -462,6 +659,10 @@ REQUEST_HOSTILE_RESPONSES: list[tuple[str, Callable[[str], str | bytes]]] = [
     ("invalid_json", _invalid_json),
     ("json_array_instead_of_object", _json_array_instead_of_object),
     ("non_utf8_bytes_frame", _non_utf8_bytes_frame),
+    ("deeply_nested_json_array", _deeply_nested_json_array),
+    ("responseData_not_a_dict", _response_data_not_a_dict),
+    ("code_not_an_int", _code_not_an_int),
+    ("comment_not_a_string", _comment_not_a_string),
 ]
 
 
