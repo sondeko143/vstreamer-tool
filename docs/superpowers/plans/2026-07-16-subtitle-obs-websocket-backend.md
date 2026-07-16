@@ -204,6 +204,8 @@ from collections import deque
 
 import pytest
 
+from vspeech.lib.obs_ws import OP_IDENTIFY
+from vspeech.lib.obs_ws import OP_REQUEST
 from vspeech.lib.obs_ws import ObsIdentifyError
 from vspeech.lib.obs_ws import ObsRequestError
 from vspeech.lib.obs_ws import ObsResourceNotFoundError
@@ -211,148 +213,185 @@ from vspeech.lib.obs_ws import ObsWsClient
 from vspeech.lib.obs_ws import build_auth_string
 
 # obs-websocket 5.x の認証アルゴリズム:
-#   1. base64(sha256(password + salt))            -> base64 secret
-#   2. base64(sha256(secret + challenge))         -> authentication
-# この期待値は simpleobsws (obs-websocket 本家 IRLToolkit) の実装と
-# 行レベルで一致することを確認した上で固定した回帰ベクタ (ADR-0043)。
+#   1. base64(sha256(password + salt))    -> base64 secret
+#   2. base64(sha256(secret + challenge))
+# 期待値は simpleobsws (obs-websocket 本家 IRLToolkit) の実装と行レベルで一致
+# することを確認した上で固定した回帰ベクタ (ADR-0043)。password は文字列
+# "supersecretpassword"、salt/challenge はこのテスト専用の固定値で、実在の OBS
+# のものではない (.gitleaks.toml で値ごと allowlist 済み)。
 AUTH_PASSWORD = "supersecretpassword"
 AUTH_SALT = "lM1GncleQOaCu9lT1yeUZhFYnqhsLLP1G5lAGo3ixaI="
 AUTH_CHALLENGE = "+IxH4CnCiqpX1rM9scsNynZzbOe4KhDeYcTNS3PDaeY="
 AUTH_EXPECTED = "1Ct943GAT+6YQUUX47Ia/ncufilbe6+oD6lY+5kaCu4="
 
 
-class FakeTransport:
-    """スクリプト化した obs-websocket サーバ。ネットワークも OBS も使わない。"""
+class FakeObsServer:
+    """スクリプト化した obs-websocket サーバ。ネットワークも OBS も使わない。
 
-    def __init__(self, incoming: list[dict]):
-        self.incoming = deque(json.dumps(m) for m in incoming)
+    「送られてきたものに応答する」形にしてある。おかげでテストはクライアントが
+    採番した requestId を知る必要がなく、応答は send の時点で積まれるので
+    待ち合わせも要らない。
+    """
+
+    def __init__(self, *, require_auth: bool = True, greet: bool = True):
         self.sent: list[dict] = []
         self.closed = False
+        self._outgoing: deque[str] = deque()
+        self._responses: deque[tuple[bool, int, dict]] = deque()
+        if greet:
+            hello: dict = {"obsWebSocketVersion": "5.5.0", "rpcVersion": 1}
+            if require_auth:
+                hello["authentication"] = {
+                    "salt": AUTH_SALT,
+                    "challenge": AUTH_CHALLENGE,
+                }
+            self._outgoing.append(json.dumps({"op": 0, "d": hello}))
+
+    def script_response(
+        self, *, ok: bool = True, code: int = 100, data: dict | None = None
+    ):
+        """次の Request に返す応答を積む。"""
+        self._responses.append((ok, code, data or {}))
+
+    def inject(self, message: dict):
+        """次の応答より前に届く生メッセージ (イベント等) を積む。"""
+        self._outgoing.append(json.dumps(message))
 
     async def send(self, message: str) -> None:
-        self.sent.append(json.loads(message))
+        m = json.loads(message)
+        self.sent.append(m)
+        if m["op"] == OP_IDENTIFY:
+            self._outgoing.append(
+                json.dumps({"op": 2, "d": {"negotiatedRpcVersion": 1}})
+            )
+        elif m["op"] == OP_REQUEST:
+            ok, code, data = (
+                self._responses.popleft() if self._responses else (True, 100, {})
+            )
+            self._outgoing.append(
+                json.dumps(
+                    {
+                        "op": 7,
+                        "d": {
+                            "requestType": m["d"]["requestType"],
+                            # 採番された id をそのまま返す = テスト側の受け渡し不要。
+                            "requestId": m["d"]["requestId"],
+                            "requestStatus": {"result": ok, "code": code},
+                            "responseData": data,
+                        },
+                    }
+                )
+            )
 
     async def recv(self) -> str:
-        if not self.incoming:
-            raise AssertionError("client recv'd more messages than the fake scripted")
-        return self.incoming.popleft()
+        if not self._outgoing:
+            raise AssertionError("client recv'd more than the fake scripted")
+        return self._outgoing.popleft()
 
     async def close(self) -> None:
         self.closed = True
-
-
-def hello(with_auth: bool = True) -> dict:
-    d: dict = {"obsWebSocketVersion": "5.5.0", "rpcVersion": 1}
-    if with_auth:
-        d["authentication"] = {"salt": AUTH_SALT, "challenge": AUTH_CHALLENGE}
-    return {"op": 0, "d": d}
-
-
-def identified() -> dict:
-    return {"op": 2, "d": {"negotiatedRpcVersion": 1}}
-
-
-def response(request_id: str, *, ok: bool = True, code: int = 100, data: dict | None = None) -> dict:
-    return {
-        "op": 7,
-        "d": {
-            "requestType": "GetInputSettings",
-            "requestId": request_id,
-            "requestStatus": {"result": ok, "code": code},
-            "responseData": data or {},
-        },
-    }
 
 
 def test_build_auth_string_matches_the_reference_vector():
     assert build_auth_string(AUTH_PASSWORD, AUTH_SALT, AUTH_CHALLENGE) == AUTH_EXPECTED
 
 
-def test_identify_sends_rpc_version_and_auth():
-    t = FakeTransport([hello(), identified()])
-    client = ObsWsClient(t)
-    await client.identify(AUTH_PASSWORD)
-    assert t.sent == [
+async def test_identify_sends_rpc_version_and_auth():
+    server = FakeObsServer()
+    await ObsWsClient(server).identify(AUTH_PASSWORD)
+    assert server.sent == [
         {"op": 1, "d": {"rpcVersion": 1, "authentication": AUTH_EXPECTED}}
     ]
 
 
-def test_identify_omits_auth_when_server_does_not_ask():
-    t = FakeTransport([hello(with_auth=False), identified()])
-    client = ObsWsClient(t)
-    await client.identify("")
-    assert t.sent == [{"op": 1, "d": {"rpcVersion": 1}}]
+async def test_identify_omits_auth_when_server_does_not_ask():
+    server = FakeObsServer(require_auth=False)
+    await ObsWsClient(server).identify("")
+    assert server.sent == [{"op": 1, "d": {"rpcVersion": 1}}]
 
 
-def test_identify_raises_when_server_wants_auth_but_password_is_empty():
-    t = FakeTransport([hello()])
-    client = ObsWsClient(t)
+async def test_identify_raises_when_server_wants_auth_but_password_is_empty():
+    server = FakeObsServer()
     with pytest.raises(ObsIdentifyError, match="password"):
-        await client.identify("")
+        await ObsWsClient(server).identify("")
 
 
-def test_request_returns_response_data():
-    t = FakeTransport([hello(with_auth=False), identified()])
-    client = ObsWsClient(t)
+async def test_identify_raises_when_hello_is_not_first():
+    server = FakeObsServer(greet=False)
+    server.inject({"op": 5, "d": {"eventType": "Surprise"}})
+    with pytest.raises(ObsIdentifyError):
+        await ObsWsClient(server).identify("")
+
+
+async def test_request_sends_the_request_and_returns_response_data():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server)
     await client.identify("")
-    t.incoming.append(json.dumps(response("<any>", data={"inputSettings": {"text": "hi"}})))
-    # requestId はクライアントが採番するので、フェイクは送られた id を写して返す。
-    got = await _request_echoing_id(client, t, "GetInputSettings", {"inputName": "x"})
+    server.script_response(data={"inputSettings": {"text": "hi"}})
+    got = await client.request("GetInputSettings", {"inputName": "x"})
     assert got == {"inputSettings": {"text": "hi"}}
+    assert server.sent[-1]["op"] == 6
+    assert server.sent[-1]["d"]["requestType"] == "GetInputSettings"
+    assert server.sent[-1]["d"]["requestData"] == {"inputName": "x"}
 
 
-async def _request_echoing_id(client, t, request_type, data):
-    """クライアントが採番した requestId を読み取り、それを載せた応答を差し込む。"""
-    import asyncio
-
-    task = asyncio.create_task(client.request(request_type, data))
-    await asyncio.sleep(0)  # send を走らせる
-    request_id = t.sent[-1]["d"]["requestId"]
-    t.incoming.append(json.dumps(response(request_id, data={"inputSettings": {"text": "hi"}})))
-    return await task
-
-
-def test_request_ignores_events_and_mismatched_request_ids():
-    t = FakeTransport([hello(with_auth=False), identified()])
-    client = ObsWsClient(t)
+async def test_request_generates_a_unique_request_id_per_call():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server)
     await client.identify("")
-    import asyncio
-
-    task = asyncio.create_task(client.request("GetInputSettings", {"inputName": "x"}))
-    await asyncio.sleep(0)
-    request_id = t.sent[-1]["d"]["requestId"]
-    t.incoming.append(json.dumps({"op": 5, "d": {"eventType": "InputNameChanged"}}))
-    t.incoming.append(json.dumps(response("someone-elses-id", data={"nope": True})))
-    t.incoming.append(json.dumps(response(request_id, data={"mine": True})))
-    assert await task == {"mine": True}
+    server.script_response()
+    server.script_response()
+    await client.request("A")
+    await client.request("B")
+    ids = [m["d"]["requestId"] for m in server.sent if m["op"] == 6]
+    assert len(set(ids)) == 2
 
 
-def test_request_raises_resource_not_found_on_600():
-    t = FakeTransport([hello(with_auth=False), identified()])
-    client = ObsWsClient(t)
+async def test_request_ignores_events_and_other_request_ids():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server)
     await client.identify("")
-    import asyncio
+    server.inject({"op": 5, "d": {"eventType": "InputNameChanged"}})
+    server.inject(
+        {
+            "op": 7,
+            "d": {
+                "requestType": "GetInputSettings",
+                "requestId": "someone-elses-id",
+                "requestStatus": {"result": True, "code": 100},
+                "responseData": {"nope": True},
+            },
+        }
+    )
+    server.script_response(data={"mine": True})
+    assert await client.request("GetInputSettings", {"inputName": "x"}) == {"mine": True}
 
-    task = asyncio.create_task(client.request("GetInputSettings", {"inputName": "nope"}))
-    await asyncio.sleep(0)
-    request_id = t.sent[-1]["d"]["requestId"]
-    t.incoming.append(json.dumps(response(request_id, ok=False, code=600)))
+
+async def test_request_raises_resource_not_found_on_600():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server)
+    await client.identify("")
+    server.script_response(ok=False, code=600)
     with pytest.raises(ObsResourceNotFoundError):
-        await task
+        await client.request("GetInputSettings", {"inputName": "nope"})
 
 
-def test_request_raises_generic_error_on_other_failures():
-    t = FakeTransport([hello(with_auth=False), identified()])
-    client = ObsWsClient(t)
+async def test_request_raises_generic_error_on_other_failures():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server)
     await client.identify("")
-    import asyncio
+    server.script_response(ok=False, code=400)
+    with pytest.raises(ObsRequestError) as e:
+        await client.request("SetInputSettings", {"inputName": "x"})
+    assert e.value.code == 400
 
-    task = asyncio.create_task(client.request("SetInputSettings", {"inputName": "x"}))
-    await asyncio.sleep(0)
-    request_id = t.sent[-1]["d"]["requestId"]
-    t.incoming.append(json.dumps(response(request_id, ok=False, code=400)))
-    with pytest.raises(ObsRequestError):
-        await task
+
+async def test_request_returns_empty_dict_when_there_is_no_response_data():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server)
+    await client.identify("")
+    server.script_response(data={})
+    assert await client.request("SetInputSettings", {"inputName": "x"}) == {}
 ```
 
 - [ ] **Step 3: テストが失敗することを確認する**
@@ -511,7 +550,7 @@ class ObsWsClient:
 - [ ] **Step 5: テストが通ることを確認する**
 
 Run: `uv run pytest tests/test_obs_ws.py -v`
-Expected: 8 passed
+Expected: 11 passed
 
 - [ ] **Step 6: 型検査とリント**
 
@@ -1358,8 +1397,6 @@ def test_obs_backend_accepts_a_complete_config():
 def test_obs_password_survives_a_toml_round_trip():
     """export_to_toml は SecretStr をハードコードで展開している。新しい secret を
     足したらここも足さないと、GUI の保存が config を壊す。"""
-    import io
-
     from vspeech.config import Config
 
     config = Config()
@@ -1883,7 +1920,7 @@ def test_make_panels_uses_the_same_two_panels_as_tk():
     assert panels["s"].anchor == "n"
 
 
-def test_validate_sources_passes_when_both_exist():
+async def test_validate_sources_passes_when_both_exist():
     client = FakeObsClient()
     await validate_sources(client, make_config().subtitle.obs)
     assert [d["inputName"] for _, d in client.calls] == [
@@ -1892,13 +1929,13 @@ def test_validate_sources_passes_when_both_exist():
     ]
 
 
-def test_validate_sources_raises_when_a_source_is_missing():
+async def test_validate_sources_raises_when_a_source_is_missing():
     client = FakeObsClient(missing={"vspeech-translated"})
     with pytest.raises(ObsResourceNotFoundError):
         await validate_sources(client, make_config().subtitle.obs)
 
 
-def test_push_text_sends_the_joined_panel_text_to_its_source():
+async def test_push_text_sends_the_joined_panel_text_to_its_source():
     config = make_config()
     panels = make_panels(config.subtitle)
     from vspeech.lib.subtitle_state import ingest_text
@@ -1909,7 +1946,7 @@ def test_push_text_sends_the_joined_panel_text_to_its_source():
     assert client.settings_for("vspeech-text") == [{"text": "こんにちは"}]
 
 
-def test_push_text_routes_the_s_panel_to_the_translated_source():
+async def test_push_text_routes_the_s_panel_to_the_translated_source():
     config = make_config()
     panels = make_panels(config.subtitle)
     from vspeech.lib.subtitle_state import ingest_text
@@ -1920,7 +1957,7 @@ def test_push_text_routes_the_s_panel_to_the_translated_source():
     assert client.settings_for("vspeech-translated") == [{"text": "hello"}]
 
 
-def test_push_text_sends_empty_string_when_the_panel_drained():
+async def test_push_text_sends_empty_string_when_the_panel_drained():
     config = make_config()
     panels = make_panels(config.subtitle)
     client = FakeObsClient()
@@ -1928,7 +1965,7 @@ def test_push_text_sends_empty_string_when_the_panel_drained():
     assert client.settings_for("vspeech-text") == [{"text": ""}]
 
 
-def test_push_text_uses_overlay_so_it_does_not_clobber_style():
+async def test_push_text_uses_overlay_so_it_does_not_clobber_style():
     config = make_config()
     panels = make_panels(config.subtitle)
     client = FakeObsClient()
@@ -1936,7 +1973,7 @@ def test_push_text_uses_overlay_so_it_does_not_clobber_style():
     assert all(d["overlay"] is True for t, d in client.calls if t == "SetInputSettings")
 
 
-def test_push_styles_sends_both_panels_with_config_values():
+async def test_push_styles_sends_both_panels_with_config_values():
     config = make_config()
     config.subtitle.text.font_color = "#ff8000"
     config.subtitle.translated.font_size = 22
