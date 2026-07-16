@@ -115,7 +115,9 @@ class ObsRequestError(ObsProtocolError):
             )
         else:
             bounded_comment = _bounded_repr(comment)
-        super().__init__(f"{request_type} failed: code={code} {bounded_comment}")
+        super().__init__(
+            f"{request_type} failed: code={_bounded_repr(code)} {bounded_comment}"
+        )
 
 
 class ObsResourceNotFoundError(ObsRequestError):

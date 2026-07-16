@@ -851,6 +851,36 @@ async def test_request_never_leaks_a_raw_value_error_when_code_exceeds_int_max_s
     assert not isinstance(e.value, ObsRequestError)
 
 
+# --- fix pass 8: `code` was the one peer-controlled value that reached a
+# message without passing through `_bounded_repr()` — only
+# `isinstance(code, int)` was checked, never its digit count. The test above
+# (`_code_exceeds_int_max_str_digits`, 5000 digits) only covers the side
+# json.loads() already rejects. sys.get_int_max_str_digits() defaults to
+# 4300: json.loads() raises ValueError at 4301+ digits but happily parses
+# exactly 4300, so 4300 digits is the largest `code` that can ever reach
+# `ObsRequestError.__init__` and its unbounded `f"code={code}"`. Both sides
+# of that boundary need a test, or a false "already caught by json.loads()"
+# belief (true at 4301, false at 4300) can silently regrow here.
+def _code_at_the_int_max_str_digits_boundary(rid: str) -> str:
+    return (
+        '{"op":7,"d":{"requestId":"'
+        + rid
+        + '","requestType":"X","requestStatus":{"result":false,"code":'
+        + ("9" * 4300)
+        + ',"comment":"x"}}}'
+    )
+
+
+async def test_request_error_message_is_bounded_when_code_is_at_the_int_max_str_digits_boundary():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server, timeout=0.05)
+    await client.identify("")
+    server.script_raw_response(_code_at_the_int_max_str_digits_boundary)
+    with pytest.raises(ObsRequestError) as e:
+        await client.request("SetInputSettings", {"inputName": "x"})
+    assert len(str(e.value)) < 500
+
+
 # --- fix pass 7, finding 1 (Important): `_SAFE_REPR` bounds nesting depth
 # (`maxlevel`) and each leaf's size (`maxstring`/`maxother`), but never bounded
 # the *total* rendered length. Within `maxlevel=6`, the default width caps
