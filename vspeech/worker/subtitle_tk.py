@@ -16,6 +16,7 @@ from tkinter import Canvas
 from tkinter import Tk
 from tkinter.font import Font
 from typing import Any
+from typing import Literal
 from typing import Protocol
 
 from vspeech.config import Anchor
@@ -35,12 +36,27 @@ class _SubtitleCanvas(Protocol):
     are part of a large, overload-heavy widget hierarchy) so a display-free test
     fake can satisfy it structurally without subclassing the real widget, which
     needs a live Tk root and whose `delete`/`pack` overrides would otherwise
-    violate Liskov substitution. A real `Canvas` still satisfies this.
+    violate Liskov substitution. Every member here, including `create_text`'s
+    keyword-only parameters, is typed to what typeshed's `tkinter.Canvas` stub
+    actually accepts (or a subset of it, per Protocol contravariance), so a real
+    `Canvas` still satisfies this structurally and `ty` verifies it.
     """
 
     def delete(self, tag: str, /) -> object: ...
     def pack(self) -> object: ...
-    def create_text(self, *args: Any, **_kwargs: Any) -> Any: ...
+    def create_text(
+        self,
+        x: float,
+        y: float,
+        /,
+        *,
+        text: str,
+        font: Font,
+        fill: str,
+        anchor: Anchor,
+        justify: Literal["left", "center", "right"],
+        tags: str,
+    ) -> object: ...
 
 
 def wrap_text_to_width(text: str, measure: Callable[[str], int], max_width: int) -> str:
@@ -110,7 +126,7 @@ def draw_text_with_outline(
 
     texts = wrap_text_to_width(texts, font_tuple.measure, max_width)
 
-    justify_val = "center"
+    justify_val: Literal["left", "center", "right"] = "center"
     if "e" in anchor:
         justify_val = "right"
     elif "w" in anchor:

@@ -1,3 +1,4 @@
+import io
 import sys
 
 from vspeech.config import Config
@@ -12,7 +13,10 @@ def test_subtitle_worker_type_defaults_to_tk():
 def test_subtitle_worker_type_round_trips_through_toml():
     config = Config()
     config.subtitle.worker_type = SubtitleWorkerType.OBS
-    reloaded = Config.model_validate({"subtitle": {"worker_type": "OBS"}})
+    toml_bytes = config.export_to_toml().encode("utf-8")
+    toml_file = io.BytesIO(toml_bytes)
+    toml_file.name = "config.toml"
+    reloaded = Config.read_config_from_file(toml_file)
     assert reloaded.subtitle.worker_type == SubtitleWorkerType.OBS
 
 
