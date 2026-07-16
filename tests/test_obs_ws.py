@@ -851,6 +851,96 @@ async def test_request_never_leaks_a_raw_value_error_when_code_exceeds_int_max_s
     assert not isinstance(e.value, ObsRequestError)
 
 
+# --- fix pass 7, finding 1 (Important): `_SAFE_REPR` bounds nesting depth
+# (`maxlevel`) and each leaf's size (`maxstring`/`maxother`), but never bounded
+# the *total* rendered length. Within `maxlevel=6`, the default width caps
+# (`maxlist=6`/`maxdict=4`) still allow up to ~6**6 leaves at ~200 chars each,
+# so a wide-but-shallow structure blows past any "leaf is bounded" guarantee
+# without ever touching the RecursionError depth window the fix pass 4/5/6
+# tests already cover. Every existing "deeply nested" fixture in this file
+# varies *depth*; this section varies *width* instead, which is the axis that
+# let the bug through undetected.
+def _wide_json_array(levels: int, branch: int, leaf_json: str) -> str:
+    """`levels` 段のネスト配列を、各段 `branch` 個の要素で作る。
+
+    `branch` を reprlib の既定の幅上限 (`maxlist=6`) 以上にしておけば、深さ
+    (`levels`) を `maxlevel=6` より大幅に浅く保ったまま出力サイズだけを
+    爆発させられる — 深さは `_DEEPLY_NESTED_JSON_ARRAY`/`_DEEPLY_NESTED_JSON_OBJECT`
+    系のテストが既に踏んでいる軸なので、ここでは意図的に浅くする。
+    """
+    x = leaf_json
+    for _ in range(levels):
+        x = "[" + ",".join([x] * branch) + "]"
+    return x
+
+
+_WIDE_JSON_LEAF = json.dumps("y" * 250)
+# 深さ 4 段 (maxlevel=6 を大きく下回る) × 幅 6 (maxlist の既定値) で、実測
+# 約 328 KB のフレームから約 262 KB の例外メッセージが組み上がる (fix pass 7
+# の監査が実機の identify() で再現した「265 KB のフレーム -> 262 KB の
+# 例外」と同じ桁数)。
+_WIDE_JSON_VALUE = _wide_json_array(4, 6, _WIDE_JSON_LEAF)
+
+
+async def test_identify_error_message_is_bounded_when_op_is_a_wide_but_shallow_structure_at_hello():
+    server = FakeObsServer(greet=False)
+    server.inject_raw('{"op":' + _WIDE_JSON_VALUE + ',"d":{}}')
+    with pytest.raises(ObsIdentifyError) as e:
+        await ObsWsClient(server, timeout=0.05).identify("")
+    assert len(str(e.value)) < 500
+
+
+async def test_recv_error_message_is_bounded_when_message_is_wide_but_shallow():
+    # 同じ幅ハザードを、op 単体ではなく _recv() の「'd' が無い」ガード
+    # (message 全体を repr する側) でも固定する。
+    server = FakeObsServer(greet=False)
+    server.inject_raw('{"op":0,"d":"not-a-dict","extra":' + _WIDE_JSON_VALUE + "}")
+    with pytest.raises(ObsProtocolError) as e:
+        await ObsWsClient(server, timeout=0.05).identify("")
+    assert not isinstance(e.value, ObsIdentifyError)
+    assert len(str(e.value)) < 500
+
+
+def _comment_is_a_wide_but_shallow_non_string(rid: str) -> str:
+    return (
+        '{"op":7,"d":{"requestId":"'
+        + rid
+        + '","requestType":"X","requestStatus":{"result":false,"code":400,'
+        '"comment":' + _WIDE_JSON_VALUE + "}}}"
+    )
+
+
+async def test_request_error_message_is_bounded_when_comment_is_a_wide_but_shallow_non_string():
+    # 同じ根っこ、別の枝: fix pass 6 で足した comment の 200 文字スライスは
+    # `isinstance(comment, str)` を通った場合の枝にしか効かない。comment が
+    # 非 str だと `not isinstance(comment, str)` に落ちて
+    # `_bounded_repr(status)` の側 (request() の「requestStatus.code/comment
+    # が不正な形」ガード) を通るので、comment 自身が wide-but-shallow な値
+    # だと同じ幅ハザードでバイパスされていた。message の総量を bound する
+    # ことでこちらも一緒に閉じることを確認する。
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server, timeout=0.05)
+    await client.identify("")
+    server.script_raw_response(_comment_is_a_wide_but_shallow_non_string)
+    with pytest.raises(ObsProtocolError) as e:
+        await client.request("SetInputSettings", {"inputName": "x"})
+    assert not isinstance(e.value, ObsRequestError)
+    assert len(str(e.value)) < 500
+
+
+# --- fix pass 7, finding 3 (Minor): `ObsRequestError.__init__` now calls
+# `len(comment)`, which is not total for a non-`str` `comment`. Both
+# peer-reachable construction sites in this module gate on
+# `isinstance(comment, str)` first, so a hostile peer can never reach this —
+# but the class is public, so a caller constructing it directly with e.g.
+# `None` (as older code in this exact style used to allow) must not get a
+# raw `TypeError` in exchange.
+def test_obs_request_error_is_constructible_with_a_non_string_comment():
+    e = ObsRequestError("X", 1, None)  # ty: ignore[invalid-argument-type]
+    assert "None" in str(e)
+    assert len(str(e)) < 500
+
+
 # --- fix pass 2: 契約テスト。個々のバグではなく契約そのものを固定する。
 # identify()/request() に悪意・破損したサーバメッセージを大量に流し込み、どれも
 # 許容集合の外 (KeyError/TypeError/AttributeError/UnicodeDecodeError/TimeoutError
@@ -893,11 +983,21 @@ IDENTIFY_HOSTILE_HELLOS: list[tuple[str, dict]] = [
     ("authentication_present_but_false", {"op": 0, "d": {"authentication": False}}),
     ("authentication_present_but_empty_list", {"op": 0, "d": {"authentication": []}}),
     ("op_missing", {"d": {}}),
-    # fix pass 6, finding 1 (Critical): op キーが *ある* 上で値そのものが
-    # hostile な行 (huge string). 深いネストは python dict を直接組み立てると
-    # json.dumps() 側で別の RecursionError を踏むので raw frame 側
-    # (IDENTIFY_HOSTILE_RAW_FRAMES) に置く。
-    ("op_huge_string", {"op": "x" * 500000, "d": {}}),
+    # fix pass 6, finding 1 (Critical) は元々ここに `op_huge_string` 行
+    # (`{"op": "x" * 500000, "d": {}}`) を足していたが、fix pass 7, finding 2
+    # (Important) で削除した。ここは `pytest.raises(ObsProtocolError)` しか
+    # 検査しないが、ObsIdentifyError は ObsProtocolError のサブクラスなので、
+    # op の 2 箇所のガード (Hello/Identified) を両方 fix pass 6 前の生
+    # interpolation に revert しても素通りする「絶対に落ちないバッテリー行」
+    # だったとミューテーションテストで確認済み (ガードを両方消して確認:
+    # 12 行すべて PASS のまま、うち op_huge_string も PASS)。実質の検査
+    # (`len(str(e.value)) < 500`) は専用テスト
+    # test_identify_error_message_is_bounded_when_op_is_a_huge_string_at_hello
+    # が既に持っているので、ここに重複させず素通りする行を残さない
+    # (fix pass 5, finding 2 で code_not_an_int/comment_not_a_string に
+    # 下した判断と同じ形)。深いネストの方 (op_deeply_nested_object) は
+    # RecursionError を経由して実際に落ちるので、こちらは削除していない
+    # (raw frame 側の IDENTIFY_HOSTILE_RAW_FRAMES を参照)。
 ]
 
 IDENTIFY_HOSTILE_RAW_FRAMES: list[tuple[str, str | bytes]] = [

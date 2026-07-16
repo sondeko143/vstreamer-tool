@@ -34,9 +34,42 @@ STATUS_RESOURCE_NOT_FOUND = 600
 # ObsProtocolError の本文を組み立てる最中にまさにその repr() を呼ぶので、
 # 素の repr() のままだと例外を作ろうとして別の (許容外の) 例外を漏らして
 # しまう。reprlib.Repr は深さを自前のカウンタで打ち切るため安全。
-# maxstring/maxother は、1 MiB のピアフレームがそのまま 1 MiB の例外文字列
-# (ひいてはログ行) になるのも防ぐ副次効果を持つ。
+#
+# maxstring/maxother が制限するのは「葉 (leaf) 1 つあたり」の長さだけで、
+# 総出力長には効かない (fix pass 7, finding 1 (Important))。maxlevel=6 の
+# 中でも maxlist=6/maxdict=4 は「幅」を許すため、6 段のネストの中に最大
+# 6^6 ≈ 46656 個もの葉 (各 ≤200 文字) が並びうる。実測: 深さ 4 段・幅 6 の
+# 入力 (約 328 KB のフレーム) から 262 KB の例外文字列が組み上がる —
+# json.loads() が生き延びる深さ (fix pass 4/5 の RecursionError 窓) にも、
+# 1 リーフの長さにも触れていない。つまり maxstring/maxother は「1 MiB の
+# ピアフレームがそのまま 1 MiB の例外文字列 (ひいてはログ行) になるのを
+# 防ぐ」という副次効果を持たない。総出力長を抑えるのは _bounded_repr() の
+# 役目で、このモジュールの例外メッセージはすべて _SAFE_REPR.repr() を直接
+# 使わず _bounded_repr() 経由にすること。
 _SAFE_REPR = reprlib.Repr(maxlevel=6, maxstring=200, maxother=200)
+
+# _bounded_repr() が返す文字列の上限。9 箇所ある呼び出し元のうち最長の
+# プレフィックス文字列 (request_type を含むもの) がおよそ 60 文字なので、
+# 300 + len("…(truncated)") を足しても例外メッセージ全体は余裕を持って
+# 500 文字を下回る。
+_BOUNDED_REPR_MAX_CHARS = 300
+
+
+def _bounded_repr(x: Any) -> str:
+    """`_SAFE_REPR.repr(x)` を、レンダリング後の文字列そのものに対して
+    さらに固定の総文字数まで切り詰めて返す。
+
+    `_SAFE_REPR` 単体は深さ (`maxlevel`) と葉 1 つあたりの長さ
+    (`maxstring`/`maxother`) しか制限しないため、幅 (`maxlist`/`maxdict`)
+    の分だけ葉が並ぶと、深さに関係なく合計は簡単に数百 KB になりうる
+    (上のモジュールコメント参照)。ここで最終的にレンダリング済みの文字列
+    そのものを切り詰めることで、幅にも深さにも依存しない総量の上限を
+    保証する。
+    """
+    rendered = _SAFE_REPR.repr(x)
+    if len(rendered) <= _BOUNDED_REPR_MAX_CHARS:
+        return rendered
+    return rendered[:_BOUNDED_REPR_MAX_CHARS] + "…(truncated)"
 
 
 class ObsProtocolError(Exception):
@@ -67,9 +100,21 @@ class ObsRequestError(ObsProtocolError):
         # 読めるよう素通しのまま残し、例外メッセージだけ切り詰める。通常長の
         # comment はそのまま読めるよう、_SAFE_REPR の repr() 化 (クォート付き
         # で読みにくくなる) ではなくスライスで済ませる。
-        bounded_comment = (
-            comment if len(comment) <= 200 else comment[:200] + "…(truncated)"
-        )
+        #
+        # comment はアノテーション上 str だが、このクラスは公開クラスであり
+        # このモジュール外の呼び出し側 (呼び出し側が独自に組み立てる場合も
+        # 含む) が任意の値で直接構築しうる。ピア経由の 2 箇所の構築元は
+        # どちらも呼び出し前に isinstance(comment, str) を検査済みなので
+        # ここに非 str が来ることはないが、`len(comment)` を無検査で呼ぶと
+        # 例えば `ObsRequestError("X", 1, None)` が素の TypeError で死ぬ
+        # (fix pass 7, finding 3 (Minor))。isinstance で分岐し、非 str でも
+        # コンストラクタ自体は決して例外を漏らさない total な形に戻す。
+        if isinstance(comment, str):
+            bounded_comment = (
+                comment if len(comment) <= 200 else comment[:200] + "…(truncated)"
+            )
+        else:
+            bounded_comment = _bounded_repr(comment)
         super().__init__(f"{request_type} failed: code={code} {bounded_comment}")
 
 
@@ -144,11 +189,11 @@ class ObsWsClient:
             raise ObsProtocolError(f"OBS から不正な JSON: {e}") from e
         if not isinstance(message, dict) or "op" not in message:
             raise ObsProtocolError(
-                f"OBS から不正なメッセージ: {_SAFE_REPR.repr(message)}"
+                f"OBS から不正なメッセージ: {_bounded_repr(message)}"
             )
         if not isinstance(message.get("d"), dict):
             raise ObsProtocolError(
-                f"OBS からのメッセージに 'd' が無い: {_SAFE_REPR.repr(message)}"
+                f"OBS からのメッセージに 'd' が無い: {_bounded_repr(message)}"
             )
         return message
 
@@ -165,9 +210,10 @@ class ObsWsClient:
             # いない生のピア値 (fix pass 6, finding 1 (Critical))。f-string の
             # {x} は format() 経由で結局 dict.__repr__ を呼ぶので、!r を使って
             # いなくても fix pass 5 で塞いだのと同じ repr() 再帰ハザードと
-            # 無制限長ハザードを踏む。_SAFE_REPR で両方封じる。
+            # 無制限長ハザードを踏む。_bounded_repr() で両方封じる (深さは
+            # reprlib の maxlevel、総幅は _bounded_repr() 自身の切り詰めで)。
             raise ObsIdentifyError(
-                f"Hello を期待したが op={_SAFE_REPR.repr(message['op'])} が来た"
+                f"Hello を期待したが op={_bounded_repr(message['op'])} が来た"
             )
         hello_data = message["d"]
         d: dict[str, Any] = {"rpcVersion": RPC_VERSION}
@@ -185,14 +231,14 @@ class ObsWsClient:
                 )
             if not isinstance(auth, dict):
                 raise ObsIdentifyError(
-                    f"OBS の authentication が不正な形: {_SAFE_REPR.repr(auth)}"
+                    f"OBS の authentication が不正な形: {_bounded_repr(auth)}"
                 )
             salt = auth.get("salt")
             challenge = auth.get("challenge")
             if not isinstance(salt, str) or not isinstance(challenge, str):
                 raise ObsIdentifyError(
                     "OBS の authentication に salt/challenge が無い:"
-                    f" {_SAFE_REPR.repr(auth)}"
+                    f" {_bounded_repr(auth)}"
                 )
             try:
                 d["authentication"] = build_auth_string(password, salt, challenge)
@@ -211,7 +257,7 @@ class ObsWsClient:
         if message["op"] != OP_IDENTIFIED:
             # 上の Hello ガードと同じハザード (fix pass 6, finding 1 (Critical))。
             raise ObsIdentifyError(
-                f"Identified を期待したが op={_SAFE_REPR.repr(message['op'])} が来た"
+                f"Identified を期待したが op={_bounded_repr(message['op'])} が来た"
             )
 
     async def request(
@@ -250,8 +296,7 @@ class ObsWsClient:
             status = d.get("requestStatus")
             if not isinstance(status, dict):
                 raise ObsProtocolError(
-                    f"{request_type} の応答に requestStatus が無い:"
-                    f" {_SAFE_REPR.repr(d)}"
+                    f"{request_type} の応答に requestStatus が無い: {_bounded_repr(d)}"
                 )
             if not status.get("result"):
                 code = status.get("code", 0)
@@ -284,7 +329,7 @@ class ObsWsClient:
                 ):
                     raise ObsProtocolError(
                         f"{request_type} の応答の requestStatus.code/comment が"
-                        f" 不正な形: {_SAFE_REPR.repr(status)}"
+                        f" 不正な形: {_bounded_repr(status)}"
                     )
                 if code == STATUS_RESOURCE_NOT_FOUND:
                     raise ObsResourceNotFoundError(request_type, code, comment)
@@ -299,6 +344,6 @@ class ObsWsClient:
                 # 1 フレーム先送りされて素の TypeError になる。
                 raise ObsProtocolError(
                     f"{request_type} の応答の responseData が不正な形:"
-                    f" {_SAFE_REPR.repr(response_data)}"
+                    f" {_bounded_repr(response_data)}"
                 )
             return response_data
