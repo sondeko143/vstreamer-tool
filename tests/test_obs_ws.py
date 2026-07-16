@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections import deque
+from collections.abc import Callable
 
 import pytest
 
@@ -43,9 +44,10 @@ class FakeObsServer:
     ):
         self.sent: list[dict] = []
         self.closed = False
-        self._outgoing: deque[str] = deque()
+        self._outgoing: deque[str | bytes] = deque()
         self._responses: deque[tuple[bool, int, dict]] = deque()
         self._malformed_responses = 0
+        self._raw_responses: deque[Callable[[str], str | bytes]] = deque()
         # recv() が尽きたときに例外で止まる代わりに永遠に待つ (finding 1:
         # _recv() の wait_for タイムアウトを駆動するためのモード)。
         self._hang = hang
@@ -68,6 +70,16 @@ class FakeObsServer:
         """次の Request に requestStatus を欠いた不正な応答を返す (finding 2)。"""
         self._malformed_responses += 1
 
+    def script_raw_response(self, builder: Callable[[str], str | bytes]):
+        """次の Request に、`builder(requestId)` が返す生ペイロードをそのまま送る
+        (JSON エンコードしない)。requestId はクライアントが採番した実際の値が渡って
+        くるので、requestStatus 周りの壊れ方 (missing/非 dict) を、クライアントの
+        マッチングループ (`requestId` 一致待ち) を素通りさせた上で作れる。壊れ方が
+        requestId と無関係な生フレーム (不正 JSON・非 UTF-8・配列) にも同じフックを
+        使う (`builder` は引数を無視すればよい)。
+        """
+        self._raw_responses.append(builder)
+
     def stop_responding(self):
         """以降、何を送られても応答しなくなる (finding 1 のタイムアウト用)。"""
         self._hang = True
@@ -75,6 +87,13 @@ class FakeObsServer:
     def inject(self, message: dict):
         """次の応答より前に届く生メッセージ (イベント等) を積む。"""
         self._outgoing.append(json.dumps(message))
+
+    def inject_raw(self, payload: str | bytes):
+        """次の応答より前に届く、JSON エンコードしていない生フレームを積む。
+        不正 JSON・JSON 配列・非 UTF-8 バイト列など、`inject()` の dict 入力では
+        作れない壊れ方を作るためのフック。
+        """
+        self._outgoing.append(payload)
 
     async def send(self, message: str) -> None:
         m = json.loads(message)
@@ -88,6 +107,10 @@ class FakeObsServer:
                 json.dumps({"op": 2, "d": {"negotiatedRpcVersion": 1}})
             )
         elif m["op"] == OP_REQUEST:
+            if self._raw_responses:
+                builder = self._raw_responses.popleft()
+                self._outgoing.append(builder(m["d"]["requestId"]))
+                return
             if self._malformed_responses:
                 self._malformed_responses -= 1
                 self._outgoing.append(
@@ -122,7 +145,7 @@ class FakeObsServer:
                 )
             )
 
-    async def recv(self) -> str:
+    async def recv(self) -> str | bytes:
         if not self._outgoing:
             if self._hang:
                 # 何も返さず、呼び出し側の wait_for がタイムアウトで cancel
@@ -285,3 +308,162 @@ async def test_request_raises_obs_protocol_error_when_request_status_is_missing(
     with pytest.raises(ObsProtocolError) as e:
         await client.request("GetInputSettings", {"inputName": "x"})
     assert not isinstance(e.value, ObsRequestError)
+
+
+# --- fix pass 2, finding "Important": identify() 認証情報の生 index アクセス ---
+# (finding 2 と同じ穴の class。_recv() が d を dict と保証しても、その中身
+# (`authentication`) の形は OBS が選ぶので、さらに一段検査が要る。)
+
+
+async def test_identify_raises_obs_identify_error_when_authentication_is_not_a_dict():
+    server = FakeObsServer(greet=False)
+    server.inject({"op": 0, "d": {"authentication": "not-a-dict"}})
+    with pytest.raises(ObsIdentifyError):
+        await ObsWsClient(server).identify("irrelevant-password")
+
+
+async def test_identify_raises_obs_identify_error_when_salt_is_missing():
+    server = FakeObsServer(greet=False)
+    server.inject({"op": 0, "d": {"authentication": {"challenge": AUTH_CHALLENGE}}})
+    with pytest.raises(ObsIdentifyError):
+        await ObsWsClient(server).identify("irrelevant-password")
+
+
+async def test_identify_raises_obs_identify_error_when_challenge_is_missing():
+    server = FakeObsServer(greet=False)
+    server.inject({"op": 0, "d": {"authentication": {"salt": AUTH_SALT}}})
+    with pytest.raises(ObsIdentifyError):
+        await ObsWsClient(server).identify("irrelevant-password")
+
+
+# --- fix pass 2, finding "Minor": 非 UTF-8 バイト列フレームが decode で漏れる ---
+
+
+async def test_recv_raises_obs_protocol_error_on_non_utf8_bytes_frame():
+    server = FakeObsServer(greet=False)
+    server.inject_raw(b"\xff\xfe\x00\x01")
+    with pytest.raises(ObsProtocolError):
+        await ObsWsClient(server).identify("")
+
+
+# --- fix pass 2: 契約テスト。個々のバグではなく契約そのものを固定する。
+# identify()/request() に悪意・破損したサーバメッセージを大量に流し込み、どれも
+# 許容集合の外 (KeyError/TypeError/AttributeError/UnicodeDecodeError/TimeoutError
+# などの素の例外) に漏れず、必ず ObsProtocolError の階層内に収まることを保証する。
+# 次に見つかる「4つ目」を防ぐのはこのテストの役目であって、個別テストの役目では
+# ない。---
+
+IDENTIFY_HOSTILE_HELLOS: list[tuple[str, dict]] = [
+    ("d_missing", {"op": 0}),
+    ("d_not_a_dict", {"op": 0, "d": "not-a-dict"}),
+    ("authentication_not_a_dict", {"op": 0, "d": {"authentication": "not-a-dict"}}),
+    (
+        "authentication_missing_salt",
+        {"op": 0, "d": {"authentication": {"challenge": AUTH_CHALLENGE}}},
+    ),
+    (
+        "authentication_missing_challenge",
+        {"op": 0, "d": {"authentication": {"salt": AUTH_SALT}}},
+    ),
+    ("op_missing", {"d": {}}),
+]
+
+IDENTIFY_HOSTILE_RAW_FRAMES: list[tuple[str, str | bytes]] = [
+    ("invalid_json", "{not valid json"),
+    ("json_array_instead_of_object", "[1, 2, 3]"),
+    ("non_utf8_bytes_frame", b"\xff\xfe\x00\x01"),
+]
+
+
+@pytest.mark.parametrize(
+    "hello",
+    [pytest.param(msg, id=name) for name, msg in IDENTIFY_HOSTILE_HELLOS],
+)
+async def test_identify_never_leaks_a_raw_exception_on_hostile_hello(hello):
+    server = FakeObsServer(greet=False)
+    server.inject(hello)
+    with pytest.raises(ObsProtocolError):
+        # 空でないパスワードを渡し、authentication 系のケースが
+        # "password が空" の早期リターンで隠れないようにする。
+        await ObsWsClient(server, timeout=0.05).identify("irrelevant-password")
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [pytest.param(payload, id=name) for name, payload in IDENTIFY_HOSTILE_RAW_FRAMES],
+)
+async def test_identify_never_leaks_a_raw_exception_on_hostile_raw_frame(raw):
+    server = FakeObsServer(greet=False)
+    server.inject_raw(raw)
+    with pytest.raises(ObsProtocolError):
+        await ObsWsClient(server, timeout=0.05).identify("irrelevant-password")
+
+
+def _request_status_missing(rid: str) -> str:
+    return json.dumps(
+        {"op": 7, "d": {"requestId": rid, "requestType": "X", "responseData": {}}}
+    )
+
+
+def _request_status_not_a_dict(rid: str) -> str:
+    return json.dumps(
+        {
+            "op": 7,
+            "d": {"requestId": rid, "requestType": "X", "requestStatus": "nope"},
+        }
+    )
+
+
+def _request_status_missing_code(rid: str) -> str:
+    # result: False にして、code を実際に読む失敗経路を通す。result: True だと
+    # code は読まれないので、この壊れ方の検査にならない。
+    return json.dumps(
+        {
+            "op": 7,
+            "d": {
+                "requestId": rid,
+                "requestType": "X",
+                "requestStatus": {"result": False},
+            },
+        }
+    )
+
+
+def _op_missing(rid: str) -> str:
+    return json.dumps({"d": {"requestId": rid}})
+
+
+def _invalid_json(rid: str) -> str:
+    return "{not valid json"
+
+
+def _json_array_instead_of_object(rid: str) -> str:
+    return "[1, 2, 3]"
+
+
+def _non_utf8_bytes_frame(rid: str) -> bytes:
+    return b"\xff\xfe\x00\x01"
+
+
+REQUEST_HOSTILE_RESPONSES: list[tuple[str, Callable[[str], str | bytes]]] = [
+    ("requestStatus_missing", _request_status_missing),
+    ("requestStatus_not_a_dict", _request_status_not_a_dict),
+    ("requestStatus_missing_code", _request_status_missing_code),
+    ("op_missing", _op_missing),
+    ("invalid_json", _invalid_json),
+    ("json_array_instead_of_object", _json_array_instead_of_object),
+    ("non_utf8_bytes_frame", _non_utf8_bytes_frame),
+]
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [pytest.param(fn, id=name) for name, fn in REQUEST_HOSTILE_RESPONSES],
+)
+async def test_request_never_leaks_a_raw_exception(builder):
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server, timeout=0.05)
+    await client.identify("")
+    server.script_raw_response(builder)
+    with pytest.raises(ObsProtocolError):
+        await client.request("GetInputSettings", {"inputName": "x"})

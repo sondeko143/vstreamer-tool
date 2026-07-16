@@ -104,7 +104,10 @@ class ObsWsClient:
                 f"OBS からの応答が {self._timeout} 秒以内に来なかった"
             ) from e
         if isinstance(raw, bytes):
-            raw = raw.decode("utf-8")
+            try:
+                raw = raw.decode("utf-8")
+            except UnicodeDecodeError as e:
+                raise ObsProtocolError(f"OBS から UTF-8 でないフレーム: {e}") from e
         try:
             message = json.loads(raw)
         except ValueError as e:
@@ -132,9 +135,15 @@ class ObsWsClient:
                 raise ObsIdentifyError(
                     "OBS が認証を要求していますが subtitle.obs.password が空です"
                 )
-            d["authentication"] = build_auth_string(
-                password, auth["salt"], auth["challenge"]
-            )
+            if not isinstance(auth, dict):
+                raise ObsIdentifyError(f"OBS の authentication が不正な形: {auth!r}")
+            salt = auth.get("salt")
+            challenge = auth.get("challenge")
+            if not isinstance(salt, str) or not isinstance(challenge, str):
+                raise ObsIdentifyError(
+                    f"OBS の authentication に salt/challenge が無い: {auth!r}"
+                )
+            d["authentication"] = build_auth_string(password, salt, challenge)
         await self._send(OP_IDENTIFY, d)
         message = await self._recv()
         if message["op"] != OP_IDENTIFIED:
