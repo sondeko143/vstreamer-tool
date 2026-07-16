@@ -143,7 +143,18 @@ class ObsWsClient:
                 raise ObsIdentifyError(
                     f"OBS の authentication に salt/challenge が無い: {auth!r}"
                 )
-            d["authentication"] = build_auth_string(password, salt, challenge)
+            try:
+                d["authentication"] = build_auth_string(password, salt, challenge)
+            except UnicodeError as e:
+                # isinstance(salt, str) / isinstance(challenge, str) は UTF-8
+                # エンコード可能であることまでは保証しない (例:
+                # json.loads('"\\ud800"') は非対の surrogate を含む str を返す)。
+                # build_auth_string() 自身はこの節の探索対象外の純粋関数として
+                # 残す (専用ユニットテストを持つ) ので、ここで包んで
+                # identify 時の失敗として fail-loud にする (ADR-0042)。
+                raise ObsIdentifyError(
+                    f"OBS の authentication の salt/challenge が UTF-8 として不正: {e}"
+                ) from e
         await self._send(OP_IDENTIFY, d)
         message = await self._recv()
         if message["op"] != OP_IDENTIFIED:

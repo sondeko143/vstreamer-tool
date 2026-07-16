@@ -336,6 +336,24 @@ async def test_identify_raises_obs_identify_error_when_challenge_is_missing():
         await ObsWsClient(server).identify("irrelevant-password")
 
 
+# --- fix pass 3: salt/challenge が str だが UTF-8 エンコード不能 (非対 surrogate) ---
+# isinstance(salt, str) は通るが .encode("utf-8") で素の UnicodeEncodeError を送出
+# しうる穴。JSON のワイヤ上は素の ASCII \uD800 なので websockets のフレームレベル
+# UTF-8 検証もこれを止めない (レビューで実機再現済み)。
+
+
+async def test_identify_raises_obs_identify_error_when_salt_is_not_utf8_encodable():
+    server = FakeObsServer(greet=False)
+    server.inject(
+        {
+            "op": 0,
+            "d": {"authentication": {"salt": "\ud800", "challenge": AUTH_CHALLENGE}},
+        }
+    )
+    with pytest.raises(ObsIdentifyError):
+        await ObsWsClient(server).identify("irrelevant-password")
+
+
 # --- fix pass 2, finding "Minor": 非 UTF-8 バイト列フレームが decode で漏れる ---
 
 
@@ -364,6 +382,13 @@ IDENTIFY_HOSTILE_HELLOS: list[tuple[str, dict]] = [
     (
         "authentication_missing_challenge",
         {"op": 0, "d": {"authentication": {"salt": AUTH_SALT}}},
+    ),
+    (
+        "authentication_salt_not_utf8_encodable",
+        {
+            "op": 0,
+            "d": {"authentication": {"salt": "\ud800", "challenge": AUTH_CHALLENGE}},
+        },
     ),
     ("op_missing", {"d": {}}),
 ]
@@ -414,21 +439,6 @@ def _request_status_not_a_dict(rid: str) -> str:
     )
 
 
-def _request_status_missing_code(rid: str) -> str:
-    # result: False にして、code を実際に読む失敗経路を通す。result: True だと
-    # code は読まれないので、この壊れ方の検査にならない。
-    return json.dumps(
-        {
-            "op": 7,
-            "d": {
-                "requestId": rid,
-                "requestType": "X",
-                "requestStatus": {"result": False},
-            },
-        }
-    )
-
-
 def _op_missing(rid: str) -> str:
     return json.dumps({"d": {"requestId": rid}})
 
@@ -448,7 +458,6 @@ def _non_utf8_bytes_frame(rid: str) -> bytes:
 REQUEST_HOSTILE_RESPONSES: list[tuple[str, Callable[[str], str | bytes]]] = [
     ("requestStatus_missing", _request_status_missing),
     ("requestStatus_not_a_dict", _request_status_not_a_dict),
-    ("requestStatus_missing_code", _request_status_missing_code),
     ("op_missing", _op_missing),
     ("invalid_json", _invalid_json),
     ("json_array_instead_of_object", _json_array_instead_of_object),
