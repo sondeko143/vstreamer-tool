@@ -221,6 +221,28 @@ class SubtitleTextConfig(BaseModel):
     margin: int = 4
 
 
+class SubtitleObsConfig(BaseModel):
+    url: str = Field(
+        default="ws://127.0.0.1:4455",
+        description="obs-websocket server URL (Tools -> obs-websocket Settings)",
+    )
+    password: SecretStr = Field(
+        default=SecretStr(""), description="obs-websocket server password"
+    )
+    text_source: str = Field(
+        default="",
+        description="name of the OBS Text (GDI+) source that shows transcription",
+    )
+    translated_source: str = Field(
+        default="",
+        description="name of the OBS Text (GDI+) source that shows translation",
+    )
+
+    @field_serializer("password", when_used="json")
+    def serialize_password(self, v: SecretStr) -> str:
+        return v.get_secret_value()
+
+
 class SubtitleConfig(BaseModel):
     enable: bool = False
     worker_type: SubtitleWorkerType = SubtitleWorkerType.TK
@@ -233,6 +255,7 @@ class SubtitleConfig(BaseModel):
     translated: SubtitleTextConfig = Field(
         default_factory=lambda: SubtitleTextConfig(anchor="n")
     )
+    obs: SubtitleObsConfig = Field(default_factory=SubtitleObsConfig)
 
 
 class TranslationConfig(BaseModel):
@@ -432,6 +455,13 @@ class Config(BaseSettings):
                 "service_account_info": {
                     k: v.get_secret_value()
                     for k, v in self.gcp.service_account_info.items()
+                },
+            },
+            "subtitle": {
+                **encoded["subtitle"],
+                "obs": {
+                    **encoded["subtitle"]["obs"],
+                    "password": self.subtitle.obs.password.get_secret_value(),
                 },
             },
         }

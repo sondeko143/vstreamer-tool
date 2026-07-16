@@ -13,6 +13,7 @@ from pathlib import Path
 from vspeech.config import Config
 from vspeech.config import F0ExtractorType
 from vspeech.config import GcpConfig
+from vspeech.config import SubtitleWorkerType
 from vspeech.config import TranscriptionConfig
 from vspeech.config import TranscriptionWorkerType
 from vspeech.config import TtsWorkerType
@@ -180,6 +181,37 @@ def _check_vc(config: Config) -> list[ConfigProblem]:
     return problems
 
 
+def _check_subtitle(config: Config) -> list[ConfigProblem]:
+    if not config.subtitle.enable:
+        return []
+    if config.subtitle.worker_type != SubtitleWorkerType.OBS:
+        return []  # TK は接続先を持たない
+    w = "subtitle"
+    obs = config.subtitle.obs
+    problems: list[ConfigProblem] = []
+    if not obs.url:
+        problems.append(
+            ConfigProblem(w, "OBS バックエンドには subtitle.obs.url が必須ですが空です")
+        )
+    elif not obs.url.startswith(("ws://", "wss://")):
+        problems.append(
+            ConfigProblem(
+                w,
+                f"subtitle.obs.url '{obs.url}' は ws:// か wss:// で始まる必要があります",
+            )
+        )
+    for name, value in (
+        ("subtitle.obs.text_source", obs.text_source),
+        ("subtitle.obs.translated_source", obs.translated_source),
+    ):
+        if not value:
+            problems.append(
+                ConfigProblem(w, f"OBS バックエンドには {name} が必須ですが空です")
+            )
+    # 認証の成立とソースの実在は層B (接続してからでないと未起動と区別できない, ADR-0042)。
+    return problems
+
+
 _CHECKERS: list[Checker] = [
     _check_transcription,
     _check_translation,
@@ -187,6 +219,7 @@ _CHECKERS: list[Checker] = [
     _check_vc,
     _check_recording,
     _check_playback,
+    _check_subtitle,
 ]
 
 

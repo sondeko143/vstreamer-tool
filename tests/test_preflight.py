@@ -6,10 +6,12 @@ from pydantic import SecretStr
 from vspeech.config import AmiConfig
 from vspeech.config import Config
 from vspeech.config import GcpConfig
+from vspeech.config import SubtitleWorkerType
 from vspeech.config import TranscriptionConfig
 from vspeech.config import TranscriptionWorkerType
 from vspeech.exceptions import ConfigError
 from vspeech.lib.audio import DeviceInfo
+from vspeech.preflight import _check_subtitle
 from vspeech.preflight import preflight
 
 
@@ -244,3 +246,64 @@ def test_vc_non_rmvpe_extractor_skips_rmvpe_check(tmp_path):
         ),
     )
     preflight(cfg)  # rmvpe not checked -> no ConfigError
+
+
+def test_subtitle_tk_backend_is_not_checked():
+    # TK 構成に新しい失敗を持ち込まない (ADR-0042)。
+    config = Config()
+    config.subtitle.enable = True
+    config.subtitle.worker_type = SubtitleWorkerType.TK
+    config.subtitle.obs.url = ""
+    assert _check_subtitle(config) == []
+
+
+def test_disabled_subtitle_is_not_checked():
+    config = Config()
+    config.subtitle.enable = False
+    config.subtitle.worker_type = SubtitleWorkerType.OBS
+    config.subtitle.obs.url = ""
+    assert _check_subtitle(config) == []
+
+
+def test_obs_backend_requires_a_url():
+    config = Config()
+    config.subtitle.enable = True
+    config.subtitle.worker_type = SubtitleWorkerType.OBS
+    config.subtitle.obs.url = ""
+    config.subtitle.obs.text_source = "t"
+    config.subtitle.obs.translated_source = "s"
+    problems = _check_subtitle(config)
+    assert len(problems) == 1
+    assert "url" in problems[0].detail
+
+
+def test_obs_backend_rejects_a_non_websocket_url():
+    config = Config()
+    config.subtitle.enable = True
+    config.subtitle.worker_type = SubtitleWorkerType.OBS
+    config.subtitle.obs.url = "http://127.0.0.1:4455"
+    config.subtitle.obs.text_source = "t"
+    config.subtitle.obs.translated_source = "s"
+    problems = _check_subtitle(config)
+    assert len(problems) == 1
+    assert "ws://" in problems[0].detail
+
+
+def test_obs_backend_requires_both_source_names_and_reports_both():
+    # ADR-0038 は「全問題を集約」する。1 個目で打ち切らない。
+    config = Config()
+    config.subtitle.enable = True
+    config.subtitle.worker_type = SubtitleWorkerType.OBS
+    problems = _check_subtitle(config)
+    details = " ".join(p.detail for p in problems)
+    assert "text_source" in details
+    assert "translated_source" in details
+
+
+def test_obs_backend_accepts_a_complete_config():
+    config = Config()
+    config.subtitle.enable = True
+    config.subtitle.worker_type = SubtitleWorkerType.OBS
+    config.subtitle.obs.text_source = "vspeech-text"
+    config.subtitle.obs.translated_source = "vspeech-translated"
+    assert _check_subtitle(config) == []

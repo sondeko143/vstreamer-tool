@@ -1,6 +1,8 @@
 import io
 import sys
 
+from pydantic import SecretStr
+
 from vspeech.config import Config
 from vspeech.config import SubtitleWorkerType
 
@@ -38,3 +40,29 @@ def test_importing_the_subtitle_dispatcher_does_not_import_tkinter():
     import vspeech.worker.subtitle  # noqa: F401
 
     assert "tkinter" not in sys.modules
+
+
+def test_obs_password_survives_a_toml_round_trip():
+    """export_to_toml は SecretStr をハードコードで展開している。新しい secret を
+    足したらここも足さないと、GUI の保存が config を壊す。"""
+    from vspeech.config import Config
+
+    config = Config()
+    config.subtitle.enable = True
+    config.subtitle.worker_type = SubtitleWorkerType.OBS
+    config.subtitle.obs.password = SecretStr("hunter2")
+    dumped = config.export_to_toml()
+    assert "hunter2" in dumped
+    assert "**" not in dumped
+    reloaded = Config.read_config_from_file(
+        _named_bytes_io(dumped.encode("utf-8"), "config.toml")
+    )
+    assert reloaded.subtitle.obs.password.get_secret_value() == "hunter2"
+
+
+def _named_bytes_io(data: bytes, name: str):
+    import io
+
+    buf = io.BytesIO(data)
+    buf.name = name
+    return buf
