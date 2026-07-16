@@ -144,10 +144,10 @@ def _bind_torch_input(io_binding: Any, name: str, tensor: torch.Tensor) -> torch
     """
     tensor = tensor.contiguous()
     device = tensor.device
-    # `device.index` can be None (a bare torch.device("cuda")), so the `else 0`
-    # is a real branch. ty narrows index to non-optional and marks it
-    # unreachable (ty check still exits 0) -- keep it; do not reshape correct
-    # code to satisfy the tool. (Same pattern in extract_features / infer.)
+    # `device.index` is None for a bare torch.device("cuda"), so `else 0` is a
+    # real branch, though ty narrows index to non-optional and marks it
+    # unreachable (ty check still exits 0). Keep it. (Same in extract_features
+    # / infer.)
     io_binding.bind_input(
         name=name,
         device_type="cuda",
@@ -169,11 +169,10 @@ def _ort_output_to_torch(ort_output: Any, device: torch.device) -> torch.Tensor:
             dlp = ort_output.to_dlpack()
         return dlpack.from_dlpack(dlp).clone()
     except Exception as e:  # noqa: BLE001 - any failure must still return output
-        # Zero-copy dlpack is the fast path; on ANY failure fall back to a numpy
-        # copy so inference still returns. Warn -- a broad except here would
-        # otherwise turn a real dlpack bug into a silent slow path (in spec 2,
-        # the twin except in export_graph read a UnicodeEncodeError as "dynamo
-        # failed" and quietly dropped to the legacy exporter).
+        # dlpack zero-copy is the fast path; on any failure fall back to a numpy
+        # copy so inference still returns. Warn, so a broad except here can't turn
+        # a real dlpack bug into a silent slow path (as export_graph's twin except
+        # once did with a UnicodeEncodeError).
         logger.warning("dlpack transfer failed; using numpy fallback: %s", e)
         return torch.tensor(ort_output.numpy(), device=device)
 

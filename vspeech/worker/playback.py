@@ -107,12 +107,11 @@ class OutputStream:
         self.stream.start()
 
     def search_appropriate_device(self):
-        # Deferred: search_device_by_name reads sd.query_devices(), whose device
-        # list is cached at PortAudio init, so a device hot-plugged/reconnected
-        # after startup is not seen (the old PyAudio path re-created PyAudio() to
-        # re-enumerate). Fixed-device setups (e.g. "Line 4") never hit this;
-        # re-enumerating needs sd._terminate()/_initialize() (private API) whose
-        # side effects aren't worth verifying for this edge case.
+        # Deferred: search_device_by_name reads sd.query_devices(), cached at
+        # PortAudio init, so a device hot-plugged after startup is not seen.
+        # Fixed-device setups (e.g. "Line 4") never hit this; re-enumerating
+        # needs sd._terminate()/_initialize() (private API) not worth verifying
+        # for this edge case.
         output_device = search_device_by_name(
             host_api_index=self.device.host_api,
             name=self.device.name,

@@ -290,9 +290,9 @@ def main() -> None:
         half_source = source.half().cuda()
         # fp16 ゲートの参照。ONNX fp16 と同じ重み・同じ層から取る。
         reference = torch_fp16_reference(half_wrapper, half_source)
-        # 繰り延べ: fp16 の export_graph の戻り値（使った exporter 名）を捨てている。
-        # mapping.json の "exporter" は fp32 側しか記録しないので、fp16 だけ legacy に
-        # フォールバックしても来歴に残らない（runtime は読まない。fallback は traceback を出す）。
+        # 繰り延べ: fp16 の export_graph の戻り値（exporter 名）を捨てている。mapping.json
+        # の "exporter" は fp32 側しか記録せず、fp16 だけ legacy に落ちても残らない
+        # （来歴のみ・runtime は読まない。fallback 自体は traceback を出すので気づける）。
         export_graph(half_wrapper, half_source, fp16_path)
         ok = (
             check(
@@ -311,10 +311,9 @@ def main() -> None:
         if not ok:
             raise SystemExit("等価ゲートに落ちました。資産は書き出しません。")
 
-        # 繰り延べ: 2 回の move は非アトミック。fp32 成功・fp16 失敗だと新 fp32 と
-        # 旧 fp16・旧 mapping.json が同居する。次のロードで parse_output_names が
-        # ValueError を投げるので黙って壊れはしないが、公開はアトミックではない
-        # （同一 FS の rename なので現実の確率は低い）。
+        # 繰り延べ: 2 回の move は非アトミック。fp32 成功・fp16 失敗で新 fp32 と
+        # 旧 fp16・旧 mapping.json が同居しうる（同一 FS の rename で確率は低い）。
+        # 次のロードで parse_output_names が ValueError を投げるので静かには壊れない。
         shutil.move(str(fp32_path), asset_dir / "hubert_fp32.onnx")
         shutil.move(str(fp16_path), asset_dir / "hubert_fp16.onnx")
 
