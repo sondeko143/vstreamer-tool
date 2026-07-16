@@ -1009,9 +1009,26 @@ Expected: `test_importing_the_subtitle_dispatcher_does_not_import_tkinter` が F
 
 `vspeech/worker/subtitle.py` の現行内容から、tk 固有の部分を**逐語移動**する: `wrap_text_to_width` / `draw_text_with_outline` / `TRANSPARENT_BG_COLOR` / `WIN32_TRANSPARENT_COLOR` / `set_bg_color` / `redraw_panel` / `subtitle_worker` の本体 / `on_closing`。
 
-**変更点は 2 つだけ**（それ以外はロジックに触らない）:
+**変更点は 3 つだけ**（それ以外はロジックに触らない）:
 1. 関数名 `subtitle_worker` → `subtitle_tk_worker`
 2. `Tk()` の生成が `create_subtitle_task` から関数内へ移る。`tk_root` 引数を取るのをやめ、自分で作る。`WM_DELETE_WINDOW` の配線もここへ移す（現行の「窓を閉じるとパイプラインが止まる」挙動を保つ）
+3. **ループ内のインライン・エージングを `age_panels(texts, interval_sec)` の呼び出しに置き換える**（Task 3 のレビューが指摘）。現在 tk ループは `values[0]` だけを減らして 0 で pop する規則を自前で持っており、`lib/subtitle_state.age_panels` と**同じ規則の 2 つ目のコピー**になっている。Task 3 のレビュアーが両者を突き合わせて一致を確認済みなので、これは挙動を変えない差し替えである。放置すると [ADR-0040](../../adr/0040-subtitle-obs-backend-via-worker-type.md) の Consequences が謳う「両バックエンドが `subtitle_state` を共有するので**表示時間の意味**もバックエンドによらず同一」が、まさに表示時間について偽になり、手で同期する 2 コピーがいずれ静かに乖離する。
+
+   注意: 現行ループは 1 つの `for p in texts` の中で「config 再読み込み → 寸法更新 → エージング → 失効時 redraw」を混ぜている。`age_panels` は失効したパネルを返すので、config/寸法の更新ループと、返ってきたパネルの redraw に分ける:
+
+```python
+            for p in texts:
+                if p == "n":
+                    texts[p].config = context.config.subtitle.text
+                elif p == "s":
+                    texts[p].config = context.config.subtitle.translated
+                texts[p].bb_width = tk_root.winfo_width()
+                texts[p].bb_height = tk_root.winfo_height()
+            for ts in age_panels(texts, interval_sec):
+                redraw_panel(canvas, ts)
+```
+
+   `age_panels` は空パネルを飛ばし、head だけを減らし、`max(..., 0)` で床打ちし、失効時に 1 回だけ pop する — 現行の分岐と 1 対 1 で対応する。`import` に `from vspeech.lib.subtitle_state import age_panels` を足すこと。
 
 ```python
 """subtitle の TK バックエンド (ADR-0040)。

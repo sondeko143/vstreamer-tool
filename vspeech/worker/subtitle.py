@@ -15,6 +15,12 @@ from typing import Any
 from vspeech.config import Anchor
 from vspeech.config import SubtitleTextConfig
 from vspeech.exceptions import shutdown_worker
+
+# `Text` is re-exported (the `as Text` form is what stops ruff's F401) only so
+# tests/test_subtitle_redraw.py can keep importing it from here. Nothing in this
+# module uses it. That idiom permanently silences the unused-import lint for this
+# line, so it will not tell you when this goes dead: drop it once that test
+# imports from lib/subtitle_state or worker/subtitle_tk (ADR-0040's split).
 from vspeech.lib.subtitle_state import Text as Text
 from vspeech.lib.subtitle_state import Texts
 from vspeech.lib.subtitle_state import ingest_text
