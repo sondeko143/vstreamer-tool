@@ -35,10 +35,20 @@ regex = '''(?i)appkey\s*[:=]\s*['"][A-Za-z0-9._\-+/=]{20,}['"]'''
 tags = ["secret", "amivoice"]
 
 [allowlist]
-description = "Redaction placeholders and standard Windows accounts that are not leaks"
-# A finding is dropped if its matched value matches any of these.
+description = "Redaction placeholders, standard Windows accounts, and fixed test vectors that are not leaks"
+# A finding is dropped if its matched value matches any of these. Allowlist the
+# exact values, never a path — a path allowlist would stop scanning real secrets
+# in that file too.
 regexes = [
   '''<USER>''',
   '''<NAS_HOST>''',
   '''(?i)users[\\/]{1,2}(?:public|default|defaultuser|default user|all users)''',
+  # obs-websocket 5.x の認証アルゴリズムを固定する回帰ベクタ (ADR-0043,
+  # tests/test_obs_ws.py)。base64/sha256 の高エントロピー文字列なので
+  # generic-api-key に引っかかるが、資格情報ではない: password は文字列
+  # "supersecretpassword" で、salt / challenge / 期待値はこのテスト専用の
+  # 固定値。実在の OBS インスタンスのものではない。
+  '''lM1GncleQOaCu9lT1yeUZhFYnqhsLLP1G5lAGo3ixaI=''',
+  '''\+IxH4CnCiqpX1rM9scsNynZzbOe4KhDeYcTNS3PDaeY=''',
+  '''1Ct943GAT\+6YQUUX47Ia/ncufilbe6\+oD6lY\+5kaCu4=''',
 ]
