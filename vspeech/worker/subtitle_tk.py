@@ -1,7 +1,10 @@
 """subtitle の TK バックエンド (ADR-0040)。
 
-ADR-0040 の非ゴールにより、ここのロジックは OBS バックエンド追加の前後で
-変えない。tkinter への依存はこのファイルだけに閉じ込める。
+tkinter への依存はこのファイルだけに閉じ込める。OBS バックエンドの追加に
+あたり、ここのロジックは原則として変えない (ADR-0040 の非ゴール)。例外は
+`anchor = "center"` が右寄せになるバグの修正 1 件だけで、これは移植中に
+発覚し、両バックエンドが同じ寄せ方をする必要がある (ADR-0041) ため同時に
+直した。判定規則は lib/subtitle_state.anchor_to_justify に 1 つだけ置く。
 """
 
 from asyncio import CancelledError
