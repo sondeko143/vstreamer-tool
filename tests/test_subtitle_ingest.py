@@ -4,13 +4,13 @@ import pytest
 
 from vspeech.config import EventType
 from vspeech.config import SubtitleTextConfig
+from vspeech.lib.subtitle_state import Text
+from vspeech.lib.subtitle_state import Texts
+from vspeech.lib.subtitle_state import ingest_text
 from vspeech.shared_context import EventAddress
 from vspeech.shared_context import Params
 from vspeech.shared_context import SoundInput
 from vspeech.shared_context import WorkerInput
-from vspeech.worker.subtitle import Text
-from vspeech.worker.subtitle import Texts
-from vspeech.worker.subtitle import ingest_text
 
 
 def make_message(text: str, position=None) -> WorkerInput:
