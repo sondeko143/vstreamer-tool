@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections import deque
 
@@ -6,6 +7,7 @@ import pytest
 from vspeech.lib.obs_ws import OP_IDENTIFY
 from vspeech.lib.obs_ws import OP_REQUEST
 from vspeech.lib.obs_ws import ObsIdentifyError
+from vspeech.lib.obs_ws import ObsProtocolError
 from vspeech.lib.obs_ws import ObsRequestError
 from vspeech.lib.obs_ws import ObsResourceNotFoundError
 from vspeech.lib.obs_ws import ObsWsClient
@@ -32,11 +34,21 @@ class FakeObsServer:
     待ち合わせも要らない。
     """
 
-    def __init__(self, *, require_auth: bool = True, greet: bool = True):
+    def __init__(
+        self,
+        *,
+        require_auth: bool = True,
+        greet: bool = True,
+        hang: bool = False,
+    ):
         self.sent: list[dict] = []
         self.closed = False
         self._outgoing: deque[str] = deque()
         self._responses: deque[tuple[bool, int, dict]] = deque()
+        self._malformed_responses = 0
+        # recv() が尽きたときに例外で止まる代わりに永遠に待つ (finding 1:
+        # _recv() の wait_for タイムアウトを駆動するためのモード)。
+        self._hang = hang
         if greet:
             hello: dict = {"obsWebSocketVersion": "5.5.0", "rpcVersion": 1}
             if require_auth:
@@ -52,6 +64,14 @@ class FakeObsServer:
         """次の Request に返す応答を積む。"""
         self._responses.append((ok, code, data or {}))
 
+    def script_malformed_response(self):
+        """次の Request に requestStatus を欠いた不正な応答を返す (finding 2)。"""
+        self._malformed_responses += 1
+
+    def stop_responding(self):
+        """以降、何を送られても応答しなくなる (finding 1 のタイムアウト用)。"""
+        self._hang = True
+
     def inject(self, message: dict):
         """次の応答より前に届く生メッセージ (イベント等) を積む。"""
         self._outgoing.append(json.dumps(message))
@@ -59,11 +79,31 @@ class FakeObsServer:
     async def send(self, message: str) -> None:
         m = json.loads(message)
         self.sent.append(m)
+        if self._hang:
+            # サーバが無応答になったふりをする (finding 1 用): 何も積まない
+            # ので、次の recv() は _outgoing が尽きて hang モードに入る。
+            return
         if m["op"] == OP_IDENTIFY:
             self._outgoing.append(
                 json.dumps({"op": 2, "d": {"negotiatedRpcVersion": 1}})
             )
         elif m["op"] == OP_REQUEST:
+            if self._malformed_responses:
+                self._malformed_responses -= 1
+                self._outgoing.append(
+                    json.dumps(
+                        {
+                            "op": 7,
+                            "d": {
+                                "requestType": m["d"]["requestType"],
+                                "requestId": m["d"]["requestId"],
+                                # requestStatus を意図的に省く。
+                                "responseData": {},
+                            },
+                        }
+                    )
+                )
+                return
             ok, code, data = (
                 self._responses.popleft() if self._responses else (True, 100, {})
             )
@@ -84,6 +124,10 @@ class FakeObsServer:
 
     async def recv(self) -> str:
         if not self._outgoing:
+            if self._hang:
+                # 何も返さず、呼び出し側の wait_for がタイムアウトで cancel
+                # するまで永遠に待つ。
+                await asyncio.Event().wait()
             raise AssertionError("client recv'd more than the fake scripted")
         return self._outgoing.popleft()
 
@@ -193,3 +237,51 @@ async def test_request_returns_empty_dict_when_there_is_no_response_data():
     await client.identify("")
     server.script_response(data={})
     assert await client.request("SetInputSettings", {"inputName": "x"}) == {}
+
+
+# --- finding 1: _recv() が wait_for のタイムアウトを型付き例外に包む ---
+
+
+async def test_identify_raises_obs_protocol_error_on_timeout():
+    server = FakeObsServer(greet=False, hang=True)
+    client = ObsWsClient(server, timeout=0.05)
+    with pytest.raises(ObsProtocolError, match="0.05"):
+        await client.identify("")
+
+
+async def test_request_raises_obs_protocol_error_on_timeout():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server, timeout=0.05)
+    await client.identify("")
+    server.stop_responding()
+    with pytest.raises(ObsProtocolError, match="0.05"):
+        await client.request("GetInputSettings", {"inputName": "x"})
+
+
+# --- finding 2: 不正なネスト構造が KeyError ではなく ObsProtocolError になる ---
+
+
+async def test_recv_raises_obs_protocol_error_when_d_is_missing():
+    server = FakeObsServer(greet=False)
+    server.inject({"op": 0})  # Hello だが 'd' が無い不正なメッセージ
+    with pytest.raises(ObsProtocolError) as e:
+        await ObsWsClient(server).identify("")
+    assert not isinstance(e.value, ObsIdentifyError)
+
+
+async def test_recv_raises_obs_protocol_error_when_d_is_not_a_dict():
+    server = FakeObsServer(greet=False)
+    server.inject({"op": 0, "d": "not-a-dict"})
+    with pytest.raises(ObsProtocolError) as e:
+        await ObsWsClient(server).identify("")
+    assert not isinstance(e.value, ObsIdentifyError)
+
+
+async def test_request_raises_obs_protocol_error_when_request_status_is_missing():
+    server = FakeObsServer(require_auth=False)
+    client = ObsWsClient(server)
+    await client.identify("")
+    server.script_malformed_response()
+    with pytest.raises(ObsProtocolError) as e:
+        await client.request("GetInputSettings", {"inputName": "x"})
+    assert not isinstance(e.value, ObsRequestError)
