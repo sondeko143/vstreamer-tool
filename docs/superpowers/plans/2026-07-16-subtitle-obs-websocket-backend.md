@@ -38,13 +38,51 @@
 
 ---
 
-### Task 1: 実機 OBS で設定形式を確定する（spike / 使い捨て）
+### Task 1: 実機 OBS で設定形式を確定する（spike / 使い捨て） — ✅ 完了 2026-07-16
 
 ADR-0041 が「本設計で最も外れやすい」と記録した箇所を、コードを書く前に潰す。**このタスクの成果物はコードではなく、Task 6 が使う観測値。**
 
 **なぜ最初にやるか:** OBS のソース（`obs-text.cpp`）を読む限り `color` は `0x00RRGGBB`（プレーン RGB）で保存され、内部で `rgb_to_bgr()` される。しかしこれは読解であって観測ではない。**そして出荷デフォルトの `#ffffff` / `#000000` は回文なので、RGB/BGR を取り違えても気づけない。** 非対称色で確かめる必要がある。
 
 **前提:** OBS が起動していて、Tools → obs-websocket Settings で WebSocket サーバが有効。パスワードを控えておく。シーンに `Text (GDI+)` ソースを 1 つ作り、名前を `vspeech-spike` にする。
+
+## 実測結果（2026-07-16、この spike は実行済み。以下が Task 6 の入力）
+
+環境: **OBS Studio 32.1.2 / obs-websocket 5.7.3 / rpcVersion 1**
+
+| 観測項目 | 結果 |
+|---|---|
+| `inputKind` | **`text_gdiplus_v3`**（`SetInputSettings` は問題なく通る。v2/v3 の懸念は杞憂だった）|
+| `color` の並び | **`0x00BBGGRR`（BGR）。ソース読解の RGB は誤りだった** |
+| ソース不在時の `code` | **600**（ADR-0042 / 計画の前提どおり）|
+| `align` / `valign` | **文字列で通る**（`"center"` / `"bottom"` がそのまま往復）|
+| `font.flags` | `1` が往復する（`OBS_FONT_BOLD`）|
+| 利用可能な text kind | `text_gdiplus_v3`, `text_ft2_source_v2` |
+
+**色の測定（目視ではなく `GetSourceScreenshot` のピクセル）:**
+
+| config | 保存した int | レンダリング結果 | 判定 |
+|---|---|---|---|
+| `#ff8000` | `0x0080FF` | `rgb(255,128,0)` | PASS |
+| `#0080ff` | `0xFF8000` | `rgb(0,128,255)` | PASS |
+| `#ffffff` | `0xFFFFFF` | `rgb(255,255,255)` | PASS（**回文なので無意味**）|
+
+最初に `0xFF8000` を素の RGB として書き込んだところ `rgb(0,128,255)` になった。
+→ **`hex_color_to_obs_int` は `(b << 16) | (g << 8) | r` でなければならない。**
+`#ffffff` は反転してもしなくても PASS するので、この並びは非対称色でしか守れない。
+
+**その他の観測（実装には影響しないが記録）:**
+- 未設定のソースの `GetInputSettings` は `inputSettings: {}` を返す（既定値は暗黙）。
+  → `validate_sources` が `GetInputSettings` で存在確認する方式は、素のソースでも機能する。
+- **`align: "bogus"` は `code 100` で受理される。OBS は align を検証しない。**
+  我々は値を生成する側なので実害は無いが、OBS からの fail-loud は期待できない。
+- ユーザーの OBS には `sub` / `sub_rus` という `window_capture` が存在する。
+  = 現行の tk 字幕ウィンドウを 2 枚キャプチャしている。OBS バックエンドはこれらを不要にする。
+
+---
+
+<details>
+<summary>実行に使った spike（記録用。再実行は不要）</summary>
 
 **Files:**
 - Create: `<scratchpad>/obs_spike.py`（使い捨て。リポジトリにコミットしない）
@@ -163,6 +201,8 @@ Run: `uv run --isolated --python 3.14 --with websockets python <scratchpad>/obs_
 git add docs/superpowers/plans/2026-07-16-subtitle-obs-websocket-backend.md
 git commit -m "docs(subtitle): record observed text_gdiplus settings format from a real OBS"
 ```
+
+</details>
 
 ---
 
@@ -1557,13 +1597,15 @@ git commit -m "feat(subtitle): add OBS backend config and its preflight checks (
 
 **ADR-0041 が「最も外れやすい」と記録した箇所。Task 1 の観測結果をここに反映する。**
 
-> **実装者へ: Task 1 の観測値をここに書き写してから始めること。**
-> - 観測した `inputKind`: `________`
-> - `color` は RGB か BGR か: `________`（画面の文字がオレンジなら RGB）
-> - ソース不在時の `requestStatus.code`: `________`
-> - `align` / `valign` は文字列か int か: `________`
+> **Task 1 の実測値（OBS 32.1.2 / obs-websocket 5.7.3、2026-07-16）:**
+> - `inputKind`: **`text_gdiplus_v3`**
+> - `color` の並び: **BGR = `0x00BBGGRR`**（RGB だと思っていたのは誤り。`0xFF8000` を書いたら `rgb(0,128,255)` になった）
+> - ソース不在時の `code`: **600**
+> - `align` / `valign`: **文字列**（`"center"` / `"bottom"`）
+> - `font.flags` の bold ビット: **1**
 >
-> 以下の実装は「`color` = `0x00RRGGBB`（RGB）、`align`/`valign` = 文字列、`OBS_FONT_BOLD` = 1」を前提にしている。観測が違えばここを直す。
+> 以下の実装はこの実測に合わせてある。**`#ffffff` / `#000000` はバイト順を反転しても
+> 通ってしまうので、この並びを守れるのは非対称な色のテストだけ。**
 
 **Files:**
 - Create: `vspeech/lib/obs_text_settings.py`
@@ -1592,10 +1634,15 @@ from vspeech.lib.obs_text_settings import build_text_settings
 from vspeech.lib.obs_text_settings import hex_color_to_obs_int
 
 
-def test_hex_color_to_obs_int_keeps_rgb_order():
-    # 出荷デフォルトの #ffffff / #000000 は回文なので RGB/BGR を取り違えても
-    # 気づけない。非対称な色でしか守れない (ADR-0041)。
-    assert hex_color_to_obs_int("#ff8000") == 0xFF8000
+def test_hex_color_to_obs_int_reverses_rgb_to_bgr():
+    # OBS は 0x00BBGGRR で保存する (実機 32.1.2 で GetSourceScreenshot により測定)。
+    # #ffffff / #000000 は回文なので取り違えても素通りする -- この 1 本と次の 1 本
+    # だけがバイト順を守っている (ADR-0041)。
+    assert hex_color_to_obs_int("#ff8000") == 0x0080FF
+
+
+def test_hex_color_to_obs_int_reversal_is_not_incidental():
+    assert hex_color_to_obs_int("#0080ff") == 0xFF8000
 
 
 def test_hex_color_to_obs_int_accepts_shipped_defaults():
@@ -1664,11 +1711,12 @@ def test_build_text_settings_maps_every_tk_key():
     )
     got = build_text_settings(text, subtitle)
     assert got["font"] == {"face": "Meiryo UI", "size": 24, "flags": 1}
-    assert got["color"] == 0xFF8000
+    # BGR: #ff8000 -> 0x0080FF, #0000ff -> 0xFF0000 (実機で測定, ADR-0041)
+    assert got["color"] == 0x0080FF
     assert got["opacity"] == 100
     assert got["outline"] is True
     assert got["outline_size"] == 1
-    assert got["outline_color"] == 0x0000FF
+    assert got["outline_color"] == 0xFF0000
     assert got["outline_opacity"] == 100
     assert got["align"] == "center"
     assert got["valign"] == "bottom"
@@ -1697,9 +1745,17 @@ def test_build_text_settings_transparent_bg_becomes_zero_opacity():
 
 def test_build_text_settings_opaque_bg_is_honoured_like_tk():
     # tk で bg_color="#00ff00" なら緑の背景になる。OBS でも同じにする。
+    # (緑は回文なのでバイト順は守れない -- 下の非対称ケースがそれを見る)
     subtitle = SubtitleConfig(bg_color="#00ff00")
     got = build_text_settings(SubtitleTextConfig(), subtitle)
     assert got["bk_color"] == 0x00FF00
+    assert got["bk_opacity"] == 100
+
+
+def test_build_text_settings_bg_colour_is_also_bgr():
+    subtitle = SubtitleConfig(bg_color="#ff8000")
+    got = build_text_settings(SubtitleTextConfig(), subtitle)
+    assert got["bk_color"] == 0x0080FF
     assert got["bk_opacity"] == 100
 
 
@@ -1753,14 +1809,19 @@ _HEX_COLOR = re.compile(r"\A#?([0-9a-fA-F]{6})\Z")
 def hex_color_to_obs_int(hex_color: str) -> int:
     """`#rrggbb` を OBS が設定に持つ int へ変換する。
 
-    obs-text.cpp は保存値を `rgb_to_bgr()` してから GDI+ に渡すので、設定に
-    入れる値は素の 0x00RRGGBB でよい。#ffffff / #000000 は回文なので、この
-    並びが正しいかは非対称な色でしか確かめられない。
+    OBS は色を **0x00BBGGRR (BGR)** で保存する。実機 (OBS 32.1.2 /
+    obs-websocket 5.7.3) で測定した: `0xFF8000` を書き込むと rgb(0,128,255)
+    にレンダリングされ、`0x0080FF` を書き込むと rgb(255,128,0) になる。
+
+    出荷デフォルトの #ffffff / #000000 は回文なので、この並びを取り違えても
+    素通りする。並びを守れるのは非対称な色のテストだけ。
     """
     m = _HEX_COLOR.match(hex_color)
     if not m:
         raise ValueError(f"'{hex_color}' は #rrggbb 形式の色ではありません")
-    return int(m.group(1), 16)
+    digits = m.group(1)
+    r, g, b = (int(digits[i : i + 2], 16) for i in (0, 2, 4))
+    return (b << 16) | (g << 8) | r
 
 
 def anchor_to_align(anchor: Anchor) -> str:
@@ -2321,7 +2382,7 @@ Expected: `subtitle worker [obs] connected to ws://...` が出て、字幕が OB
 
 - [ ] **Step 4: スタイルが config どおりか目視する**
 
-**#ffffff は回文なので、ここは一度 `font_color = "#ff8000"` にして確かめる。** オレンジに見えれば RGB マッピングが正しい。水色なら Task 6 の `hex_color_to_obs_int` を BGR に反転する。
+色の並びは Task 1 で `GetSourceScreenshot` により測定済み（BGR 確定）なので、ここは目視で足りる。念のため `font_color = "#ff8000"` にするとオレンジで出るはず（水色なら Task 6 のマッピングが壊れている）。
 
 Expected: フォント・サイズ・太字・輪郭・位置（anchor）・折り返しが config どおり。**背景が透過で、輪郭にカラーキー由来の縁が無い**（tk 版との差が出るところ）
 
