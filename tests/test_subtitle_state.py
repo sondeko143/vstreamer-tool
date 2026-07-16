@@ -1,7 +1,11 @@
+import pytest
+
+from vspeech.config import Anchor
 from vspeech.config import SubtitleTextConfig
 from vspeech.lib.subtitle_state import Text
 from vspeech.lib.subtitle_state import Texts
 from vspeech.lib.subtitle_state import age_panels
+from vspeech.lib.subtitle_state import anchor_to_justify
 from vspeech.lib.subtitle_state import next_expiry_sec
 
 
@@ -86,3 +90,25 @@ def test_next_expiry_sec_ignores_non_head_entries():
     panels["n"].values.append(Text(value="head", display_remain_sec=4.0))
     panels["n"].values.append(Text(value="behind", display_remain_sec=0.1))
     assert next_expiry_sec(panels) == 4.0
+
+
+@pytest.mark.parametrize(
+    ("anchor", "expected"),
+    [
+        ("nw", "left"),
+        ("n", "center"),
+        ("ne", "right"),
+        ("w", "left"),
+        # "center" contains "e" as a substring, so an unguarded `"e" in
+        # anchor` test would mis-fire as "right" -- this is the case that
+        # regressed silently until this function existed as the one shared
+        # copy the TK and OBS backends both call.
+        ("center", "center"),
+        ("e", "right"),
+        ("sw", "left"),
+        ("s", "center"),
+        ("se", "right"),
+    ],
+)
+def test_anchor_to_justify_covers_every_anchor(anchor: Anchor, expected: str):
+    assert anchor_to_justify(anchor) == expected

@@ -1,8 +1,11 @@
+from tkinter import Tk
+
 from vspeech.config import Anchor
 from vspeech.config import SubtitleTextConfig
 from vspeech.lib.subtitle_state import Text
 from vspeech.lib.subtitle_state import Texts
 from vspeech.worker import subtitle_tk as subtitle_tk_mod
+from vspeech.worker.subtitle_tk import draw_text_with_outline
 from vspeech.worker.subtitle_tk import redraw_panel
 
 
@@ -88,3 +91,32 @@ def test_redraw_panel_draws_current_panel_state(monkeypatch):
     assert captured["text_coord_y"] == panel.coord_y
     # max_width leaves a `margin`-wide gutter on each side of the panel.
     assert captured["max_width"] == panel.bb_width - panel.config.margin * 2
+
+
+def test_draw_text_with_outline_justifies_center_anchor_as_center():
+    # This is the only test in the file that calls the real
+    # draw_text_with_outline (every other test here monkeypatches it away),
+    # so it is what actually proves the justify rule. "center" contains "e"
+    # as a substring, so an unguarded `"e" in anchor` test mis-fires and
+    # would justify it "right" instead of "center".
+    events: list = []
+    canvas = FakeCanvas(events)
+    root = Tk()
+    root.withdraw()
+    try:
+        draw_text_with_outline(
+            canvas=canvas,
+            text_coord_x=10,
+            text_coord_y=10,
+            texts="hello",
+            text_tag="text",
+            anchor="center",
+            config=SubtitleTextConfig(anchor="center"),
+        )
+    finally:
+        root.destroy()
+
+    create_text_calls = [e for e in events if e[0] == "create_text"]
+    assert create_text_calls
+    for _, _args, kwargs in create_text_calls:
+        assert kwargs["justify"] == "center"

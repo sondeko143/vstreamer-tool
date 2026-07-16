@@ -11,6 +11,7 @@ from typing import Any
 from vspeech.config import Anchor
 from vspeech.config import SubtitleConfig
 from vspeech.config import SubtitleTextConfig
+from vspeech.lib.subtitle_state import anchor_to_justify
 
 # obs-properties.h の enum obs_font_style。
 OBS_FONT_BOLD = 1
@@ -41,19 +42,14 @@ def hex_color_to_obs_int(hex_color: str) -> int:
 
 
 def anchor_to_align(anchor: Anchor) -> str:
-    """tk の `draw_text_with_outline` の justify 規則をそのまま写す。
+    """OBS の `align` は tk の `justify` と同じ規則 (lib/subtitle_state
+    .anchor_to_justify) を使う。二重管理を避けるためここでは再実装しない。
 
-    `subtitle_tk.draw_text_with_outline` の `justify_val` はここと同じ部分
-    文字列判定で、`anchor == "center"` を先読みするガードを持たない。その
-    ため `"center"` は `"e"` を含む文字列として素通りし `"right"` になる
-    -- これは tk 側の既存の挙動で、ADR-0040 によりこのブランチでは変えない
-    ので、OBS 側もそのまま写して見た目を揃える。
+    `"center"` は `"e"` を部分文字列として含むため、素の `"e" in anchor`
+    判定だと誤って `"right"` になる -- `anchor_to_justify` 側がその
+    `anchor == "center"` ガードを持つ理由。
     """
-    if "e" in anchor:
-        return "right"
-    if "w" in anchor:
-        return "left"
-    return "center"
+    return anchor_to_justify(anchor)
 
 
 def anchor_to_valign(anchor: Anchor) -> str:

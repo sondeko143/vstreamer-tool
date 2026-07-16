@@ -50,15 +50,15 @@ def test_hex_color_to_obs_int_rejects_junk(bad: str):
         ("se", "right"),
         ("n", "center"),
         ("s", "center"),
-        # tk の justify_val には anchor == "center" のガードが無く、"center"
-        # は部分文字列として "e" を含むため "right" に倒れる (subtitle_tk.py
-        # draw_text_with_outline の既存の挙動、ADR-0040 によりここでは
-        # 変えない)。OBS 側もそれに合わせて "right" にする。
-        ("center", "right"),
+        # "center" contains "e" as a substring, so an unguarded test would
+        # mis-fire as "right"; anchor_to_justify guards `anchor == "center"`
+        # first (see lib/subtitle_state.anchor_to_justify).
+        ("center", "center"),
     ],
 )
 def test_anchor_to_align_matches_the_tk_justify_rule(anchor, expected):
-    # tk の draw_text_with_outline と同じ規則: e -> right, w -> left, else center
+    # tk の draw_text_with_outline と同じ規則 (lib/subtitle_state
+    # .anchor_to_justify 経由): e -> right, w -> left, else center
     assert anchor_to_align(anchor) == expected
 
 
