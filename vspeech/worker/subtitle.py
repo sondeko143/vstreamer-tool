@@ -25,12 +25,7 @@ async def subtitle_worker(
 
         await subtitle_tk_worker(context, in_queue=in_queue)
     elif worker_type == SubtitleWorkerType.OBS:
-        # subtitle_obs.py lands in the follow-up ADR-0040 task; this branch is
-        # unreachable until then (worker_type defaults to TK). ty can't resolve
-        # the not-yet-created module statically; remove this ignore once it exists.
-        from vspeech.worker.subtitle_obs import (  # ty: ignore[unresolved-import]
-            subtitle_obs_worker,
-        )
+        from vspeech.worker.subtitle_obs import subtitle_obs_worker
 
         await subtitle_obs_worker(context, in_queue=in_queue)
     else:
