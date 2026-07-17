@@ -4,6 +4,8 @@ from collections import deque
 from collections.abc import Callable
 
 import pytest
+from websockets.exceptions import ConnectionClosed
+from websockets.frames import Close
 
 from vspeech.lib.obs_ws import OP_IDENTIFY
 from vspeech.lib.obs_ws import OP_REQUEST
@@ -1197,3 +1199,96 @@ async def test_request_never_leaks_a_raw_exception(builder):
     server.script_raw_response(builder)
     with pytest.raises(ObsProtocolError):
         await client.request("GetInputSettings", {"inputName": "x"})
+
+
+# --- fix pass 7 (hardware-found): measured against a real OBS 32.1.2 /
+# obs-websocket 5.7.3 with a wrong `subtitle.obs.password`. obs-websocket
+# does not reply to a rejected handshake with an error message -- it closes
+# the WebSocket with code 4009 ("Authentication failed."). Every fake in
+# this file above models auth failure as the client raising
+# ObsIdentifyError itself; none of them ever close the socket instead, so
+# none reproduced what the real server actually does. The old identify()
+# let that ConnectionClosed (a WebSocketException, not an ObsIdentifyError)
+# escape uncaught, so the subtitle worker's fail-open outer catch (which
+# does catch WebSocketException) swallowed it and retried forever -- ADR-0042
+# Alternatives-rejected #1 ("全て fail-open"), shipped by accident.
+
+
+class _ClosingTransport:
+    """A transport whose `recv()` raises a given `ConnectionClosed`
+    immediately, instead of returning a Hello/Identified message -- mirrors
+    a real obs-websocket server closing the socket on handshake rejection.
+    """
+
+    def __init__(self, exc: ConnectionClosed):
+        self._exc = exc
+
+    async def send(self, message: str) -> None:
+        return None
+
+    async def recv(self) -> str | bytes:
+        raise self._exc
+
+    async def close(self) -> None:
+        pass
+
+
+def _closed_with(code: int, reason: str = "") -> ConnectionClosed:
+    """Build a `ConnectionClosed` the way `websockets` would for a close
+    frame *received* from the peer with the given code/reason (optionally
+    followed by this side echoing the same close back, which is what the
+    real handshake-rejection log line -- "received 4009 ...; then sent 4009
+    ..." -- shows). `rcvd` is what matters for rejection detection; `sent`
+    only needs to be present to make `rcvd_then_sent` a valid combination.
+    """
+    close = Close(code, reason)
+    return ConnectionClosed(rcvd=close, sent=close, rcvd_then_sent=True)
+
+
+async def test_identify_raises_obs_identify_error_when_obs_closes_with_auth_rejected():
+    # The measured case: OBS closes with 4009 "Authentication failed." on a
+    # wrong password. identify() must convert this to ObsIdentifyError so
+    # the subtitle worker's inner fail-loud catch
+    # (ObsIdentifyError/ObsResourceNotFoundError) can turn it into
+    # WorkerStartupError (ADR-0042) instead of retrying forever.
+    transport = _ClosingTransport(_closed_with(4009, "Authentication failed."))
+    with pytest.raises(ObsIdentifyError) as e:
+        await ObsWsClient(transport).identify("wrong-password")
+    assert "4009" in str(e.value)
+    assert "Authentication failed." in str(e.value)
+
+
+@pytest.mark.parametrize("code", [4000, 4999])
+async def test_identify_raises_obs_identify_error_at_the_private_use_range_boundaries(
+    code,
+):
+    # The private-use range identify() treats as a deliberate rejection is
+    # 4000-4999 inclusive -- pin both ends so an off-by-one in the range
+    # comparison (e.g. `4000 < code < 5000`, excluding the measured-adjacent
+    # boundary values) cannot silently regress.
+    transport = _ClosingTransport(_closed_with(code, "rejected"))
+    with pytest.raises(ObsIdentifyError):
+        await ObsWsClient(transport).identify("irrelevant-password")
+
+
+@pytest.mark.parametrize("code", [3999, 5000])
+async def test_identify_lets_a_close_outside_the_private_use_range_propagate(code):
+    # The mirror case, the other boundary: codes just outside 4000-4999 (a
+    # registered code like 3999, or a code past the private-use band like
+    # 5000) are not obs-websocket's rejection signal and must stay a
+    # retryable ConnectionClosed, not become a fatal ObsIdentifyError.
+    transport = _ClosingTransport(_closed_with(code, "not a rejection"))
+    with pytest.raises(ConnectionClosed):
+        await ObsWsClient(transport).identify("irrelevant-password")
+
+
+async def test_identify_lets_a_close_without_a_code_propagate():
+    # A transport-level drop mid-handshake with no close frame ever received
+    # (`rcvd is None`) -- not a rejection (there is nothing to reject with),
+    # just a connection that isn't up yet or dropped abnormally. Getting
+    # this backwards converts a retryable network blip into a fail-loud
+    # WorkerStartupError one layer up, which is the mirror bug ADR-0042
+    # warns about in the other direction.
+    transport = _ClosingTransport(ConnectionClosed(rcvd=None, sent=None))
+    with pytest.raises(ConnectionClosed):
+        await ObsWsClient(transport).identify("irrelevant-password")

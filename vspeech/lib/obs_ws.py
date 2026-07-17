@@ -16,6 +16,9 @@ from typing import Any
 from typing import Protocol
 from uuid import uuid4
 
+from websockets.exceptions import ConnectionClosed
+from websockets.frames import Close
+
 RPC_VERSION = 1
 
 OP_HELLO = 0
@@ -149,6 +152,34 @@ def build_auth_string(password: str, salt: str, challenge: str) -> str:
     ).decode("utf-8")
 
 
+# obs-websocket が自らハンドシェイクを拒否したことを表明する専用の close
+# code 帯 (5.x のプロトコル文書 WebSocketCloseCode がここに全ての拒否理由
+# を割り当てている。パスワード誤り = 4009 が実測での唯一の実例で、RPC
+# バージョン不一致・不正な Identify なども同じ帯を使う)。この帯に入る close
+# だけが「再接続しても直らない」と型で示せる signal で、identify() はこれ
+# だけを ObsIdentifyError に変換する (fix pass 7)。
+_HANDSHAKE_REJECTION_CLOSE_CODES = range(4000, 5000)
+
+
+def _handshake_rejection(e: ConnectionClosed) -> Close | None:
+    """`e` が obs-websocket 自身によるハンドシェイク拒否の close なら、その
+    close frame (code/reason) を返す。そうでなければ None。
+
+    `e.rcvd` は相手 (OBS) から実際に届いた close frame。`e.sent` (自分側が
+    送った close) は判定に使わない -- 拒否理由を表明するのは相手だけなので。
+    close frame を一切受け取らずに切れた場合 (トランスポートの生の切断、
+    `e.rcvd is None`。例: 1006 相当や、プロセスが即死してハンドシェイクの
+    途中で TCP だけ落ちたケース) は判定材料が無いので拒否とは扱わない --
+    「まだ繋がっていないだけ」かもしれず、リトライで直りうる。
+    """
+    rcvd = e.rcvd
+    if rcvd is None:
+        return None
+    if rcvd.code not in _HANDSHAKE_REJECTION_CLOSE_CODES:
+        return None
+    return rcvd
+
+
 class ObsWsClient:
     """obs-websocket 5.x の薄いクライアント。
 
@@ -203,64 +234,93 @@ class ObsWsClient:
         """接続直後の Hello を受け取り、必要なら認証して Identify を送り、
         Identified を待つ。
 
-        接続ごとに一度だけ呼ぶ想定。失敗はすべて `ObsIdentifyError`
-        (`ObsProtocolError` のサブクラス) として送出する。
+        接続ごとに一度だけ呼ぶ想定。obs-websocket は Hello/Identified の形式
+        異常だけでなく、ハンドシェイクそのものの拒否 (認証失敗・RPC バージョン
+        不一致・不正な Identify など) もエラーメッセージでは返さない -- 代わりに
+        WebSocket を 4000-4999 (private use) の close code で切る (実測: OBS
+        32.1.2 / obs-websocket 5.7.3、誤ったパスワードで code 4009
+        "Authentication failed."。fix pass 7)。この関数は、検出できる失敗を
+        すべて `ObsIdentifyError` (`ObsProtocolError` のサブクラス) として
+        送出する -- リトライしても直らない失敗だと呼び出し側 (ADR-0042) が型で
+        見分けられるようにするため。
+
+        一方、close code が無い (`ConnectionClosed.rcvd is None`、例えば接続が
+        ハンドシェイクの途中で生の TCP レベルで落ちた場合) 切断や、4000-4999
+        帯の外の close (1006 のようなトランスポートレベルの異常切断など) は
+        ハンドシェイクの拒否ではなく、単に OBS にまだ繋がっていないだけかも
+        しれない -- リトライで直りうるので `ObsIdentifyError` には変換せず、
+        `websockets` の `ConnectionClosed` (`WebSocketException` のサブクラス)
+        のまま呼び出し側へ伝播させる。呼び出し側はそれを fail-open (バックオフ
+        再接続) として扱う (ADR-0042)。
         """
-        message = await self._recv()
-        if message["op"] != OP_HELLO:
-            # message['op'] は _recv() が「キーとして存在する」ことしか保証して
-            # いない生のピア値 (fix pass 6, finding 1 (Critical))。f-string の
-            # {x} は format() 経由で結局 dict.__repr__ を呼ぶので、!r を使って
-            # いなくても fix pass 5 で塞いだのと同じ repr() 再帰ハザードと
-            # 無制限長ハザードを踏む。_bounded_repr() で両方封じる (深さは
-            # reprlib の maxlevel、総幅は _bounded_repr() 自身の切り詰めで)。
+        try:
+            message = await self._recv()
+            if message["op"] != OP_HELLO:
+                # message['op'] は _recv() が「キーとして存在する」ことしか保証して
+                # いない生のピア値 (fix pass 6, finding 1 (Critical))。f-string の
+                # {x} は format() 経由で結局 dict.__repr__ を呼ぶので、!r を使って
+                # いなくても fix pass 5 で塞いだのと同じ repr() 再帰ハザードと
+                # 無制限長ハザードを踏む。_bounded_repr() で両方封じる (深さは
+                # reprlib の maxlevel、総幅は _bounded_repr() 自身の切り詰めで)。
+                raise ObsIdentifyError(
+                    f"Hello を期待したが op={_bounded_repr(message['op'])} が来た"
+                )
+            hello_data = message["d"]
+            d: dict[str, Any] = {"rpcVersion": RPC_VERSION}
+            # 「authentication キーが無い」と「あるが偽値」を区別する: obs-websocket
+            # は認証が要る場合にのみこのキーを載せる。真偽 (`if auth:`) で判定すると
+            # `{}` / `[]` / `0` / `false` / `""` を「認証不要」と誤読して無認証の
+            # Identify を送ってしまい、相手が実際には認証必須なら 4008 で切られて
+            # 呼び出し側が延々リトライすることになる (壊れたハンドシェイクはリトライ
+            # しても直らない)。聞くべきは値の真偽ではなくキーの有無。
+            if "authentication" in hello_data:
+                auth = hello_data["authentication"]
+                if not password:
+                    raise ObsIdentifyError(
+                        "OBS が認証を要求していますが subtitle.obs.password が空です"
+                    )
+                if not isinstance(auth, dict):
+                    raise ObsIdentifyError(
+                        f"OBS の authentication が不正な形: {_bounded_repr(auth)}"
+                    )
+                salt = auth.get("salt")
+                challenge = auth.get("challenge")
+                if not isinstance(salt, str) or not isinstance(challenge, str):
+                    raise ObsIdentifyError(
+                        "OBS の authentication に salt/challenge が無い:"
+                        f" {_bounded_repr(auth)}"
+                    )
+                try:
+                    d["authentication"] = build_auth_string(password, salt, challenge)
+                except UnicodeError as e:
+                    # isinstance(salt, str) / isinstance(challenge, str) は UTF-8
+                    # エンコード可能であることまでは保証しない (例:
+                    # json.loads('"\\ud800"') は非対の surrogate を含む str を返す)。
+                    # build_auth_string() 自身はこの節の探索対象外の純粋関数として
+                    # 残す (専用ユニットテストを持つ) ので、ここで包んで
+                    # identify 時の失敗として fail-loud にする (ADR-0042)。
+                    raise ObsIdentifyError(
+                        f"OBS の authentication の salt/challenge が UTF-8 として不正: {e}"
+                    ) from e
+            await self._send(OP_IDENTIFY, d)
+            message = await self._recv()
+            if message["op"] != OP_IDENTIFIED:
+                # 上の Hello ガードと同じハザード (fix pass 6, finding 1 (Critical))。
+                raise ObsIdentifyError(
+                    f"Identified を期待したが op={_bounded_repr(message['op'])} が来た"
+                )
+        except ConnectionClosed as e:
+            # obs-websocket はエラーメッセージを送らず、close code で拒否を
+            # 表明する (このメソッドの docstring 参照、fix pass 7)。
+            rejection = _handshake_rejection(e)
+            if rejection is None:
+                # ハンドシェイクの拒否ではない、ただの (リトライで直りうる)
+                # 切断。ObsIdentifyError には変換せず、ConnectionClosed の
+                # まま呼び出し側の fail-open 経路へ渡す。
+                raise
             raise ObsIdentifyError(
-                f"Hello を期待したが op={_bounded_repr(message['op'])} が来た"
-            )
-        hello_data = message["d"]
-        d: dict[str, Any] = {"rpcVersion": RPC_VERSION}
-        # 「authentication キーが無い」と「あるが偽値」を区別する: obs-websocket
-        # は認証が要る場合にのみこのキーを載せる。真偽 (`if auth:`) で判定すると
-        # `{}` / `[]` / `0` / `false` / `""` を「認証不要」と誤読して無認証の
-        # Identify を送ってしまい、相手が実際には認証必須なら 4008 で切られて
-        # 呼び出し側が延々リトライすることになる (壊れたハンドシェイクはリトライ
-        # しても直らない)。聞くべきは値の真偽ではなくキーの有無。
-        if "authentication" in hello_data:
-            auth = hello_data["authentication"]
-            if not password:
-                raise ObsIdentifyError(
-                    "OBS が認証を要求していますが subtitle.obs.password が空です"
-                )
-            if not isinstance(auth, dict):
-                raise ObsIdentifyError(
-                    f"OBS の authentication が不正な形: {_bounded_repr(auth)}"
-                )
-            salt = auth.get("salt")
-            challenge = auth.get("challenge")
-            if not isinstance(salt, str) or not isinstance(challenge, str):
-                raise ObsIdentifyError(
-                    "OBS の authentication に salt/challenge が無い:"
-                    f" {_bounded_repr(auth)}"
-                )
-            try:
-                d["authentication"] = build_auth_string(password, salt, challenge)
-            except UnicodeError as e:
-                # isinstance(salt, str) / isinstance(challenge, str) は UTF-8
-                # エンコード可能であることまでは保証しない (例:
-                # json.loads('"\\ud800"') は非対の surrogate を含む str を返す)。
-                # build_auth_string() 自身はこの節の探索対象外の純粋関数として
-                # 残す (専用ユニットテストを持つ) ので、ここで包んで
-                # identify 時の失敗として fail-loud にする (ADR-0042)。
-                raise ObsIdentifyError(
-                    f"OBS の authentication の salt/challenge が UTF-8 として不正: {e}"
-                ) from e
-        await self._send(OP_IDENTIFY, d)
-        message = await self._recv()
-        if message["op"] != OP_IDENTIFIED:
-            # 上の Hello ガードと同じハザード (fix pass 6, finding 1 (Critical))。
-            raise ObsIdentifyError(
-                f"Identified を期待したが op={_bounded_repr(message['op'])} が来た"
-            )
+                f"OBS がハンドシェイクを拒否した: {rejection}"
+            ) from e
 
     async def request(
         self, request_type: str, request_data: dict[str, Any] | None = None

@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 from websockets.exceptions import ConnectionClosedError
+from websockets.frames import Close
 
 import vspeech.worker.subtitle_obs as subtitle_obs_mod
 from vspeech.config import Config
@@ -452,6 +453,52 @@ def make_refusing_connect(exc: BaseException):
 
     def fake_connect(url: str):
         return _RefusingConnection(exc)
+
+    return fake_connect
+
+
+class _AuthRejectingWs:
+    """A `websockets` connection object whose `recv()` raises
+    `ConnectionClosedError` with a 4009 close -- the real obs-websocket
+    protocol shape for an auth rejection (measured on OBS 32.1.2 /
+    obs-websocket 5.7.3, ADR-0042 fix pass 7: obs-websocket does not reply
+    with an error message on auth rejection, it closes the socket). `send()`
+    is a no-op because the real server never gets to answer Identify --
+    Hello's own `recv()` is where the close already happens.
+    """
+
+    async def send(self, message: str) -> None:
+        return None
+
+    async def recv(self) -> str:
+        close = Close(4009, "Authentication failed.")
+        raise ConnectionClosedError(close, close, rcvd_then_sent=True)
+
+    async def close(self) -> None:
+        pass
+
+
+class _AuthRejectingConnection:
+    async def __aenter__(self):
+        return _AuthRejectingWs()
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+def make_auth_rejecting_connect():
+    """`connect()` replacement whose connection's `recv()` always raises the
+    real obs-websocket auth-rejection close (`_AuthRejectingWs`). Unlike
+    every other fake `ObsWsClient`/`connect` combination in this file, a
+    test using this does NOT also monkeypatch `ObsWsClient` -- it drives
+    the *real* `ObsWsClient.identify()`, so the close-code-to-
+    `ObsIdentifyError` conversion `identify()` is responsible for (ADR-0042
+    fix pass 7) is exercised end to end together with the worker's
+    unchanged inner fail-loud catch, not assumed.
+    """
+
+    def fake_connect(url: str):
+        return _AuthRejectingConnection()
 
     return fake_connect
 
@@ -1930,3 +1977,67 @@ async def test_refresh_panel_configs_repoints_anchor_not_just_config():
     )
     assert client.settings_for("vspeech-text")[0]["valign"] == "top"
     assert panels["n"].texts == "AAA BBB"
+
+
+# --- fix pass 7 (hardware-found): measured against a real OBS 32.1.2 /
+# obs-websocket 5.7.3 with a wrong subtitle.obs.password. obs-websocket
+# does not reply to a rejected handshake with an error message -- it closes
+# the WebSocket with code 4009. `identify()`'s own `_recv()` raised the
+# resulting `ConnectionClosed` (a `WebSocketException`, not an
+# `ObsIdentifyError`) uncaught, so it fell through the worker's inner
+# fail-loud catch (`ObsIdentifyError`/`ObsResourceNotFoundError`) into the
+# *outer* fail-open catch (which does catch `WebSocketException`) and
+# retried forever -- ADR-0042's Alternatives-rejected #1 ("全て
+# fail-open"), shipped by accident. Every fail-loud test above
+# (`test_an_auth_rejection_becomes_a_worker_startup_error`) monkeypatches
+# `ObsWsClient` itself to raise `ObsIdentifyError` directly, which only
+# proves the worker's own catch works -- none of them ever drove the real
+# `ObsWsClient.identify()`, so the whole suite stayed green throughout this
+# bug's lifetime. This is the test whose absence let it ship.
+
+
+async def test_a_real_obs_auth_rejection_close_becomes_a_worker_startup_error(
+    monkeypatch,
+):
+    # Does NOT monkeypatch ObsWsClient (contrast every other fail-loud test
+    # in this file): it drives the real identify() via a fake connect()
+    # whose connection raises ConnectionClosedError(4009) from recv(), the
+    # same shape a real obs-websocket connection produces on a wrong
+    # password. Proves the fix end to end -- both identify()'s
+    # close-code-to-ObsIdentifyError conversion (lib/obs_ws.py) and the
+    # worker's unchanged inner fail-loud catch (subtitle_obs.py) -- not just
+    # the worker's catch in isolation.
+    #
+    # sleep is patched to bail out after a couple of iterations via
+    # CancelledError (same shape as the other backoff tests in this file):
+    # unpatched, the pre-fix bug this test targets makes the worker retry
+    # with a real asyncio.sleep() backoff forever (measured on real
+    # hardware as `timeout 124` -- the process staying alive, retrying) --
+    # exactly the defect this fix pass exists to kill. Without this patch,
+    # a RED run of this test against the unfixed identify() hangs for real
+    # wall-clock time instead of failing fast.
+    sleeps: list[float] = []
+
+    async def fake_sleep(sec: float) -> None:
+        sleeps.append(sec)
+        if len(sleeps) >= 2:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(subtitle_obs_mod, "sleep", fake_sleep)
+    monkeypatch.setattr(subtitle_obs_mod, "connect", make_auth_rejecting_connect())
+
+    context = SharedContext(config=make_config())
+    context.add_worker(event=EventType.subtitle, configs_depends_on=["subtitle"])
+    in_queue: Queue[WorkerInput] = Queue()
+
+    with pytest.raises(WorkerStartupError) as e:
+        await subtitle_obs_mod.subtitle_obs_worker(context, in_queue)
+
+    # fatal on the very first attempt -- never retried (unfixed, this stays
+    # unreached: the pre-fix bug raises WorkerShutdown instead, once
+    # fake_sleep's CancelledError fires after 2 fruitless retries).
+    assert sleeps == []
+    # names the code/reason the user actually needs to act on the typo --
+    # not just "some WorkerStartupError happened".
+    assert "4009" in str(e.value)
+    assert "Authentication failed." in str(e.value)
