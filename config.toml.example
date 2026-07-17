@@ -182,6 +182,8 @@ rmvpe_model_file = "./rmvpe.onnx"
 display_sec_per_letter = 0.4
 min_display_sec = 6.0
 max_text_len = 32
+# tk のポイント単位。正=ポイント/負=ピクセル (tk 自体の符号規約)。OBS backend
+# は同じ値から自動で見た目を揃える (ADR-0044) -- 手で単位を変える必要は無い。
 font_size = 24
 font_family = "Meiryo UI"
 font_style = "bold"

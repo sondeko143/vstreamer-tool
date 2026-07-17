@@ -40,6 +40,29 @@ def hex_color_to_obs_int(hex_color: str) -> int:
     return (b << 16) | (g << 8) | r
 
 
+def font_size_to_obs_lfheight(font_size: int) -> int:
+    """Tk の `font_size` 符号規約のまま OBS の `font.size` (=`LOGFONT.lfHeight`)
+    へ渡す (ADR-0044)。
+
+    正 (Tk のポイント指定) だけ 96 DPI でピクセルへ換算し、符号を負にして
+    返す -- `LOGFONT.lfHeight` は負が em 高、正がセル高（内部レディング込み）
+    という規約を持ち、Tk の符号規約はこれと同一。負 (=既にピクセル/em 高の
+    指定) はそのまま素通しする。
+
+    ここを符号で分岐せず一律 `-round(size * 96/72)` に通すと、既存の負値
+    設定 (例: -32) が +43 になり、OBS が「セル高 43px」と誤読して Tk の
+    見た目 (em 32px) からずれる -- 分岐はここを守るためにある
+    (test_font_size_to_obs_lfheight_passes_negative_through_unchanged)。
+
+    0 は Tk 自身が「プラットフォーム既定サイズ」として扱う値で、変換対象の
+    ポイント数が無い。素通しする -- もっとも `-round(0 * 96/72)` も `-0.0`
+    経由で 0 になるので、これは算術上の特別扱いではなく理由づけの話でしかない。
+    """
+    if font_size > 0:
+        return -round(font_size * 96 / 72)
+    return font_size
+
+
 def anchor_to_align(anchor: Anchor) -> Literal["left", "center", "right"]:
     """OBS の `align` は tk の `justify` と同じ規則 (lib/subtitle_state
     .anchor_to_justify) を使う。二重管理を避けるためここでは再実装しない。
@@ -73,7 +96,7 @@ def build_text_settings(
     return {
         "font": {
             "face": text_config.font_family,
-            "size": text_config.font_size,
+            "size": font_size_to_obs_lfheight(text_config.font_size),
             "flags": OBS_FONT_BOLD if text_config.font_style.lower() == "bold" else 0,
         },
         "color": hex_color_to_obs_int(text_config.font_color),

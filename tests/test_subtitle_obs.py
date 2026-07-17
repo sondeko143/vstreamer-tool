@@ -662,7 +662,10 @@ async def test_push_panel_style_sends_a_single_panels_config_values():
     # color whose hex digits happen to be a BGR/RGB palindrome.
     assert text_settings["color"] == 0x0080FF
     assert text_settings["valign"] == "bottom"
-    assert translated_settings["font"]["size"] == 22
+    # font_size=22 (Tk points) -> lfHeight -29, not a pass-through 22
+    # (ADR-0044: round(22 * 96 / 72) == 29, negated for LOGFONT's
+    # negative-is-em-height convention).
+    assert translated_settings["font"]["size"] == -29
     assert translated_settings["valign"] == "top"
 
 

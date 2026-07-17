@@ -5,6 +5,7 @@ from vspeech.config import SubtitleTextConfig
 from vspeech.lib.obs_text_settings import anchor_to_align
 from vspeech.lib.obs_text_settings import anchor_to_valign
 from vspeech.lib.obs_text_settings import build_text_settings
+from vspeech.lib.obs_text_settings import font_size_to_obs_lfheight
 from vspeech.lib.obs_text_settings import hex_color_to_obs_int
 
 
@@ -80,6 +81,43 @@ def test_anchor_to_valign(anchor, expected):
     assert anchor_to_valign(anchor) == expected
 
 
+@pytest.mark.parametrize(
+    ("font_size", "expected_lfheight"),
+    [
+        # points -> 96 DPI pixels, negated to hit LOGFONT.lfHeight's
+        # negative = em-height convention (ADR-0044). Checked against the
+        # ADR's measured table: round(24*96/72) == 32, round(22*96/72) == 29,
+        # round(56*96/72) == 75.
+        (24, -32),
+        (22, -29),
+        (56, -75),
+    ],
+)
+def test_font_size_to_obs_lfheight_converts_points_to_negative_pixels(
+    font_size, expected_lfheight
+):
+    assert font_size_to_obs_lfheight(font_size) == expected_lfheight
+
+
+def test_font_size_to_obs_lfheight_passes_negative_through_unchanged():
+    # A negative font_size already means pixels/em-height in Tk's own
+    # convention (identical to LOGFONT.lfHeight's). Routing it through the
+    # points->pixels formula would turn -32 into +43, which OBS reads as a
+    # 43px *cell* height -- wrong, and silently so (ADR-0044). This test is
+    # the one that stops that branch from being "simplified" away.
+    assert font_size_to_obs_lfheight(-32) == -32
+
+
+def test_font_size_to_obs_lfheight_zero_passes_through():
+    # Tk treats font_size=0 as "use the platform default size" -- there is
+    # no point value to convert. Passing 0 through unchanged also happens to
+    # be what the conversion formula would produce anyway
+    # (-round(0 * 96/72) == -0 == 0), so this is not a special case in the
+    # arithmetic, only in the reasoning for why 0 is not converted like a
+    # positive size (ADR-0044).
+    assert font_size_to_obs_lfheight(0) == 0
+
+
 def test_build_text_settings_maps_every_tk_key():
     subtitle = SubtitleConfig(window_width=1920, window_height=120)
     text = SubtitleTextConfig(
@@ -92,7 +130,8 @@ def test_build_text_settings_maps_every_tk_key():
         margin=4,
     )
     got = build_text_settings(text, subtitle)
-    assert got["font"] == {"face": "Meiryo UI", "size": 24, "flags": 1}
+    # font_size=24 (points) -> lfHeight -32 (ADR-0044), not a pass-through 24.
+    assert got["font"] == {"face": "Meiryo UI", "size": -32, "flags": 1}
     # BGR: #ff8000 -> 0x0080FF, #0000ff -> 0xFF0000 (実機で測定, ADR-0041)
     assert got["color"] == 0x0080FF
     assert got["opacity"] == 100
@@ -117,6 +156,16 @@ def test_build_text_settings_bold_is_case_insensitive_like_tk():
     # tk: "bold" if config.font_style.lower() == "bold" else "normal"
     text = SubtitleTextConfig(font_style="BOLD")
     assert build_text_settings(text, SubtitleConfig())["font"]["flags"] == 1
+
+
+def test_build_text_settings_wires_the_lfheight_conversion_for_pixel_configs():
+    # Integration check that build_text_settings actually calls through
+    # font_size_to_obs_lfheight rather than a second, separate pass-through
+    # of its own -- a config that already says font_size=-32 (Tk pixels)
+    # must reach OBS as -32, not get re-converted (ADR-0044).
+    text = SubtitleTextConfig(font_size=-32)
+    got = build_text_settings(text, SubtitleConfig())
+    assert got["font"]["size"] == -32
 
 
 def test_build_text_settings_transparent_bg_becomes_zero_opacity():
