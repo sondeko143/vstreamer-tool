@@ -293,6 +293,85 @@ def make_style_recording_client(pushed: list[tuple[str, dict]]):
     return Client
 
 
+def make_ingest_before_aging_push_crash_client(pushed: list[tuple[int, str, str]]):
+    """Records every *text* `SetInputSettings` push as `(session_index,
+    inputName, text)`, same shape as `make_tick_hoist_client`. Session 0
+    raises the instant it sees its 3rd text push to `vspeech-text`
+    (`"n"`'s source) -- the 1st is the initial connect's empty push, the 2nd
+    is an earlier message being ingested and pushed, and the 3rd is the
+    *aging* push that clears that earlier message once it expires. fix pass
+    5, item 1: pins `_run_session`'s ingest-before-either-push order by
+    making the aging push (not the ingest push) the one that fails, on a
+    turn where a message and an expiry land together.
+    """
+    session_counter = {"n": -1}
+
+    class Client:
+        def __init__(self, _ws):
+            session_counter["n"] += 1
+            self.session = session_counter["n"]
+            self._n_text_pushes = 0
+
+        async def identify(self, password: str) -> None:
+            return None
+
+        async def request(self, request_type: str, request_data=None) -> dict:
+            data = request_data or {}
+            if request_type == "GetInputSettings":
+                return {"inputKind": "text_gdiplus_v3", "inputSettings": {}}
+            if request_type == "SetInputSettings":
+                settings = data.get("inputSettings", {})
+                if "text" in settings:
+                    name = data["inputName"]
+                    text = settings["text"]
+                    pushed.append((self.session, name, text))
+                    if name == "vspeech-text":
+                        self._n_text_pushes += 1
+                        if self.session == 0 and self._n_text_pushes == 3:
+                            raise ObsRequestError("SetInputSettings", 500, "boom")
+                return {}
+            return {}
+
+    return Client
+
+
+def make_style_recording_crash_on_text_client(
+    pushed: list[tuple[int, str, dict]], crash_text: str
+):
+    """Records every `SetInputSettings` call (style *and* text alike) as
+    `(session_index, inputName, inputSettings)` -- unlike
+    `make_style_recording_client`, which doesn't tag a session index because
+    fix pass 4's reload-rebind test only ever needed one session. Session 0
+    raises the instant `crash_text` is pushed as a *text* push
+    (`"text" in settings`), forcing a reconnect -- fix pass 5, item 3 needs
+    to see the *style* dict a fresh session pushes at connect time, before
+    any reload-triggered self-heal has a chance to run.
+    """
+    session_counter = {"n": -1}
+
+    class Client:
+        def __init__(self, _ws):
+            session_counter["n"] += 1
+            self.session = session_counter["n"]
+
+        async def identify(self, password: str) -> None:
+            return None
+
+        async def request(self, request_type: str, request_data=None) -> dict:
+            data = request_data or {}
+            if request_type == "GetInputSettings":
+                return {"inputKind": "text_gdiplus_v3", "inputSettings": {}}
+            if request_type == "SetInputSettings":
+                settings = data.get("inputSettings", {})
+                pushed.append((self.session, data.get("inputName", ""), settings))
+                if self.session == 0 and settings.get("text") == crash_text:
+                    raise ObsRequestError("SetInputSettings", 500, "boom")
+                return {}
+            return {}
+
+    return Client
+
+
 class RecordingLogger:
     """`vspeech.worker.subtitle_obs.logger` の代わりに差し込む記録専用の偽
     logger。標準 logging のハンドラ/レベル設定に依存せず、warn/backoff の
@@ -1362,6 +1441,271 @@ async def test_reload_rebinds_context_config_so_the_worker_actually_picks_up_the
     # the *old* Config's subtitle.text object -- this would stay the default
     # font_color's int forever, never observing the reload.
     assert text_style_pushes[-1]["color"] == hex_color_to_obs_int("#0080ff")
+
+    task.cancel()
+    with pytest.raises(WorkerShutdown):
+        await task
+
+
+# --- fix pass 5: an audit of the fix pass 4 reorder (moving ingest_text
+# ahead of both pushes in _run_session) found the reorder itself
+# mutation-invisible -- reverting it, in full or in part, left 27/27 green,
+# because neither aging test ever has a message and an expiry land in the
+# *same* turn. It also found two pre-existing survivors outside that diff:
+# _apply_reload's own _push_all_text call, and the connect-time
+# _refresh_panel_configs call. See task-7-report.md's "Fix pass 5" section
+# for the RED/GREEN proof of the reorder test below and the experiments
+# behind the other two.
+
+
+async def test_ingest_survives_a_same_turn_aging_push_failure(monkeypatch):
+    # ADR-0042 / fix pass 4, finding 5 (audit, fix pass 5): a message and an
+    # expiry landing in the *same* turn, where the *aging* push (not the
+    # ingest push) is the one that fails. `_run_session` ingests -- a pure
+    # state update that cannot raise -- before either push specifically so a
+    # push failure (which kills the session and jumps straight to the outer
+    # fail-open catch) can no longer un-ingest anything already applied: the
+    # next session's reconnect (_push_all_text) still carries it.
+    #
+    # This is the *position* of `ingest_text` relative to the aging push,
+    # not an incidental detail: both a full revert to the old order (aging
+    # push before ingest_text ever runs) and a partial revert that keeps the
+    # `aged`/`ingested` variable shape but still moves the `ingest_text`
+    # call to after the aging-push loop lose "NEWTEXT" the same way, because
+    # neither ever calls ingest_text before the aging push raises. (Swapping
+    # only the two *push* calls, leaving ingest_text's position alone, is an
+    # equivalent mutant -- by the time either push runs, ingest_text has
+    # already applied either way, so the message survives regardless of push
+    # order; not tested here, per the brief.)
+    #
+    # "OLDTEXT" (panel "n") is made to expire in the same turn "NEWTEXT"
+    # (panel "s") is ingested, by using the `context.running` gate as a real
+    # suspend point: without it, `_run_session`'s turns run back-to-back
+    # with no genuine `await` between them (none of the fakes here truly
+    # block), so there would be no way to advance the clock and queue the
+    # next message strictly *between* two turns from the test.
+    clock = FakeClock(0.0)
+    pushed: list[tuple[int, str, str]] = []
+    monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
+    monkeypatch.setattr(
+        subtitle_obs_mod,
+        "ObsWsClient",
+        make_ingest_before_aging_push_crash_client(pushed),
+    )
+    monkeypatch.setattr(subtitle_obs_mod, "monotonic", clock)
+
+    async def fake_sleep(sec: float) -> None:
+        return None
+
+    monkeypatch.setattr(subtitle_obs_mod, "sleep", fake_sleep)
+
+    context = SharedContext(config=make_config())
+    worker_meta = context.add_worker(
+        event=EventType.subtitle, configs_depends_on=["subtitle"]
+    )
+    in_queue: Queue[WorkerInput] = Queue()
+    monkeypatch.setattr(
+        subtitle_obs_mod, "wait_for", make_fake_wait_for(in_queue, clock)
+    )
+
+    task = asyncio.create_task(
+        subtitle_obs_mod.subtitle_obs_worker(context, in_queue),
+        name=worker_meta.event.name,
+    )
+    await _settle()  # first connect settles; parked on the empty queue
+    # (timeout=None, a real block -- nothing displayed yet)
+
+    context.running.clear()  # forces a real suspend point after this turn
+    await in_queue.put(make_message("OLDTEXT"))  # unblocks the parked wait
+    await _settle()  # "OLDTEXT" ingested into "n" and pushed; the turn then
+    # blocks for real on context.running.wait()
+
+    clock.advance(100.0)  # far past OLDTEXT's display time, whatever it is
+    await in_queue.put(make_message("NEWTEXT", position="s"))
+    context.running.set()
+    await _settle()  # this turn ages "n" (OLDTEXT expires) and ingests
+    # "NEWTEXT" into "s" together; the aging push (for "n") then raises
+
+    assert not task.done(), (
+        f"worker crashed instead of failing open: "
+        f"{task.exception() if task.done() else None}"
+    )
+
+    # the message must have survived in panel state even though its own
+    # push never happened in session 0 -- the aging push that killed the
+    # session ran first. Session 1's reconnect re-pushes every panel's
+    # *current* text (_push_all_text), so if "NEWTEXT" made it into panel
+    # "s"'s state, it shows up there.
+    session1_pushes = {
+        (source, text) for session, source, text in pushed if session == 1
+    }
+    assert ("vspeech-translated", "NEWTEXT") in session1_pushes
+
+    task.cancel()
+    with pytest.raises(WorkerShutdown):
+        await task
+
+
+async def test_apply_reload_re_pushes_current_text_so_a_delimiter_change_does_not_stay_stale(
+    monkeypatch,
+):
+    # ADR-0042 / fix pass 5, item 2 (C1, audit): does `_apply_reload`'s own
+    # `_push_all_text` call matter, or does the next natural event always
+    # cover it? Experiment: a reload can change *how* an already-displayed,
+    # otherwise-unchanged panel renders (delimiter here; anchor is the other
+    # case) without any message or expiry following it. Nothing else in the
+    # loop re-renders a panel on its own -- only a new message or an expiry
+    # does -- so without this call, OBS keeps showing the pre-reload
+    # rendering until one of those happens, which could be a long time (or
+    # never, for a panel that's gone quiet). Measured: dropping this one
+    # line leaves the pre-existing 27/27 green, because none of them check
+    # the panel's *rendered* text immediately after a reload that changes
+    # delimiter/anchor with no message riding along. Conclusion: load-bearing
+    # -- pinned here, not deleted.
+    fake_logger = RecordingLogger()
+    pushed: list[tuple[str, dict]] = []
+    monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
+    monkeypatch.setattr(
+        subtitle_obs_mod, "ObsWsClient", make_style_recording_client(pushed)
+    )
+    monkeypatch.setattr(subtitle_obs_mod, "logger", fake_logger)
+
+    config = make_config()  # default delimiter " "
+    context = SharedContext(config=config)
+    worker_meta = context.add_worker(
+        event=EventType.subtitle, configs_depends_on=["subtitle"]
+    )
+    in_queue: Queue[WorkerInput] = Queue()
+
+    task = asyncio.create_task(
+        subtitle_obs_mod.subtitle_obs_worker(context, in_queue),
+        name=worker_meta.event.name,
+    )
+    await _settle()  # first connect settles; parked on the empty queue
+
+    await in_queue.put(make_message("AAA"))
+    await _settle()
+
+    context.running.clear()  # a real suspend point strictly *between*
+    # "BBB" landing and the reload's need_reload check -- otherwise the
+    # reload and "BBB" would be indistinguishable from a single combined
+    # turn, and this test wouldn't isolate _apply_reload's own push.
+    await in_queue.put(make_message("BBB"))
+    await _settle()  # "BBB" ingested and pushed; the turn then blocks for
+    # real on context.running.wait()
+
+    text_pushes_before_reload = [
+        s["text"] for n, s in pushed if n == "vspeech-text" and "text" in s
+    ]
+    # panel "n" has anchor "s" (reversed join): newest first.
+    assert text_pushes_before_reload[-1] == "BBB AAA"
+
+    new_config = config.model_copy(deep=True)  # mirrors lib/command.py's
+    # `context.config = new_config` rebind
+    new_config.subtitle.text.delimiter = "|"
+    context.config = new_config
+    worker_meta.need_reload = True
+    context.running.set()  # release the gate; the next loop iteration's
+    # need_reload check fires before any new message or expiry, isolating
+    # _apply_reload's own effect
+    await _settle()
+
+    assert not task.done(), (
+        f"worker crashed: {task.exception() if task.done() else None}"
+    )
+    assert worker_meta.need_reload is False  # confirms _apply_reload ran
+
+    text_pushes_after_reload = [
+        s["text"] for n, s in pushed if n == "vspeech-text" and "text" in s
+    ]
+    # unfixed (_apply_reload: drop _push_all_text), this stays "BBB AAA" --
+    # the reload's style push still happens, but nothing re-renders the
+    # *text* with the new delimiter until a message or expiry, neither of
+    # which happened here.
+    assert text_pushes_after_reload[-1] == "BBB|AAA"
+
+    task.cancel()
+    with pytest.raises(WorkerShutdown):
+        await task
+
+
+async def test_connect_time_refresh_repoints_panels_to_config_changed_while_connected_and_unflagged(
+    monkeypatch,
+):
+    # ADR-0042 / fix pass 5, item 3 (C2, audit): the earlier "redundant"
+    # reasoning was that _run_session's first turn always runs
+    # _apply_reload and converges -- but _apply_reload only ever fires
+    # `if context.need_reload`, and lib/command.py's reload handler
+    # (lines 60-74) resets and re-evaluates *each* worker's need_reload
+    # fresh on every single reload event, diffed only against whatever
+    # context.config already is at that moment. So a *second* reload that
+    # doesn't touch `subtitle` -- landing before this worker ever consumes
+    # the first one's flag, e.g. while OBS is down -- clears a
+    # still-unconsumed True back to False even though
+    # `context.config.subtitle` has, cumulatively, changed since
+    # `make_panels()` built `panels[key].config`. That state (config
+    # rebound, need_reload never set) is reproduced directly here instead of
+    # replaying two full reload cycles through a temp config file.
+    #
+    # Experiment: with need_reload never True, `_apply_reload`'s self-heal
+    # can never fire in the new session either -- so if the connect-time
+    # `_refresh_panel_configs` call is the *only* thing that re-points
+    # `panels["n"].config` at the live config, dropping it means the next
+    # session pushes the *stale* style forever, not just transiently.
+    fake_logger = RecordingLogger()
+    pushed: list[tuple[int, str, dict]] = []
+    monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
+    monkeypatch.setattr(
+        subtitle_obs_mod,
+        "ObsWsClient",
+        make_style_recording_crash_on_text_client(pushed, "disconnect-me"),
+    )
+    monkeypatch.setattr(subtitle_obs_mod, "logger", fake_logger)
+
+    async def fake_sleep(sec: float) -> None:
+        return None
+
+    monkeypatch.setattr(subtitle_obs_mod, "sleep", fake_sleep)
+
+    config = make_config()  # default font_color "#ffffff"
+    context = SharedContext(config=config)
+    worker_meta = context.add_worker(
+        event=EventType.subtitle, configs_depends_on=["subtitle"]
+    )
+    in_queue: Queue[WorkerInput] = Queue()
+
+    task = asyncio.create_task(
+        subtitle_obs_mod.subtitle_obs_worker(context, in_queue),
+        name=worker_meta.event.name,
+    )
+    await _settle()  # session 0 connects, pushes the default style, parks
+    # on the empty queue
+
+    new_config = config.model_copy(deep=True)  # mirrors lib/command.py's
+    # `context.config = new_config` rebind
+    new_config.subtitle.text.font_color = "#0080ff"
+    context.config = new_config
+    assert worker_meta.need_reload is False  # the race this test reproduces
+
+    await in_queue.put(make_message("disconnect-me"))
+    await _settle()  # session 0 dies pushing "disconnect-me"; session 1
+    # reconnects
+
+    assert not task.done(), (
+        f"worker crashed: {task.exception() if task.done() else None}"
+    )
+
+    session1_text_styles = [
+        settings
+        for session, name, settings in pushed
+        if session == 1 and name == "vspeech-text" and "color" in settings
+    ]
+    assert session1_text_styles, "session 1 never pushed a style for vspeech-text"
+    # unfixed (connect-time _refresh_panel_configs dropped), panels["n"]
+    # .config is still the *old* Config's subtitle.text object -- and
+    # need_reload is False, so _apply_reload never runs to fix it either.
+    # This would stay the default font_color's int forever.
+    assert session1_text_styles[0]["color"] == hex_color_to_obs_int("#0080ff")
 
     task.cancel()
     with pytest.raises(WorkerShutdown):
