@@ -153,7 +153,12 @@ def test_build_text_settings_non_bold_clears_the_flag():
 
 
 def test_build_text_settings_bold_is_case_insensitive_like_tk():
-    # tk: "bold" if config.font_style.lower() == "bold" else "normal"
+    # The case-insensitivity comes from the shared lib.subtitle_state
+    # .font_style_is_bold both backends call through (ADR-0041), not a rule
+    # restated here that could quietly drift out of sync with it -- see
+    # test_subtitle_redraw.py's
+    # test_tk_and_obs_bold_flag_both_route_through_font_style_is_bold for
+    # the test that actually pins the two backends can't diverge.
     text = SubtitleTextConfig(font_style="BOLD")
     assert build_text_settings(text, SubtitleConfig())["font"]["flags"] == 1
 

@@ -15,6 +15,7 @@ from vspeech.config import SubtitleTextConfig
 from vspeech.lib.subtitle_state import TRANSPARENT_BG_COLOR
 from vspeech.lib.subtitle_state import anchor_to_justify
 from vspeech.lib.subtitle_state import anchor_to_vertical
+from vspeech.lib.subtitle_state import font_style_is_bold
 
 # obs-properties.h の enum obs_font_style。
 OBS_FONT_BOLD = 1
@@ -97,7 +98,11 @@ def build_text_settings(
         "font": {
             "face": text_config.font_family,
             "size": font_size_to_obs_lfheight(text_config.font_size),
-            "flags": OBS_FONT_BOLD if text_config.font_style.lower() == "bold" else 0,
+            # `flags`' bold bit follows the shared rule in lib/subtitle_state
+            # (font_style_is_bold) so this doesn't drift into a second
+            # hand-synced copy from subtitle_tk.draw_text_with_outline's Tk
+            # `weight` (ADR-0041).
+            "flags": OBS_FONT_BOLD if font_style_is_bold(text_config.font_style) else 0,
         },
         "color": hex_color_to_obs_int(text_config.font_color),
         "opacity": 100,

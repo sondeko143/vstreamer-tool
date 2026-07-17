@@ -29,6 +29,7 @@ from vspeech.lib.subtitle_state import TRANSPARENT_BG_COLOR
 from vspeech.lib.subtitle_state import Texts
 from vspeech.lib.subtitle_state import age_panels
 from vspeech.lib.subtitle_state import anchor_to_justify
+from vspeech.lib.subtitle_state import font_style_is_bold
 from vspeech.lib.subtitle_state import ingest_text
 from vspeech.logger import logger
 from vspeech.shared_context import SharedContext
@@ -123,10 +124,14 @@ def draw_text_with_outline(
     text_color = config.font_color
     outline_color = config.outline_color
 
+    # `weight` follows the shared bold rule in lib/subtitle_state
+    # (font_style_is_bold) so this doesn't drift into a second hand-synced
+    # copy from lib/obs_text_settings.build_text_settings's OBS_FONT_BOLD
+    # flag (ADR-0041).
     font_tuple = Font(
         family=config.font_family,
         size=config.font_size,
-        weight="bold" if config.font_style.lower() == "bold" else "normal",
+        weight="bold" if font_style_is_bold(config.font_style) else "normal",
     )
 
     texts = wrap_text_to_width(texts, font_tuple.measure, max_width)

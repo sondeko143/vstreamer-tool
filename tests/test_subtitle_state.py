@@ -6,6 +6,7 @@ from vspeech.lib.subtitle_state import Text
 from vspeech.lib.subtitle_state import Texts
 from vspeech.lib.subtitle_state import age_panels
 from vspeech.lib.subtitle_state import anchor_to_justify
+from vspeech.lib.subtitle_state import font_style_is_bold
 from vspeech.lib.subtitle_state import next_expiry_sec
 
 
@@ -112,6 +113,21 @@ def test_next_expiry_sec_ignores_non_head_entries():
 )
 def test_anchor_to_justify_covers_every_anchor(anchor: Anchor, expected: str):
     assert anchor_to_justify(anchor) == expected
+
+
+@pytest.mark.parametrize(
+    ("font_style", "expected"),
+    [
+        ("bold", True),
+        ("BOLD", True),
+        ("Bold", True),
+        ("normal", False),
+        ("", False),
+        ("italic", False),
+    ],
+)
+def test_font_style_is_bold_is_case_insensitive(font_style: str, expected: bool):
+    assert font_style_is_bold(font_style) is expected
 
 
 # Characterisation tests for Texts.coord_x / coord_y, pinning TODAY's behaviour

@@ -59,6 +59,24 @@ def anchor_to_vertical(anchor: Anchor) -> Literal["top", "center", "bottom"]:
     return "center"
 
 
+def font_style_is_bold(font_style: str) -> bool:
+    """The shared bold decision -- one copy, not two.
+
+    Unlike `anchor_to_justify`/`anchor_to_vertical` above, TK and OBS don't
+    share a vocabulary for this decision: `subtitle_tk.draw_text_with_outline`
+    passes the literal strings `"bold"`/`"normal"` to `tkinter.font.Font`,
+    while `lib.obs_text_settings.build_text_settings` sets a bit
+    (`OBS_FONT_BOLD` or `0`) in OBS's `font.flags`. There is no third word
+    both backends can return as-is (the way `anchor_to_justify` returns
+    `"left"`/`"center"`/`"right"` for both Tk's `justify` and OBS's `align`),
+    so this function answers only the shared *question* -- is `font_style`
+    the bold one? -- and each backend maps that `bool` to its own
+    representation. Used by both call sites above so the two backends can't
+    drift into hand-synced copies of this rule again (ADR-0041).
+    """
+    return font_style.lower() == "bold"
+
+
 def update_display_sec(
     current_sec: float, current_text: str, add_text: str, config: SubtitleTextConfig
 ) -> float:
