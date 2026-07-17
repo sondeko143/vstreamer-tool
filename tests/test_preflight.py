@@ -9,10 +9,13 @@ from vspeech.config import GcpConfig
 from vspeech.config import SubtitleWorkerType
 from vspeech.config import TranscriptionConfig
 from vspeech.config import TranscriptionWorkerType
+from vspeech.config import VcConfig
 from vspeech.exceptions import ConfigError
+from vspeech.exceptions import ConfigProblem
 from vspeech.lib.audio import DeviceInfo
 from vspeech.lib.subtitle_state import TRANSPARENT_BG_COLOR
 from vspeech.preflight import _check_subtitle
+from vspeech.preflight import collect_problems
 from vspeech.preflight import preflight
 
 
@@ -411,3 +414,36 @@ def test_obs_backend_reports_every_bad_color_not_just_the_first():
     assert "subtitle.translated.font_color" in details
     assert "subtitle.translated.outline_color" in details
     assert "subtitle.bg_color" in details
+
+
+def test_collect_problems_returns_list_without_raising():
+    problems = collect_problems(_acp())  # ACP 4 フィールドすべて空
+    assert [p.worker for p in problems] == ["transcription"] * 4
+    assert {p.field for p in problems} == {
+        "ami.appkey",
+        "ami.engine_uri",
+        "ami.engine_name",
+        "ami.service_id",
+    }
+
+
+def test_collect_problems_empty_for_clean_config():
+    assert collect_problems(Config()) == []
+
+
+def test_preflight_still_raises_on_problems():
+    with pytest.raises(ConfigError):
+        preflight(_acp())
+
+
+def test_config_problem_str_is_unchanged_by_field():
+    problem = ConfigProblem("vc", "rvc.model_file '' が存在しません", "rvc.model_file")
+    assert str(problem) == "[vc] rvc.model_file '' が存在しません"
+
+
+def test_vc_problems_carry_their_field():
+    config = Config(vc=VcConfig(enable=True))
+    fields = {p.field for p in collect_problems(config)}
+    assert "rvc.model_file" in fields
+    assert "rvc.hubert_model_file" in fields
+    assert "rvc.rmvpe_model_file" in fields  # f0_extractor_type の既定は rmvpe

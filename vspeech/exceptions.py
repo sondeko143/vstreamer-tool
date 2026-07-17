@@ -32,6 +32,8 @@ def shutdown_worker(e: BaseException):
 class ConfigProblem:
     worker: str
     detail: str
+    # 問題の設定箇所のドット path (例 "rvc.model_file")。GUI がそこへ移動するために使う (ADR-0045)。
+    field: str | None = None
 
     def __str__(self) -> str:
         return f"[{self.worker}] {self.detail}"

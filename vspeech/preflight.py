@@ -35,6 +35,7 @@ def _check_gcp_credentials(gcp: GcpConfig, worker: str) -> list[ConfigProblem]:
                 ConfigProblem(
                     worker,
                     f"gcp.service_account_file_path '{path}' が存在しません",
+                    field="gcp.service_account_file_path",
                 )
             ]
     return []
@@ -51,6 +52,7 @@ def _check_vad_gate(
             ConfigProblem(
                 worker,
                 f"vad_gate=true ですが vad_model_file '{path}' が存在しません",
+                field=f"{worker}.vad_model_file",
             )
         ]
     return []
@@ -73,13 +75,18 @@ def _check_transcription(config: Config) -> list[ConfigProblem]:
         for name, value in required:
             if not value:
                 problems.append(
-                    ConfigProblem(w, f"ACP バックエンドには {name} が必須ですが空です")
+                    ConfigProblem(
+                        w,
+                        f"ACP バックエンドには {name} が必須ですが空です",
+                        field=name,
+                    )
                 )
         if tc.transliterate_with_mozc and find_spec("mozcpy") is None:
             problems.append(
                 ConfigProblem(
                     w,
                     "transliterate_with_mozc=true ですが mozcpy が未インストールです",
+                    field="transcription.transliterate_with_mozc",
                 )
             )
     elif tc.worker_type == TranscriptionWorkerType.GCP:
@@ -101,11 +108,17 @@ def _check_recording(config: Config) -> list[ConfigProblem]:
     try:
         resolve_input_device(config.recording)
     except DeviceNotFoundError as e:
-        problems.append(ConfigProblem(w, str(e)))
+        problems.append(ConfigProblem(w, str(e), field="recording.input_device_index"))
     try:
         WorkerOutput.from_routes_list(config.recording.routes_list)
     except Exception as e:
-        problems.append(ConfigProblem(w, f"recording.routes_list が不正です: {e}"))
+        problems.append(
+            ConfigProblem(
+                w,
+                f"recording.routes_list が不正です: {e}",
+                field="recording.routes_list",
+            )
+        )
     return problems
 
 
@@ -118,7 +131,7 @@ def _check_playback(config: Config) -> list[ConfigProblem]:
     try:
         resolve_output_device(config.playback)
     except DeviceNotFoundError as e:
-        return [ConfigProblem("playback", str(e))]
+        return [ConfigProblem("playback", str(e), field="playback.output_device_index")]
     return []
 
 
@@ -141,14 +154,18 @@ def _check_tts(config: Config) -> list[ConfigProblem]:
         ("voicevox.model_dir", vv.model_dir),
     ):
         if not path.expanduser().is_dir():
-            problems.append(ConfigProblem(w, f"{name} '{path}' が存在しません"))
+            problems.append(
+                ConfigProblem(w, f"{name} '{path}' が存在しません", field=name)
+            )
     if (
         vv.onnxruntime_path is not None
         and not vv.onnxruntime_path.expanduser().is_file()
     ):
         problems.append(
             ConfigProblem(
-                w, f"voicevox.onnxruntime_path '{vv.onnxruntime_path}' が存在しません"
+                w,
+                f"voicevox.onnxruntime_path '{vv.onnxruntime_path}' が存在しません",
+                field="voicevox.onnxruntime_path",
             )
         )
     return problems
@@ -162,7 +179,11 @@ def _check_vc(config: Config) -> list[ConfigProblem]:
     problems: list[ConfigProblem] = []
     if not rvc.model_file.expanduser().is_file():
         problems.append(
-            ConfigProblem(w, f"rvc.model_file '{rvc.model_file}' が存在しません")
+            ConfigProblem(
+                w,
+                f"rvc.model_file '{rvc.model_file}' が存在しません",
+                field="rvc.model_file",
+            )
         )
     hubert = rvc.hubert_model_file
     if hubert == Path() or not hubert.expanduser().is_dir():
@@ -170,13 +191,16 @@ def _check_vc(config: Config) -> list[ConfigProblem]:
             ConfigProblem(
                 w,
                 f"rvc.hubert_model_file '{hubert}' (資産ディレクトリ) が存在しません",
+                field="rvc.hubert_model_file",
             )
         )
     if rvc.f0_extractor_type == F0ExtractorType.rmvpe:
         if not rvc.rmvpe_model_file.expanduser().is_file():
             problems.append(
                 ConfigProblem(
-                    w, f"rvc.rmvpe_model_file '{rvc.rmvpe_model_file}' が存在しません"
+                    w,
+                    f"rvc.rmvpe_model_file '{rvc.rmvpe_model_file}' が存在しません",
+                    field="rvc.rmvpe_model_file",
                 )
             )
     problems.extend(_check_vad_gate(config.vc, w))
@@ -194,13 +218,18 @@ def _check_subtitle(config: Config) -> list[ConfigProblem]:
     problems: list[ConfigProblem] = []
     if not obs.url:
         problems.append(
-            ConfigProblem(w, "OBS バックエンドには subtitle.obs.url が必須ですが空です")
+            ConfigProblem(
+                w,
+                "OBS バックエンドには subtitle.obs.url が必須ですが空です",
+                field="subtitle.obs.url",
+            )
         )
     elif not obs.url.startswith(("ws://", "wss://")):
         problems.append(
             ConfigProblem(
                 w,
                 f"subtitle.obs.url '{obs.url}' は ws:// か wss:// で始まる必要があります",
+                field="subtitle.obs.url",
             )
         )
     # text_source is asymmetric with translated_source, deliberately:
@@ -215,7 +244,9 @@ def _check_subtitle(config: Config) -> list[ConfigProblem]:
     if not obs.text_source:
         problems.append(
             ConfigProblem(
-                w, "OBS バックエンドには subtitle.obs.text_source が必須ですが空です"
+                w,
+                "OBS バックエンドには subtitle.obs.text_source が必須ですが空です",
+                field="subtitle.obs.text_source",
             )
         )
     # OBS は #rrggbb しか受け付けない (hex_color_to_obs_int) が、TK は
@@ -233,14 +264,16 @@ def _check_subtitle(config: Config) -> list[ConfigProblem]:
         try:
             hex_color_to_obs_int(value)
         except ValueError as e:
-            problems.append(ConfigProblem(w, f"{name}: {e}"))
+            problems.append(ConfigProblem(w, f"{name}: {e}", field=name))
     # bg_color だけ TRANSPARENT_BG_COLOR という番兵も正当な値として受け付ける
     # -- lib/obs_text_settings.build_text_settings の扱いをそのまま踏襲する。
     if subtitle.bg_color != TRANSPARENT_BG_COLOR:
         try:
             hex_color_to_obs_int(subtitle.bg_color)
         except ValueError as e:
-            problems.append(ConfigProblem(w, f"subtitle.bg_color: {e}"))
+            problems.append(
+                ConfigProblem(w, f"subtitle.bg_color: {e}", field="subtitle.bg_color")
+            )
     # 認証の成立とソースの実在は層B (接続してからでないと未起動と区別できない, ADR-0042)。
     return problems
 
@@ -256,9 +289,19 @@ _CHECKERS: list[Checker] = [
 ]
 
 
-def preflight(config: Config) -> None:
+def collect_problems(config: Config) -> list[ConfigProblem]:
+    """enable 済み worker の設定不備を集約して返す（送出しない）。
+
+    GUI の起動前 readiness がこれを単一の権威として再利用する (ADR-0045)。
+    「何が必須か」の判断をこの module の外に複製しないこと。
+    """
     problems: list[ConfigProblem] = []
     for checker in _CHECKERS:
         problems.extend(checker(config))
+    return problems
+
+
+def preflight(config: Config) -> None:
+    problems = collect_problems(config)
     if problems:
         raise ConfigError(problems)
