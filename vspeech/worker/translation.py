@@ -41,10 +41,20 @@ async def translate_request(
         except BadRequest:
             raise
         except GoogleCloudError as e:
-            logger.exception(e)
             if max_retry_count <= num_retries:
-                raise e
+                raise
             num_retries += 1
+            # Transient (e.g. a 503 when an idle gap resets the auth-metadata
+            # connection) — we retry, so log ONE concise WARNING line instead of
+            # a full ERROR traceback that floods the log on every idle reconnect.
+            # A genuine failure (retries exhausted) still surfaces via the
+            # caller's `except GoogleCloudError` with a full traceback.
+            logger.warning(
+                "translation transient error, retrying (%d/%d): %s",
+                num_retries,
+                max_retry_count,
+                e,
+            )
             await sleep(retry_delay_sec)
 
 
