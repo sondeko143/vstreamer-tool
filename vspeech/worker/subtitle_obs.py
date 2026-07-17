@@ -93,8 +93,12 @@ def _panel_key(panels: dict[str, Texts], ts: Texts) -> str:
 async def validate_sources(client: ObsRequester, obs: SubtitleObsConfig) -> None:
     """両ソースが OBS に実在することを確かめる。
 
-    存在しなければ ObsResourceNotFoundError が上がり、呼び出し側の
-    worker_startup が WorkerStartupError へ変える (fail-loud, ADR-0042)。
+    存在しなければ ObsResourceNotFoundError が上がる。呼び出し側はそれを
+    ObsIdentifyError と並べて名指しで捕まえ、WorkerStartupError へ変える
+    (fail-loud, ADR-0042)。この 2 型だけが「繋がった上で観測できて、かつ
+    リトライしても直らない」失敗であり、他の ObsProtocolError は fail-open
+    の再接続に落ちる。exceptions.worker_startup は使わない — その except
+    Exception はここでは広すぎ、回復可能なタイムアウトまで致命化する。
     """
     for source in (obs.text_source, obs.translated_source):
         await client.request("GetInputSettings", {"inputName": source})
