@@ -77,9 +77,24 @@ output_device_index = 1
 
 [subtitle]
 enable = true
+# "TK" = 専用ウィンドウを出す (ディスプレイが要る)。
+# "OBS" = obs-websocket 経由で OBS の Text (GDI+) ソースへ送る (ディスプレイ不要)。
+worker_type = "TK"
 window_width = 1920
 window_height = 120
 bg_color = "systemTransparent"
+
+# worker_type = "OBS" のときだけ使う。
+# 事前に OBS 側で: Tools -> obs-websocket Settings で WebSocket サーバを有効にし、
+# 下の 2 つの名前で Text (GDI+) ソースを作りシーンに配置しておくこと
+# (vspeech はソースを作らずシーンにも触れない。ADR-0041)。
+# 見た目は下の [subtitle.text] / [subtitle.translated] (+ window_width/height/bg_color)
+# が権威で、OBS 側で手動変更しても接続確立時と reload 時に config の値で上書きされる。
+[subtitle.obs]
+url = "ws://127.0.0.1:4455"
+password = ""
+text_source = "vspeech-text"
+translated_source = "vspeech-translated"
 
 [translation]
 enable = true
