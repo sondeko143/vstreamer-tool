@@ -60,6 +60,19 @@ def make_config() -> Config:
     return config
 
 
+def make_config_without_translation() -> Config:
+    """`make_config()`, but with `translated_source` empty -- the "this
+    pipeline has no translation step" configuration preflight now accepts
+    (ADR-0041/0042; `_check_subtitle` only requires `text_source`). A
+    separate helper, not a mutation of `make_config()`'s result inline
+    everywhere, so every test that needs this baseline starts from the
+    same explicit, named config.
+    """
+    config = make_config()
+    config.subtitle.obs.translated_source = ""
+    return config
+
+
 def make_message(text: str, position=None) -> WorkerInput:
     return WorkerInput(
         input_id=uuid4(),
@@ -1068,6 +1081,238 @@ async def test_style_warn_once_persists_across_reconnects_not_just_within_a_sess
 
     reach_warnings = [w for w in fake_logger.warnings if "cannot reach" in w]
     assert len(reach_warnings) == 1
+
+
+# --- The tests below cover an optional translated_source (ADR-0041/0042):
+# a pipeline with no translation step doesn't need a `vspeech-translated`
+# source in OBS at all. The trap is lib/subtitle_state.ingest_text's own
+# fallback (`texts[position] if position in texts else texts["n"]`) --
+# dropping the "s" key from make_panels would silently reroute every p=s
+# message into the "n" panel instead of just not displaying it, so these
+# tests pin the *push* side staying guarded while make_panels keeps
+# building both panels unconditionally.
+
+
+async def test_validate_sources_skips_the_translated_source_when_it_is_empty():
+    config = make_config_without_translation()
+    client = FakeObsClient()
+    await validate_sources(client, config.subtitle.obs)
+    assert [d["inputName"] for _, d in client.calls] == ["vspeech-text"]
+
+
+async def test_push_styles_or_warn_skips_the_s_panel_when_translated_source_is_empty():
+    config = make_config_without_translation()
+    panels = make_panels(config.subtitle)
+    client = FakeObsClient()
+
+    await subtitle_obs_mod._push_styles_or_warn(
+        client, config.subtitle, panels, style_warned={}
+    )
+
+    # the "n" panel still gets its style ...
+    assert client.settings_for("vspeech-text")
+    # ... and nothing else does -- in particular no call ever names the
+    # empty string, which _source_of would otherwise resolve
+    # translated_source ("") to.
+    set_calls = [d for t, d in client.calls if t == "SetInputSettings"]
+    assert [d["inputName"] for d in set_calls] == ["vspeech-text"]
+
+
+async def test_push_all_text_skips_the_s_panel_when_translated_source_is_empty():
+    config = make_config_without_translation()
+    panels = make_panels(config.subtitle)
+    client = FakeObsClient()
+
+    await subtitle_obs_mod._push_all_text(client, config.subtitle.obs, panels)
+
+    set_calls = [d for t, d in client.calls if t == "SetInputSettings"]
+    assert [d["inputName"] for d in set_calls] == ["vspeech-text"]
+
+
+async def test_an_unset_position_message_still_reaches_text_source_when_translated_source_is_empty(
+    monkeypatch,
+):
+    pushed: list[tuple[str, str]] = []
+    monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
+    monkeypatch.setattr(subtitle_obs_mod, "ObsWsClient", make_recording_client(pushed))
+
+    context = SharedContext(config=make_config_without_translation())
+    worker_meta = context.add_worker(
+        event=EventType.subtitle, configs_depends_on=["subtitle"]
+    )
+    in_queue: Queue[WorkerInput] = Queue()
+
+    task = asyncio.create_task(
+        subtitle_obs_mod.subtitle_obs_worker(context, in_queue),
+        name=worker_meta.event.name,
+    )
+    await _settle()
+
+    await in_queue.put(make_message("hello"))
+    await _settle()
+
+    assert ("vspeech-text", "hello") in pushed
+
+    task.cancel()
+    with pytest.raises(WorkerShutdown):
+        await task
+
+
+async def test_a_translated_message_with_no_destination_warns_once_and_does_not_crash(
+    monkeypatch,
+):
+    # The "s" panel keeps accumulating p=s text server-side (ingest_text
+    # doesn't know about push config) but none of it ever reaches OBS --
+    # the second message here proves the warn stays gated at one even
+    # though the drop itself keeps happening every time.
+    pushed: list[tuple[str, str]] = []
+    fake_logger = RecordingLogger()
+    monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
+    monkeypatch.setattr(subtitle_obs_mod, "ObsWsClient", make_recording_client(pushed))
+    monkeypatch.setattr(subtitle_obs_mod, "logger", fake_logger)
+
+    context = SharedContext(config=make_config_without_translation())
+    worker_meta = context.add_worker(
+        event=EventType.subtitle, configs_depends_on=["subtitle"]
+    )
+    in_queue: Queue[WorkerInput] = Queue()
+
+    task = asyncio.create_task(
+        subtitle_obs_mod.subtitle_obs_worker(context, in_queue),
+        name=worker_meta.event.name,
+    )
+    await _settle()
+
+    await in_queue.put(make_message("hello", position="s"))
+    await _settle()
+    await in_queue.put(make_message("hello-again", position="s"))
+    await _settle()
+
+    assert not task.done(), (
+        f"worker crashed: {task.exception() if task.done() else None}"
+    )
+    # no push -- style or text -- ever names the real translated_source
+    # (there's nothing to route there) *or* an empty inputName (what
+    # _source_of would resolve an unguarded push to).
+    assert {source for source, _ in pushed} <= {"vspeech-text"}
+    translated_warnings = [w for w in fake_logger.warnings if "translated_source" in w]
+    assert len(translated_warnings) == 1
+
+    # the "n" (text_source) path is untouched by any of this.
+    await in_queue.put(make_message("still works"))
+    await _settle()
+    assert ("vspeech-text", "still works") in pushed
+
+    task.cancel()
+    with pytest.raises(WorkerShutdown):
+        await task
+
+
+def make_recurring_crash_after_marker_client(
+    pushed: list[tuple[int, str, str]], crash_text: str, num_crashing_sessions: int
+):
+    """Records every *text* `SetInputSettings` push as `(session_index,
+    inputName, text)`, same shape as `make_tick_hoist_client`. Raises the
+    instant `crash_text` itself is pushed, for the first
+    `num_crashing_sessions` sessions only -- forces exactly that many
+    reconnects on demand (used to prove a warn-once survives them), then
+    lets the worker settle instead of crash-looping forever.
+    """
+    session_counter = {"n": -1}
+
+    class Client:
+        def __init__(self, _ws=None):
+            session_counter["n"] += 1
+            self.session = session_counter["n"]
+
+        async def identify(self, password: str) -> None:
+            return None
+
+        async def request(self, request_type: str, request_data=None) -> dict:
+            data = request_data or {}
+            if request_type == "GetInputSettings":
+                return {"inputKind": "text_gdiplus_v3", "inputSettings": {}}
+            if request_type == "SetInputSettings":
+                settings = data.get("inputSettings", {})
+                if "text" in settings:
+                    text = settings["text"]
+                    pushed.append((self.session, data["inputName"], text))
+                    if text == crash_text and self.session < num_crashing_sessions:
+                        raise ObsRequestError("SetInputSettings", 500, "boom")
+                return {}
+            return {}
+
+    return Client
+
+
+async def test_missing_translated_source_warn_once_persists_across_reconnects(
+    monkeypatch,
+):
+    # Mirrors
+    # test_style_warn_once_persists_across_reconnects_not_just_within_a_session:
+    # the mechanism-only tests above (e.g.
+    # test_an_unset_position_message_still_reaches_text_source_when_translated_source_is_empty)
+    # only prove the warn-once *dict/flag* works when handed a single
+    # long-lived object -- they never prove `subtitle_obs_worker` actually
+    # keeps handing the *same* flag across a real reconnect instead of
+    # creating a fresh one every session. This drives the real reconnect
+    # loop with a p=s message queued every session.
+    pushed: list[tuple[int, str, str]] = []
+    crash_text = "force-reconnect"
+    num_crashing_sessions = 3
+
+    async def fake_sleep(sec: float) -> None:
+        return None
+
+    fake_logger = RecordingLogger()
+    monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
+    monkeypatch.setattr(
+        subtitle_obs_mod,
+        "ObsWsClient",
+        make_recurring_crash_after_marker_client(
+            pushed, crash_text, num_crashing_sessions
+        ),
+    )
+    monkeypatch.setattr(subtitle_obs_mod, "sleep", fake_sleep)
+    monkeypatch.setattr(subtitle_obs_mod, "logger", fake_logger)
+
+    context = SharedContext(config=make_config_without_translation())
+    worker_meta = context.add_worker(
+        event=EventType.subtitle, configs_depends_on=["subtitle"]
+    )
+    in_queue: Queue[WorkerInput] = Queue()
+
+    task = asyncio.create_task(
+        subtitle_obs_mod.subtitle_obs_worker(context, in_queue),
+        name=worker_meta.event.name,
+    )
+
+    for _ in range(num_crashing_sessions):
+        await _settle()
+        await in_queue.put(make_message("translated", position="s"))
+        await in_queue.put(make_message(crash_text))
+        await _settle()
+
+    # one more, non-crashing session: still alive, still dropping p=s
+    # silently, still not warning again.
+    await _settle()
+    await in_queue.put(make_message("translated-again", position="s"))
+    await _settle()
+
+    assert not task.done(), (
+        f"worker crashed: {task.exception() if task.done() else None}"
+    )
+    # every session actually ran (not fewer, e.g. from an early crash loop
+    # exit) and never sent anything but the real text_source.
+    assert {session for session, _, _ in pushed} >= set(range(num_crashing_sessions))
+    assert {name for _, name, _ in pushed} == {"vspeech-text"}
+
+    translated_warnings = [w for w in fake_logger.warnings if "translated_source" in w]
+    assert len(translated_warnings) == 1
+
+    task.cancel()
+    with pytest.raises(WorkerShutdown):
+        await task
 
 
 # --- The tests below cover ADR-0042's fail-loud/fail-open tiers

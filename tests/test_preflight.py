@@ -290,15 +290,40 @@ def test_obs_backend_rejects_a_non_websocket_url():
     assert "ws://" in problems[0].detail
 
 
-def test_obs_backend_requires_both_source_names_and_reports_both():
-    # ADR-0038 は「全問題を集約」する。1 個目で打ち切らない。
+def test_obs_backend_requires_text_source_but_not_translated_source():
+    # text_source is the default route (ingest_text falls back to the "n"
+    # panel when position is unset) so an empty one leaves the backend
+    # doing nothing -- still fatal. translated_source has no such default
+    # fallback (a routed p=s message just gets dropped with a warn-once,
+    # see worker/subtitle_obs.py) so an empty one just means this pipeline
+    # has no translation step -- no longer required (ADR-0041/0042).
     config = Config()
     config.subtitle.enable = True
     config.subtitle.worker_type = SubtitleWorkerType.OBS
     problems = _check_subtitle(config)
     details = " ".join(p.detail for p in problems)
     assert "text_source" in details
-    assert "translated_source" in details
+    assert "translated_source" not in details
+
+
+def test_obs_backend_accepts_an_empty_translated_source():
+    config = Config()
+    config.subtitle.enable = True
+    config.subtitle.worker_type = SubtitleWorkerType.OBS
+    config.subtitle.obs.text_source = "vspeech-text"
+    config.subtitle.obs.translated_source = ""
+    assert _check_subtitle(config) == []
+
+
+def test_obs_backend_still_rejects_an_empty_text_source():
+    config = Config()
+    config.subtitle.enable = True
+    config.subtitle.worker_type = SubtitleWorkerType.OBS
+    config.subtitle.obs.text_source = ""
+    config.subtitle.obs.translated_source = "vspeech-translated"
+    problems = _check_subtitle(config)
+    assert len(problems) == 1
+    assert "text_source" in problems[0].detail
 
 
 def test_obs_backend_accepts_a_complete_config():

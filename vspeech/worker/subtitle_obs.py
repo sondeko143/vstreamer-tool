@@ -19,6 +19,15 @@ ADR-0038 の層B は通常 exceptions.worker_startup を使うが、ここでは
 あれは except Exception で全てを WorkerStartupError に変えるため、identify 中の
 タイムアウト (リトライで直る) まで fail-loud に化ける。回復不能と観測できた
 2 型だけを拾って WorkerStartupError を送出する。
+
+上記 3 段とは別の軸として、`subtitle.obs.translated_source` は空でもよい
+(`preflight._check_subtitle` は text_source だけを必須にする)。翻訳を使わない
+パイプラインでは "s" パネルの検証・スタイル・テキストいずれも push しない
+(validate_sources / _push_styles_or_warn / _push_text_if_routed)。これは
+「観測できた失敗」ではなく設定として正当な状態なので、上の 3 段のどれにも
+属さない -- ただし p=s のメッセージが実際に届いた (=送るはずの翻訳が消える)
+ときだけ、warn-once で 1 回だけ知らせる (ADR-0041 の「設定を変えて何も
+起きないのは、設定が無いことより悪い」と同じ理由)。
 """
 
 from asyncio import CancelledError
@@ -101,7 +110,13 @@ def _panel_key(panels: dict[str, Texts], ts: Texts) -> str:
 
 
 async def validate_sources(client: ObsRequester, obs: SubtitleObsConfig) -> None:
-    """両ソースが OBS に実在することを確かめる。
+    """text_source (常に必須) と translated_source (設定されていれば) が
+    OBS に実在することを確かめる。
+
+    translated_source が空のときは、そもそも push しない相手なので存在確認
+    もしない (`_check_subtitle` は text_source だけを必須にした, ADR-0041) --
+    空文字を GetInputSettings に渡すのは意味のある検査にならないうえ、その
+    ユーザーには存在しない `translated_source` を OBS 側に用意する義理も無い。
 
     存在しなければ ObsResourceNotFoundError が上がる。呼び出し側はそれを
     ObsIdentifyError と並べて名指しで捕まえ、WorkerStartupError へ変える
@@ -110,7 +125,10 @@ async def validate_sources(client: ObsRequester, obs: SubtitleObsConfig) -> None
     の再接続に落ちる。exceptions.worker_startup は使わない — その except
     Exception はここでは広すぎ、回復可能なタイムアウトまで致命化する。
     """
-    for source in (obs.text_source, obs.translated_source):
+    sources = [obs.text_source]
+    if obs.translated_source:
+        sources.append(obs.translated_source)
+    for source in sources:
         await client.request("GetInputSettings", {"inputName": source})
 
 
@@ -178,8 +196,16 @@ async def _push_styles_or_warn(
     `style_warned` は `subtitle_obs_worker` が再接続をまたいで保持する 1 つの
     辞書を両方の呼び出し site に渡す -- セッションごとに作り直すと、
     フラップのたびに warn-once がリセットされてしまう。
+
+    translated_source が空の "s" パネルはそもそも push 先が無いので、丸ごと
+    スキップする (ADR-0041)。push_text 側の欠落 (`_push_text_if_routed`) と
+    違い、こちらは何かを失うわけではない (スタイルは表示するものが無ければ
+    無意味) ので warn-once は無い -- 実際にユーザーに知らせるべき「p=s の
+    字幕本文が消えた」は push_text 側でだけ起きる。
     """
     for key, ts in panels.items():
+        if key == "s" and not config.obs.translated_source:
+            continue
         try:
             await _push_panel_style(client, config, key, ts)
         except ValueError as e:
@@ -222,11 +248,48 @@ async def push_text(
     )
 
 
+def _translated_dest_missing(
+    obs: SubtitleObsConfig, panels: dict[str, Texts], ts: Texts
+) -> bool:
+    """True when `ts` is the "s" (translated) panel and translated_source
+    is empty -- there is nowhere in OBS to send it (ADR-0041: an empty
+    translated_source means this pipeline has no translation step, not a
+    typo; `_check_subtitle` (preflight) only requires text_source).
+    """
+    return ts is panels.get("s") and not obs.translated_source
+
+
+async def _push_text_if_routed(
+    client: ObsRequester,
+    obs: SubtitleObsConfig,
+    panels: dict[str, Texts],
+    ts: Texts,
+) -> None:
+    """`push_text`, but silently skips the "s" panel when it has no
+    destination, instead of calling `push_text` (which would resolve
+    `_source_of` to the empty string and hand OBS an empty `inputName`).
+
+    Every push_text call site in this module goes through here rather than
+    calling push_text directly, so a missing translated_source can never
+    reach OBS as an empty inputName. This runs on every connect, reload,
+    and aging tick regardless of whether a translation was ever routed
+    here, so it stays silent -- warning on all of those would spam the log
+    on every reconnect for a pipeline that simply has no translation step.
+    The one case worth telling the user about (a routed p=s message with
+    nowhere to go) is handled separately, at the point of ingest in
+    `_run_session`, where it can be told apart from this housekeeping
+    no-op.
+    """
+    if _translated_dest_missing(obs, panels, ts):
+        return
+    await push_text(client, obs, panels, ts)
+
+
 async def _push_all_text(
     client: ObsRequester, obs: SubtitleObsConfig, panels: dict[str, Texts]
 ) -> None:
     for ts in panels.values():
-        await push_text(client, obs, panels, ts)
+        await _push_text_if_routed(client, obs, panels, ts)
 
 
 def _refresh_panel_configs(context: SharedContext, panels: dict[str, Texts]) -> None:
@@ -286,11 +349,18 @@ async def _run_session(
     panels: dict[str, Texts],
     last_tick: list[float],
     style_warned: dict[str, bool],
+    dest_warned: list[bool],
 ) -> None:
     """繋がっている間の本ループ。30fps のビジーループは持たない。
 
     次に消える字幕の時刻までを timeout にして待つので、何も起きていない間は
     1 回も起きない。
+
+    `dest_warned` は「p=s のメッセージが届いたが translated_source が空で
+    送り先が無い」ことを 1 回だけ警告するためのフラグ (1 要素リスト)。
+    `style_warned`/`last_tick` と同じ理由で `subtitle_obs_worker` が
+    再接続をまたいで保持する同じオブジェクトを渡す -- ここで作り直すと
+    フラップのたびにまた警告してしまう。
     """
     while True:
         if context.need_reload:
@@ -321,10 +391,24 @@ async def _run_session(
         aged = age_panels(panels, now - last_tick[0])
         last_tick[0] = now
         ingested = ingest_text(panels, message) if message is not None else None
+        obs = context.config.subtitle.obs
         for ts in aged:
-            await push_text(client, context.config.subtitle.obs, panels, ts)
+            await _push_text_if_routed(client, obs, panels, ts)
         if ingested is not None:
-            await push_text(client, context.config.subtitle.obs, panels, ingested)
+            # ingest_text has no notion of push config -- it routes a p=s
+            # message into the "s" panel regardless of whether
+            # translated_source is set, so this is the one place that can
+            # tell a genuine drop (a translated subtitle just vanished)
+            # apart from _push_text_if_routed's routine no-op skip above
+            # (connect/reload/aging housekeeping with nothing new to lose).
+            if _translated_dest_missing(obs, panels, ingested) and not dest_warned[0]:
+                logger.warning(
+                    "subtitle worker [obs] received a translated (p=s) "
+                    "subtitle but subtitle.obs.translated_source is empty; "
+                    "dropping it and continuing without it.",
+                )
+                dest_warned[0] = True
+            await _push_text_if_routed(client, obs, panels, ingested)
         if not context.running.is_set():
             await context.running.wait()
 
@@ -347,6 +431,12 @@ async def subtitle_obs_worker(
     # in tests/test_subtitle_obs.py, which goes RED if this dict is moved
     # inside the loop below).
     style_warned: dict[str, bool] = {}
+    # p=s (translated) メッセージが届いたが translated_source が空で送り先が
+    # 無いときの warn-once フラグ。style_warned と同じ理由でここ (while True
+    # の外) で 1 回だけ作り、再接続をまたいで同じ 1 要素リストを使い回す
+    # (see test_missing_translated_source_warn_once_persists_across_reconnects,
+    # which goes RED if this list is moved inside the loop below).
+    dest_warned: list[bool] = [False]
     try:
         while True:
             obs = context.config.subtitle.obs
@@ -374,7 +464,13 @@ async def subtitle_obs_worker(
                     _age_across_outage(panels, last_tick, monotonic())
                     await _push_all_text(client, obs, panels)
                     await _run_session(
-                        context, client, in_queue, panels, last_tick, style_warned
+                        context,
+                        client,
+                        in_queue,
+                        panels,
+                        last_tick,
+                        style_warned,
+                        dest_warned,
                     )
             except (OSError, WebSocketException, ObsProtocolError) as e:
                 # OBS 未起動・切断・タイムアウト・不正メッセージ。字幕は落ちるが

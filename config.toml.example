@@ -86,7 +86,7 @@ bg_color = "systemTransparent"
 
 # worker_type = "OBS" のときだけ使う。
 # 事前に OBS 側で: Tools -> obs-websocket Settings で WebSocket サーバを有効にし、
-# 下の 2 つの名前で Text (GDI+) ソースを作りシーンに配置しておくこと
+# text_source の名前で Text (GDI+) ソースを作りシーンに配置しておくこと
 # (vspeech はソースを作らずシーンにも触れない。ADR-0041)。
 # 見た目は下の [subtitle.text] / [subtitle.translated] (+ window_width/height/bg_color)
 # が権威で、OBS 側で手動変更しても接続確立時と reload 時に config の値で上書きされる。
@@ -94,6 +94,9 @@ bg_color = "systemTransparent"
 url = "ws://127.0.0.1:4455"
 password = ""
 text_source = "vspeech-text"
+# translation を使わないパイプラインでは空のままでよい -- その場合 OBS 側に
+# このソースを用意する必要も無い。p=s の翻訳字幕は届かなくなる代わりに、
+# 実際に届いたときだけ warn を1回出して継続する (ADR-0041 / 0042)。
 translated_source = "vspeech-translated"
 
 [translation]

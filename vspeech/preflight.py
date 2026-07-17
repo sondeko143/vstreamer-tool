@@ -203,14 +203,21 @@ def _check_subtitle(config: Config) -> list[ConfigProblem]:
                 f"subtitle.obs.url '{obs.url}' は ws:// か wss:// で始まる必要があります",
             )
         )
-    for name, value in (
-        ("subtitle.obs.text_source", obs.text_source),
-        ("subtitle.obs.translated_source", obs.translated_source),
-    ):
-        if not value:
-            problems.append(
-                ConfigProblem(w, f"OBS バックエンドには {name} が必須ですが空です")
+    # text_source is asymmetric with translated_source, deliberately:
+    # ingest_text (lib/subtitle_state.py) routes any message whose position
+    # isn't a known panel key to the "n" panel, so text_source is the
+    # backend's default destination -- empty means it does nothing at all.
+    # translated_source has no such fallback ("s" is its own panel); an
+    # empty translated_source just means this pipeline has no translation
+    # step, and worker/subtitle_obs.py skips that panel and warns once if a
+    # p=s message ever arrives anyway (ADR-0041/0042). Don't "fix" this back
+    # to symmetric -- that is the requirement this asymmetry removes.
+    if not obs.text_source:
+        problems.append(
+            ConfigProblem(
+                w, "OBS バックエンドには subtitle.obs.text_source が必須ですが空です"
             )
+        )
     # OBS は #rrggbb しか受け付けない (hex_color_to_obs_int) が、TK は
     # "white" のような Tk 色名も正当に使える。フィールド自体に pydantic
     # パターンバリデータを付けると動いている TK 設定を壊すので、この検査は
