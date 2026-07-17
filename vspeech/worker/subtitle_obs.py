@@ -114,25 +114,35 @@ async def validate_sources(client: ObsRequester, obs: SubtitleObsConfig) -> None
         await client.request("GetInputSettings", {"inputName": source})
 
 
+async def _push_panel_style(
+    client: ObsRequester, config: SubtitleConfig, key: str, ts: Texts
+) -> None:
+    await client.request(
+        "SetInputSettings",
+        {
+            "inputName": _source_of(key, config.obs),
+            "inputSettings": build_text_settings(ts.config, config),
+            "overlay": True,
+        },
+    )
+
+
 async def push_styles(
     client: ObsRequester, config: SubtitleConfig, panels: dict[str, Texts]
 ) -> None:
     """config のスタイルを両ソースへ流し込む (ADR-0041: config が権威)。"""
     for key, ts in panels.items():
-        await client.request(
-            "SetInputSettings",
-            {
-                "inputName": _source_of(key, config.obs),
-                "inputSettings": build_text_settings(ts.config, config),
-                "overlay": True,
-            },
-        )
+        await _push_panel_style(client, config, key, ts)
 
 
 async def _push_styles_or_warn(
-    client: ObsRequester, config: SubtitleConfig, panels: dict[str, Texts]
+    client: ObsRequester,
+    config: SubtitleConfig,
+    panels: dict[str, Texts],
+    style_warned: dict[str, bool],
 ) -> None:
-    """`push_styles` を試すが、色の値が壊れていてもプロセスを道連れにしない。
+    """パネルごとに `_push_panel_style` を試すが、色の値が壊れていても
+    プロセスを道連れにしない。
 
     preflight (層A) は起動時点の config しか見ないので、reload で入った壊れた
     `#rrggbb` (Tk 色名など) はそこで止められない -- 起点は色フィールドだけ
@@ -140,21 +150,53 @@ async def _push_styles_or_warn(
     隙間 (fix pass 1, finding 1 (Critical))。ここに来る `ValueError` は
     `hex_color_to_obs_int` が返す「観測できて、かつ config を直せば直る」
     種類だけで、繋がっている音声パイプラインを落とす理由にはならない --
-    DEGRADE (warn + 直前のスタイルを維持して継続)。`push_styles` はパネル
-    ごとに `SetInputSettings` を送るので、途中で失敗しても既に送信済みの
-    パネルへは反映済み・失敗したパネルは OBS 側の直前の値がそのまま残る。
+    DEGRADE (warn + 直前のスタイルを維持して継続)。ここに来る `ValueError` は
+    OBS が拒否したのではなく、`hex_color_to_obs_int` がリクエスト送信前に
+    ローカルで検出した壊れた入力値なので、OBS ではなく config の値を名指し
+    する (fix pass 2, finding 2)。
+
+    パネルごとに個別の try/except でガードする (fix pass 2, finding 5):
+    以前は `push_styles` をまとめて 1 つの try/except で囲っていたので、
+    先に壊れたパネルより後のパネルは (値が有効でも) 一切 push されずに
+    直前のスタイルのまま取り残されていた。パネルごとに独立させれば、
+    どちらも「壊れていなければ最新の値を反映・壊れていれば直前の値を維持」
+    をそれぞれ独立に満たせる。
+
+    `style_warned` はパネルキーごとの warn-once フラグ (fix pass 2,
+    finding 3): 同じ壊れた値が push に成功する (= config が直る) まで、
+    何度失敗しても 1 回しか警告しない。OBS が繋がっては切れてを繰り返す
+    (フラップする) 間、再接続のたびに同じ壊れた値を送り直すと、直すまで
+    毎回警告が出ていた (測定: 20 回の再接続で 20 回の警告、対して隣の
+    接続断の warn-once は正しく 1 回)。push が成功したらそのパネルの
+    フラグを戻す -- 直った後に別の値でまた壊れたときは、ちゃんと再度
+    警告するため (二度と警告しなくなるのを防ぐ)。
 
     呼び出し側は 2 箇所 (初回/再接続時の接続直後、reload 時) あり、どちらも
     同じ理由で ValueError を漏らしてはいけないので 1 箇所にまとめる。
+    `style_warned` は `subtitle_obs_worker` が再接続をまたいで保持する 1 つの
+    辞書を両方の呼び出し site に渡す -- セッションごとに作り直すと、
+    フラップのたびに warn-once がリセットされて finding 3 の再発になる。
     """
-    try:
-        await push_styles(client, config, panels)
-    except ValueError as e:
-        logger.warning(
-            "subtitle worker [obs] style rejected by OBS (%s); keeping the "
-            "previous style and continuing.",
-            e,
-        )
+    for key, ts in panels.items():
+        try:
+            await _push_panel_style(client, config, key, ts)
+        except ValueError as e:
+            if not style_warned.get(key, False):
+                logger.warning(
+                    "subtitle worker [obs] invalid style value for %s (%s); "
+                    "keeping the previous style and continuing.",
+                    ts.tag,
+                    e,
+                )
+                style_warned[key] = True
+            else:
+                logger.debug(
+                    "subtitle worker [obs] still invalid style value for %s: %s",
+                    ts.tag,
+                    e,
+                )
+        else:
+            style_warned[key] = False
 
 
 async def push_text(
@@ -193,7 +235,10 @@ def _refresh_panel_configs(context: SharedContext, panels: dict[str, Texts]) -> 
 
 
 async def _apply_reload(
-    context: SharedContext, client: ObsRequester, panels: dict[str, Texts]
+    context: SharedContext,
+    client: ObsRequester,
+    panels: dict[str, Texts],
+    style_warned: dict[str, bool],
 ) -> None:
     """reload で新しい config を取り込み、スタイルと現在テキストを再 push する。
 
@@ -203,7 +248,7 @@ async def _apply_reload(
     """
     context.reset_need_reload()
     _refresh_panel_configs(context, panels)
-    await _push_styles_or_warn(client, context.config.subtitle, panels)
+    await _push_styles_or_warn(client, context.config.subtitle, panels, style_warned)
     await _push_all_text(client, context.config.subtitle.obs, panels)
 
 
@@ -231,6 +276,7 @@ async def _run_session(
     in_queue: Queue[WorkerInput],
     panels: dict[str, Texts],
     last_tick: list[float],
+    style_warned: dict[str, bool],
 ) -> None:
     """繋がっている間の本ループ。30fps のビジーループは持たない。
 
@@ -239,7 +285,7 @@ async def _run_session(
     """
     while True:
         if context.need_reload:
-            await _apply_reload(context, client, panels)
+            await _apply_reload(context, client, panels, style_warned)
         timeout = next_expiry_sec(panels)
         message: WorkerInput | None = None
         try:
@@ -268,6 +314,10 @@ async def subtitle_obs_worker(
     # subtitle_obs_worker と _run_session が同じ 1 要素リストを共有・変更
     # する — 詳細は _age_across_outage のドキュメント参照。
     last_tick: list[float] = [monotonic()]
+    # パネルキーごとの style warn-once フラグ (fix pass 2, finding 3)。
+    # セッション (再接続) をまたいで同じ辞書を使い回す -- フラップのたびに
+    # 作り直すと、同じ壊れた値でも再接続のたびにまた警告してしまう。
+    style_warned: dict[str, bool] = {}
     try:
         while True:
             obs = context.config.subtitle.obs
@@ -290,10 +340,14 @@ async def subtitle_obs_worker(
                     logger.info("subtitle worker [obs] connected to %s", obs.url)
                     session_started = monotonic()
                     _refresh_panel_configs(context, panels)
-                    await _push_styles_or_warn(client, context.config.subtitle, panels)
+                    await _push_styles_or_warn(
+                        client, context.config.subtitle, panels, style_warned
+                    )
                     _age_across_outage(panels, last_tick, monotonic())
                     await _push_all_text(client, obs, panels)
-                    await _run_session(context, client, in_queue, panels, last_tick)
+                    await _run_session(
+                        context, client, in_queue, panels, last_tick, style_warned
+                    )
             except (OSError, WebSocketException, ObsProtocolError) as e:
                 # OBS 未起動・切断・タイムアウト・不正メッセージ。字幕は落ちるが
                 # 音声パイプラインは巻き込まない。ObsProtocolError を external に

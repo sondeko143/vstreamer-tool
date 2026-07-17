@@ -137,6 +137,58 @@ def make_tick_hoist_client(pushed: list[tuple[int, str, str]], crash_text: str):
     return Client
 
 
+def make_recording_client(pushed: list[tuple[str, str]]):
+    """`pushed` へ (source, text) を記録するだけの `ObsWsClient` 代替。切断も
+    クラッシュもしない -- fix pass 2, finding 4 (pause gate) 専用。
+    """
+
+    class Client(SucceedingClient):
+        async def request(self, request_type: str, request_data=None) -> dict:
+            result = await super().request(request_type, request_data)
+            if request_type == "SetInputSettings":
+                settings = (request_data or {}).get("inputSettings", {})
+                if "text" in settings:
+                    pushed.append(((request_data or {})["inputName"], settings["text"]))
+            return result
+
+    return Client
+
+
+def make_session_health_client(clock: FakeClock):
+    """セッション 0 は接続直後 (elapsed=0) に即死する。セッション 1 は、死ぬ
+    直前に clock を `SESSION_HEALTHY_SEC` 超まで進めてから同じように死ぬ --
+    「健全に生き延びてから落ちた」を実時間を待たずに表現する。fix pass 2,
+    finding 1 (Blocker, 未カバーだったリセット枝) 専用。
+    """
+    session_counter = {"n": -1}
+
+    class Client:
+        def __init__(self, _ws):
+            session_counter["n"] += 1
+            self.session = session_counter["n"]
+            self._raised = False
+
+        async def identify(self, password: str) -> None:
+            return None
+
+        async def request(self, request_type: str, request_data=None) -> dict:
+            data = request_data or {}
+            if request_type == "GetInputSettings":
+                return {"inputKind": "text_gdiplus_v3", "inputSettings": {}}
+            if request_type == "SetInputSettings" and "text" in data.get(
+                "inputSettings", {}
+            ):
+                if not self._raised:
+                    self._raised = True
+                    if self.session == 1:
+                        clock.advance(subtitle_obs_mod.SESSION_HEALTHY_SEC + 1.0)
+                    raise ObsRequestError("SetInputSettings", 500, "boom")
+                return {}
+            return {}
+
+    return Client
+
+
 class RecordingLogger:
     """`vspeech.worker.subtitle_obs.logger` の代わりに差し込む記録専用の偽
     logger。標準 logging のハンドラ/レベル設定に依存せず、warn/backoff の
@@ -288,7 +340,11 @@ async def test_push_styles_sends_both_panels_with_config_values():
 # --- fix pass 1: the 8 tests above only ever exercise pure helpers through
 # FakeObsClient. Nothing below this line existed before fix pass 1 -- these
 # are the first tests to drive _run_session / subtitle_obs_worker / backoff /
-# warn-once / reload / the pause gate.
+# warn-once / reload. (This comment originally also claimed "the pause gate"
+# as covered here -- it wasn't; none of fix pass 1's tests touch
+# context.running. Fixed in fix pass 2, finding 4: see
+# test_pause_gate_holds_a_queued_message_until_context_running_is_set below,
+# which is the actual pause-gate coverage.)
 
 
 async def test_push_styles_or_warn_swallows_a_tk_only_color_and_warns(monkeypatch):
@@ -306,12 +362,40 @@ async def test_push_styles_or_warn_swallows_a_tk_only_color_and_warns(monkeypatc
     panels = make_panels(config.subtitle)
     client = FakeObsClient()
 
-    await subtitle_obs_mod._push_styles_or_warn(client, config.subtitle, panels)
+    await subtitle_obs_mod._push_styles_or_warn(
+        client, config.subtitle, panels, style_warned={}
+    )
 
     assert any("white" in w for w in fake_logger.warnings)
     # the "n" panel's colours are still valid defaults and was pushed first,
     # so its style already reached OBS before the "s" panel's push raised.
     assert client.settings_for("vspeech-text")
+
+
+async def test_a_bad_first_panel_color_does_not_block_the_second_panels_good_style(
+    monkeypatch,
+):
+    # fix pass 2, finding 5 (Minor): before this fix, `_push_styles_or_warn`
+    # wrapped the *whole* `push_styles` panel loop in one try/except, so a
+    # bad "n" (text) colour -- the panel iterated *first* -- aborted the loop
+    # before the "s" (translated) panel, even though its colour was fine.
+    # Each panel is now guarded independently: breaking the first panel must
+    # not stop the second, still-valid panel from getting its update.
+    fake_logger = RecordingLogger()
+    monkeypatch.setattr(subtitle_obs_mod, "logger", fake_logger)
+    config = make_config()
+    config.subtitle.text.font_color = "white"  # the *first*-iterated panel
+    panels = make_panels(config.subtitle)
+    client = FakeObsClient()
+
+    await subtitle_obs_mod._push_styles_or_warn(
+        client, config.subtitle, panels, style_warned={}
+    )
+
+    assert any("white" in w for w in fake_logger.warnings)
+    # unfixed, this would be empty: the loop would have aborted at "n"
+    # before ever reaching "s".
+    assert client.settings_for("vspeech-translated")
 
 
 async def test_subtitle_obs_worker_does_not_let_a_bad_color_escape_at_first_connect(
@@ -473,6 +557,154 @@ async def test_display_clock_advances_across_an_outage_so_stale_text_is_not_re_p
     assert session1_texts == {("vspeech-text", ""), ("vspeech-translated", "")}
     assert (1, "vspeech-text", stale_text) not in pushed
     assert (1, "vspeech-translated", stale_text) not in pushed
+
+    task.cancel()
+    with pytest.raises(WorkerShutdown):
+        await task
+
+
+# --- fix pass 2: the review that closed fix pass 1 found the tests above
+# genuinely proved their three findings, but flagged one blocker (the
+# SESSION_HEALTHY_SEC reset branch had zero coverage) and four minors. The
+# tests below are fix pass 2's additions.
+
+
+async def test_a_healthy_session_dying_resets_backoff_and_warns_again(monkeypatch):
+    # fix pass 2, finding 1 (Blocker, measured): the >= SESSION_HEALTHY_SEC
+    # reset branch (subtitle_obs.py ~364-369) had zero coverage -- both fix
+    # pass 1 failure tests above kill the session at ~0 elapsed, so that arm
+    # never ran. A re-review forced the condition permanently false and
+    # 475/475 still passed. Session 0 here dies instantly (elapsed=0, same
+    # shape as the crash-loop test above, so it must NOT reset). Session 1 is
+    # made to look like it lived past SESSION_HEALTHY_SEC before dying --
+    # the fake client advances the fake clock immediately before raising, no
+    # real sleep -- which must reset backoff/warned, so the second outage
+    # warns again (not silenced by warn-once) and the next sleep restarts at
+    # INITIAL_BACKOFF_SEC instead of continuing to climb from where session
+    # 0 left off.
+    clock = FakeClock(0.0)
+    sleeps: list[float] = []
+
+    async def fake_sleep(sec: float) -> None:
+        sleeps.append(sec)
+        if len(sleeps) >= 2:
+            raise asyncio.CancelledError()
+
+    fake_logger = RecordingLogger()
+    monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
+    monkeypatch.setattr(
+        subtitle_obs_mod, "ObsWsClient", make_session_health_client(clock)
+    )
+    monkeypatch.setattr(subtitle_obs_mod, "sleep", fake_sleep)
+    monkeypatch.setattr(subtitle_obs_mod, "monotonic", clock)
+    monkeypatch.setattr(subtitle_obs_mod, "logger", fake_logger)
+
+    context = SharedContext(config=make_config())
+    context.add_worker(event=EventType.subtitle, configs_depends_on=["subtitle"])
+    in_queue: Queue[WorkerInput] = Queue()
+
+    with pytest.raises(WorkerShutdown):
+        await subtitle_obs_mod.subtitle_obs_worker(context, in_queue)
+
+    # unfixed (reset branch dead/false), this would be [0.5, 1.0]: session 1's
+    # death would just keep climbing session 0's backoff instead of
+    # restarting from INITIAL_BACKOFF_SEC.
+    assert sleeps == [
+        subtitle_obs_mod.INITIAL_BACKOFF_SEC,
+        subtitle_obs_mod.INITIAL_BACKOFF_SEC,
+    ]
+    reach_warnings = [w for w in fake_logger.warnings if "cannot reach" in w]
+    # one warning for session 0's quick death, a second *distinct* one after
+    # session 1's healthy-then-dead cycle -- unfixed, warn-once never gets
+    # released and this would be 1 (later outages silently hidden).
+    assert len(reach_warnings) == 2
+
+
+async def test_push_styles_or_warn_only_warns_once_for_a_persisting_bad_value(
+    monkeypatch,
+):
+    # fix pass 2, finding 3 (Minor, measured): a bad colour plus a flapping
+    # OBS used to log this warning on every single reconnect (measured: 20
+    # attempts -> 20 style warnings, against 1 correctly-gated "cannot reach"
+    # warning) even though the colour never changed. `style_warned` gates it
+    # per panel, the same warn-once shape as the connection `warned` flag --
+    # but only while the *same* bad value persists.
+    fake_logger = RecordingLogger()
+    monkeypatch.setattr(subtitle_obs_mod, "logger", fake_logger)
+    config = make_config()
+    config.subtitle.text.font_color = "white"
+    panels = make_panels(config.subtitle)
+    client = FakeObsClient()
+    style_warned: dict[str, bool] = {}
+
+    for _ in range(3):
+        await subtitle_obs_mod._push_styles_or_warn(
+            client, config.subtitle, panels, style_warned
+        )
+
+    style_warnings = [w for w in fake_logger.warnings if "invalid style" in w]
+    assert len(style_warnings) == 1
+
+    # fixed, then broken again with a *different* value -- must warn again,
+    # not stay silenced forever (finding 3's explicit second requirement).
+    config.subtitle.text.font_color = "#ff8000"
+    await subtitle_obs_mod._push_styles_or_warn(
+        client, config.subtitle, panels, style_warned
+    )
+    config.subtitle.text.font_color = "green"
+    await subtitle_obs_mod._push_styles_or_warn(
+        client, config.subtitle, panels, style_warned
+    )
+
+    style_warnings = [w for w in fake_logger.warnings if "invalid style" in w]
+    assert len(style_warnings) == 2
+
+
+async def test_pause_gate_holds_a_queued_message_until_context_running_is_set(
+    monkeypatch,
+):
+    # fix pass 2, finding 4 (Minor): the "fix pass 1" section comment above
+    # claimed these tests covered "the pause gate" -- none of them touch
+    # context.running. This drives it directly. A message already in flight
+    # when the gate closes still reaches OBS (_run_session checks
+    # context.running *after* processing a message, not before -- see
+    # subtitle_obs.py's `if not context.running.is_set(): await
+    # context.running.wait()` at the bottom of the loop body), but a second
+    # message queued while the gate is closed must wait for
+    # context.running.set() before it is pushed.
+    pushed: list[tuple[str, str]] = []
+    monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
+    monkeypatch.setattr(subtitle_obs_mod, "ObsWsClient", make_recording_client(pushed))
+
+    context = SharedContext(config=make_config())
+    worker_meta = context.add_worker(
+        event=EventType.subtitle, configs_depends_on=["subtitle"]
+    )
+    in_queue: Queue[WorkerInput] = Queue()
+
+    task = asyncio.create_task(
+        subtitle_obs_mod.subtitle_obs_worker(context, in_queue),
+        name=worker_meta.event.name,
+    )
+    await _settle()  # first connect settles; worker is parked on the empty queue
+
+    context.running.clear()
+    await in_queue.put(make_message("kick"))
+    await _settle()
+    assert ("vspeech-text", "kick") in pushed  # already in flight, still lands
+
+    await in_queue.put(make_message("blocked"))
+    await _settle()
+    # gate holds it: "blocked" must not have reached OBS in any form yet.
+    # (Panel "n" accumulates history and joins entries with a delimiter, so
+    # a released push would carry "blocked" combined with "kick" rather than
+    # the bare string -- checking containment, not equality, is what actually
+    # matches the panel's real join behaviour.)
+    assert not any("blocked" in text for _, text in pushed)
+
+    context.running.set()
+    await _settle()
+    assert any("blocked" in text for _, text in pushed)  # released once resumed
 
     task.cancel()
     with pytest.raises(WorkerShutdown):
