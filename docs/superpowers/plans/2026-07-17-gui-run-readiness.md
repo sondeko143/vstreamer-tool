@@ -919,10 +919,11 @@ EOF
 - Consumes: `gui.pipeline_editor.PipelineEditor`（Task 4）
 - Produces:
   - `gui.process.PipelineRunner.started_at: float | None`
+  - `gui.process.PipelineRunner.stopping: bool`
   - `gui.process.PipelineRunner.ran_for() -> float`
   - `gui.pipeline_editor.PipelineEditor.show_launch_failure(lines: list[str]) -> None`
 
-- [ ] **Step 1: runner に起動からの経過を持たせる**
+- [ ] **Step 1: runner に起動からの経過と「停止中」フラグを持たせる**
 
 `gui/process.py` の import に足す:
 
@@ -934,12 +935,29 @@ from time import monotonic
 
 ```python
         self.started_at: float | None = None
+        # ユーザーが Stop / delete / window close で意図的に止めたか。
+        # 即死 (起動失敗) と区別するために要る — terminate の exit code は
+        # 非 0 なので、これが無いと通常停止まで「起動失敗」と誤認する。
+        self.stopping = False
 ```
 
 `start()` の `self.proc = Popen(...)` の直前に足す:
 
 ```python
         self.started_at = monotonic()
+        self.stopping = False
+```
+
+`request_stop()` の `if self.proc and self.is_running():` の直前に足す:
+
+```python
+        self.stopping = True
+```
+
+`stop()` の `proc = self.proc` の直前に足す:
+
+```python
+        self.stopping = True
 ```
 
 `is_running` の直前に足す:
@@ -987,7 +1005,11 @@ FAILURE_TAIL_LINES = 4
         message = f"process exited: {code}"
         log = self.logs.setdefault(pipeline_id, deque(maxlen=LOG_BUFFER_MAX))
         log.append(message)
-        quick = code != 0 and runner.ran_for() < QUICK_EXIT_SEC
+        # 意図的な停止 (runner.stopping) は即死とみなさない。terminate の
+        # exit code は非 0 なので、これが無いと Stop 直後に誤って失敗バナーが出る。
+        quick = (
+            code != 0 and not runner.stopping and runner.ran_for() < QUICK_EXIT_SEC
+        )
         if self.editor.entry is not None and self.editor.entry.id == pipeline_id:
             self.editor.append_log(message)
             self.editor.set_running(False)
@@ -1003,8 +1025,10 @@ Run: `uv run python -m gui`
 1. 「マイク→ボイチェン→再生」を作り、`✗` が出ている状態で「未充足でも起動」を押す。
 2. vspeech が `起動中止: 設定不備 N 件` を吐いて exit 1 する。
 3. **赤いバナーにその理由が出る**（ログを読まずに分かる）ことを確認する。
+4. 「マイク→再生 (モニター)」を Start し、**数秒以内に Stop** する。terminate の
+   exit code は非 0 だが、**失敗バナーは出ない**（意図的停止を即死と誤認しない）ことを確認する。
 
-Expected: 上記 3 点。
+Expected: 上記 4 点。
 
 - [ ] **Step 5: 型検査・整形・全テスト・コミット**
 
