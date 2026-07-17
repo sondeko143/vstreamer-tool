@@ -25,6 +25,7 @@ from typing import Protocol
 from vspeech.config import Anchor
 from vspeech.config import SubtitleTextConfig
 from vspeech.exceptions import shutdown_worker
+from vspeech.lib.subtitle_state import TRANSPARENT_BG_COLOR
 from vspeech.lib.subtitle_state import Texts
 from vspeech.lib.subtitle_state import age_panels
 from vspeech.lib.subtitle_state import anchor_to_justify
@@ -163,7 +164,6 @@ def draw_text_with_outline(
     )
 
 
-TRANSPARENT_BG_COLOR = "systemTransparent"
 WIN32_TRANSPARENT_COLOR = "#000001"
 
 

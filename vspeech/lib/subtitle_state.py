@@ -13,6 +13,11 @@ from vspeech.config import Anchor
 from vspeech.config import SubtitleTextConfig
 from vspeech.shared_context import WorkerInput
 
+# tk では win32 の -transparentcolor に化ける番兵。OBS では背景の不透明度 0
+# に写す (カラーキー自体が不要になる)。tkinter に依存しないここが両バック
+# エンドの共有元 -- subtitle_tk と obs_text_settings の双方が import する。
+TRANSPARENT_BG_COLOR = "systemTransparent"
+
 
 def anchor_to_justify(anchor: Anchor) -> Literal["left", "center", "right"]:
     """The shared TK `justify` / OBS `align` rule -- one copy, not two.
@@ -31,6 +36,26 @@ def anchor_to_justify(anchor: Anchor) -> Literal["left", "center", "right"]:
         return "right"
     if "w" in anchor:
         return "left"
+    return "center"
+
+
+def anchor_to_vertical(anchor: Anchor) -> Literal["top", "center", "bottom"]:
+    """The shared vertical-position rule -- one copy, not two.
+
+    Same substring-guard hazard as `anchor_to_justify`: `"center"` contains
+    `"n"` as a substring (ce-n-ter), so it must be guarded before any bare
+    `"n" in anchor` / `"s" in anchor` test. Used by `Texts.coord_y` (mapped to
+    pixels: top -> margin, bottom -> bb_height - margin, center -> bb_height
+    // 2) and `lib.obs_text_settings.anchor_to_valign` (mapped to OBS's
+    `valign` words) so the two backends can't drift into hand-synced copies
+    of this rule again.
+    """
+    if anchor == "center":
+        return "center"
+    if "n" in anchor:
+        return "top"
+    if "s" in anchor:
+        return "bottom"
     return "center"
 
 
@@ -70,28 +95,29 @@ class Texts:
 
     @property
     def coord_x(self):
-        if self.anchor == "center":
-            return self.bb_width // 2
-        elif "e" in self.anchor:
-            return self.bb_width - self.config.margin
-        elif "w" in self.anchor:
+        justify = anchor_to_justify(self.anchor)
+        if justify == "left":
             return self.config.margin
+        elif justify == "right":
+            return self.bb_width - self.config.margin
         else:
             return self.bb_width // 2
 
     @property
     def coord_y(self):
-        if self.anchor == "center":
-            return self.bb_height // 2
-        elif "s" in self.anchor:
-            return self.bb_height - self.config.margin
-        elif "n" in self.anchor:
+        vertical = anchor_to_vertical(self.anchor)
+        if vertical == "top":
             return self.config.margin
+        elif vertical == "bottom":
+            return self.bb_height - self.config.margin
         else:
             return self.bb_height // 2
 
     @property
     def texts(self):
+        # A different decision from anchor_to_justify/anchor_to_vertical above
+        # (join order, not pixel/word position) and safe unguarded: "center"
+        # does not contain "s", so it can't mis-fire the way "e"/"n" do.
         if "s" in self.anchor:
             return self.config.delimiter.join(t.value for t in reversed(self.values))
         else:

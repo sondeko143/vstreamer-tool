@@ -112,3 +112,61 @@ def test_next_expiry_sec_ignores_non_head_entries():
 )
 def test_anchor_to_justify_covers_every_anchor(anchor: Anchor, expected: str):
     assert anchor_to_justify(anchor) == expected
+
+
+# Characterisation tests for Texts.coord_x / coord_y, pinning TODAY's behaviour
+# for all 9 Anchor members. bb_width/bb_height/margin are all distinct so a
+# swapped axis (x for y) or a margin/centre mix-up (e.g. returning margin
+# instead of bb_dim - margin) is visible as a wrong number, not a coincidental
+# pass. These must keep passing unchanged across the coord_x/coord_y ->
+# anchor_to_justify/anchor_to_vertical refactor -- if a refactor requires
+# editing one of these expected values, the refactor changed behaviour.
+_COORD_BB_WIDTH = 300
+_COORD_BB_HEIGHT = 200
+_COORD_MARGIN = 7
+
+
+def make_texts_for_coords(anchor: Anchor) -> Texts:
+    return Texts(
+        tag="text",
+        anchor=anchor,
+        config=SubtitleTextConfig(anchor=anchor, margin=_COORD_MARGIN),
+        bb_width=_COORD_BB_WIDTH,
+        bb_height=_COORD_BB_HEIGHT,
+    )
+
+
+@pytest.mark.parametrize(
+    ("anchor", "expected"),
+    [
+        ("nw", _COORD_MARGIN),
+        ("n", _COORD_BB_WIDTH // 2),
+        ("ne", _COORD_BB_WIDTH - _COORD_MARGIN),
+        ("w", _COORD_MARGIN),
+        ("center", _COORD_BB_WIDTH // 2),
+        ("e", _COORD_BB_WIDTH - _COORD_MARGIN),
+        ("sw", _COORD_MARGIN),
+        ("s", _COORD_BB_WIDTH // 2),
+        ("se", _COORD_BB_WIDTH - _COORD_MARGIN),
+    ],
+)
+def test_coord_x_covers_every_anchor(anchor: Anchor, expected: int):
+    assert make_texts_for_coords(anchor).coord_x == expected
+
+
+@pytest.mark.parametrize(
+    ("anchor", "expected"),
+    [
+        ("nw", _COORD_MARGIN),
+        ("n", _COORD_MARGIN),
+        ("ne", _COORD_MARGIN),
+        ("w", _COORD_BB_HEIGHT // 2),
+        ("center", _COORD_BB_HEIGHT // 2),
+        ("e", _COORD_BB_HEIGHT // 2),
+        ("sw", _COORD_BB_HEIGHT - _COORD_MARGIN),
+        ("s", _COORD_BB_HEIGHT - _COORD_MARGIN),
+        ("se", _COORD_BB_HEIGHT - _COORD_MARGIN),
+    ],
+)
+def test_coord_y_covers_every_anchor(anchor: Anchor, expected: int):
+    assert make_texts_for_coords(anchor).coord_y == expected
