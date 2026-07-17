@@ -192,6 +192,15 @@ class PipelineEditor(Frame):
         self.log.text.configure(state=DISABLED)
         self.log.yview(END)
 
+    def show_launch_failure(self, lines: list[str]) -> None:
+        """起動直後に落ちた理由をログを開かずに見せる。
+
+        vspeech は設定不備なら「起動中止: 設定不備 N 件」+ 各問題 を整形して
+        吐いて exit する (ADR-0038) ので、末尾数行がそのまま理由になる。
+        """
+        reason = " / ".join(line for line in lines if line.strip()) or "(ログを参照)"
+        self.banner.configure(text=f"❗ 起動に失敗しました: {reason}"[:400])
+
     def clear(self) -> None:
         self.entry = None
         self.config = None

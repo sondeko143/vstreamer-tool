@@ -6,6 +6,7 @@ from subprocess import STDOUT  # nosec B404 - see PIPE import
 from subprocess import Popen  # nosec B404 - see PIPE import
 from subprocess import TimeoutExpired  # nosec B404 - see PIPE import
 from threading import Thread
+from time import monotonic
 
 import grpc
 from vstreamer_protos.commander.commander_pb2 import Command
@@ -44,8 +45,15 @@ class PipelineRunner:
         self.on_log = on_log
         self.on_exit = on_exit
         self.proc: Popen[str] | None = None
+        self.started_at: float | None = None
+        # ユーザーが Stop / delete / window close で意図的に止めたか。
+        # 即死 (起動失敗) と区別するために要る — terminate の exit code は
+        # 非 0 なので、これが無いと通常停止まで「起動失敗」と誤認する。
+        self.stopping = False
 
     def start(self) -> None:
+        self.started_at = monotonic()
+        self.stopping = False
         self.proc = Popen(  # nosec B603 - fixed argv, no shell, self-created config path
             build_argv(self.config_path),
             stdout=PIPE,
@@ -66,6 +74,10 @@ class PipelineRunner:
         finally:
             self.on_exit(proc.wait())
 
+    def ran_for(self) -> float:
+        """start() からの経過秒。未起動なら 0.0。"""
+        return 0.0 if self.started_at is None else monotonic() - self.started_at
+
     def is_running(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
 
@@ -76,6 +88,7 @@ class PipelineRunner:
         blocks the UI. The process dies asynchronously; `_pump` fires `on_exit`
         when it does.
         """
+        self.stopping = True
         if self.proc and self.is_running():
             self.proc.terminate()
 
@@ -87,6 +100,7 @@ class PipelineRunner:
         should run it off-thread (e.g. in a daemon Thread) to keep the UI
         responsive. `on_exit` is fired by `_pump`, not here.
         """
+        self.stopping = True
         proc = self.proc
         if proc is None or proc.poll() is not None:
             return

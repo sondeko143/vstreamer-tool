@@ -33,6 +33,13 @@ from gui.recipes import RECIPES_BY_KEY
 from vspeech.logger import logger
 
 LOG_BUFFER_MAX = 2000
+# これより早く落ちたら「起動に失敗した」とみなす。正常起動なら worker が
+# 走り続けるので、この窓で終わるのは起動失敗だけ。
+QUICK_EXIT_SEC = 10.0
+# 失敗バナーに載せる実出力末尾の行数 (合成の "process exited" 行は含めない)。
+# ADR-0038 の preflight 失敗は「起動中止: 設定不備 N 件」ヘッダ + 問題行ずつを
+# 吐くので、ヘッダと数件の問題が収まる程度に採る (最終的に 400 字で切る)。
+FAILURE_TAIL_LINES = 8
 
 
 class App(Frame):
@@ -157,7 +164,12 @@ class App(Frame):
             self.editor.append_log(f"port {entry.port} is busy; cannot start")
             return
         pipeline_id = entry.id
-        self.logs.setdefault(pipeline_id, deque(maxlen=LOG_BUFFER_MAX))
+        # 新しい run はログを最初から始める。持ち越すと前 run の残骸
+        # (前回の "process exited" 行など) が失敗バナーの failure_tail に
+        # 混じりうる (_on_exit)。表示中なら pane も空にして揃える。
+        self.logs[pipeline_id] = deque(maxlen=LOG_BUFFER_MAX)
+        if self.editor.entry is not None and self.editor.entry.id == pipeline_id:
+            self.editor.set_log([])
         runner = PipelineRunner(
             config_path=self.paths.pipeline_config(pipeline_id),
             port=entry.port,
@@ -208,13 +220,24 @@ class App(Frame):
             self.editor.append_log(line)
 
     def _on_exit(self, pipeline_id: str, code: int) -> None:
-        if pipeline_id not in self.runners:
+        runner = self.runners.get(pipeline_id)
+        if runner is None:
             return  # deleted while its process was terminating — nothing to show
+        log = self.logs.setdefault(pipeline_id, deque(maxlen=LOG_BUFFER_MAX))
+        # 意図的な停止 (runner.stopping) は即死とみなさない。terminate の
+        # exit code は非 0 なので、これが無いと Stop 直後に誤って失敗バナーが出る。
+        quick = code != 0 and not runner.stopping and runner.ran_for() < QUICK_EXIT_SEC
+        # 失敗理由は "process exited" の合成行を足す前の実出力末尾から採る。
+        # 先に足すと、合成行が末尾枠を 1 つ食って preflight の件数ヘッダ
+        # (「起動中止: 設定不備 N 件」) を押し出してしまう。
+        failure_tail = list(log)[-FAILURE_TAIL_LINES:] if quick else []
         message = f"process exited: {code}"
-        self.logs.setdefault(pipeline_id, deque(maxlen=LOG_BUFFER_MAX)).append(message)
+        log.append(message)
         if self.editor.entry is not None and self.editor.entry.id == pipeline_id:
             self.editor.append_log(message)
             self.editor.set_running(False)
+            if quick:
+                self.editor.show_launch_failure(failure_tail)
         self._refresh_list()
 
     # --- new / delete ---------------------------------------------------
