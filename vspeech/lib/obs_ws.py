@@ -39,11 +39,11 @@ STATUS_RESOURCE_NOT_FOUND = 600
 # しまう。reprlib.Repr は深さを自前のカウンタで打ち切るため安全。
 #
 # maxstring/maxother が制限するのは「葉 (leaf) 1 つあたり」の長さだけで、
-# 総出力長には効かない (fix pass 7, finding 1 (Important))。maxlevel=6 の
+# 総出力長には効かない。maxlevel=6 の
 # 中でも maxlist=6/maxdict=4 は「幅」を許すため、6 段のネストの中に最大
 # 6^6 ≈ 46656 個もの葉 (各 ≤200 文字) が並びうる。実測: 深さ 4 段・幅 6 の
 # 入力 (約 328 KB のフレーム) から 262 KB の例外文字列が組み上がる —
-# json.loads() が生き延びる深さ (fix pass 4/5 の RecursionError 窓) にも、
+# json.loads() が生き延びる深さ (RecursionError の窓) にも、
 # 1 リーフの長さにも触れていない。つまり maxstring/maxother は「1 MiB の
 # ピアフレームがそのまま 1 MiB の例外文字列 (ひいてはログ行) になるのを
 # 防ぐ」という副次効果を持たない。総出力長を抑えるのは _bounded_repr() の
@@ -96,8 +96,7 @@ class ObsRequestError(ObsProtocolError):
         self.code = code
         self.comment = comment
         # comment は OBS 側の自由文字列で長さの取り決めが無い最後の
-        # unbounded な peer->message 経路だった (fix pass 6, finding 2
-        # (Important)): 呼び出し側 (subtitle worker) はこれをリトライループ
+        # unbounded な peer->message 経路だった: 呼び出し側 (subtitle worker) はこれをリトライループ
         # 上で毎回ログするので、悪意/単に冗長なピアがリトライのたびに巨大な
         # ログ行を吐かせられる。属性 (self.comment) は呼び出し側が生の値を
         # 読めるよう素通しのまま残し、例外メッセージだけ切り詰める。通常長の
@@ -109,8 +108,8 @@ class ObsRequestError(ObsProtocolError):
         # 含む) が任意の値で直接構築しうる。ピア経由の 2 箇所の構築元は
         # どちらも呼び出し前に isinstance(comment, str) を検査済みなので
         # ここに非 str が来ることはないが、`len(comment)` を無検査で呼ぶと
-        # 例えば `ObsRequestError("X", 1, None)` が素の TypeError で死ぬ
-        # (fix pass 7, finding 3 (Minor))。isinstance で分岐し、非 str でも
+        # 例えば `ObsRequestError("X", 1, None)` が素の TypeError で死ぬ。
+        # isinstance で分岐し、非 str でも
         # コンストラクタ自体は決して例外を漏らさない total な形に戻す。
         if isinstance(comment, str):
             bounded_comment = (
@@ -157,7 +156,7 @@ def build_auth_string(password: str, salt: str, challenge: str) -> str:
 # を割り当てている。パスワード誤り = 4009 が実測での唯一の実例で、RPC
 # バージョン不一致・不正な Identify なども同じ帯を使う)。この帯に入る close
 # だけが「再接続しても直らない」と型で示せる signal で、identify() はこれ
-# だけを ObsIdentifyError に変換する (fix pass 7)。
+# だけを ObsIdentifyError に変換する。
 _HANDSHAKE_REJECTION_CLOSE_CODES = range(4000, 5000)
 
 
@@ -239,7 +238,7 @@ class ObsWsClient:
         不一致・不正な Identify など) もエラーメッセージでは返さない -- 代わりに
         WebSocket を 4000-4999 (private use) の close code で切る (実測: OBS
         32.1.2 / obs-websocket 5.7.3、誤ったパスワードで code 4009
-        "Authentication failed."。fix pass 7)。この関数は、検出できる失敗を
+        "Authentication failed.")。この関数は、検出できる失敗を
         すべて `ObsIdentifyError` (`ObsProtocolError` のサブクラス) として
         送出する -- リトライしても直らない失敗だと呼び出し側 (ADR-0042) が型で
         見分けられるようにするため。
@@ -257,9 +256,9 @@ class ObsWsClient:
             message = await self._recv()
             if message["op"] != OP_HELLO:
                 # message['op'] は _recv() が「キーとして存在する」ことしか保証して
-                # いない生のピア値 (fix pass 6, finding 1 (Critical))。f-string の
+                # いない生のピア値。f-string の
                 # {x} は format() 経由で結局 dict.__repr__ を呼ぶので、!r を使って
-                # いなくても fix pass 5 で塞いだのと同じ repr() 再帰ハザードと
+                # いなくても repr() の再帰ハザードと
                 # 無制限長ハザードを踏む。_bounded_repr() で両方封じる (深さは
                 # reprlib の maxlevel、総幅は _bounded_repr() 自身の切り詰めで)。
                 raise ObsIdentifyError(
@@ -305,13 +304,13 @@ class ObsWsClient:
             await self._send(OP_IDENTIFY, d)
             message = await self._recv()
             if message["op"] != OP_IDENTIFIED:
-                # 上の Hello ガードと同じハザード (fix pass 6, finding 1 (Critical))。
+                # 上の Hello ガードと同じハザード。
                 raise ObsIdentifyError(
                     f"Identified を期待したが op={_bounded_repr(message['op'])} が来た"
                 )
         except ConnectionClosed as e:
             # obs-websocket はエラーメッセージを送らず、close code で拒否を
-            # 表明する (このメソッドの docstring 参照、fix pass 7)。
+            # 表明する (このメソッドの docstring 参照)。
             rejection = _handshake_rejection(e)
             if rejection is None:
                 # ハンドシェイクの拒否ではない、ただの (リトライで直りうる)
@@ -345,9 +344,8 @@ class ObsWsClient:
         while True:
             # 集約デッドライン無し (per-recv の self._timeout のみ)。無関係な
             # メッセージを timeout より速く送り続ける相手だとここが詰まりうる
-            # が、対象はローカル OBS でありリスクは低いと判断して見送った
-            # (task-2 レビューでの deferred finding)。再現する運用が出たら
-            # ここに集約デッドラインを足す。
+            # が、対象はローカル OBS でありリスクは低いと判断して見送った。
+            # 再現する運用が出たらここに集約デッドラインを足す。
             message = await self._recv()
             # イベント (op 5) や他リクエストの応答は捨てる。
             if message["op"] != OP_REQUEST_RESPONSE:

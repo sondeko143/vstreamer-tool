@@ -319,7 +319,7 @@ def _obs_config() -> Config:
     return config
 
 
-# fix pass 1, finding 1 (Critical): a Tk-valid colour name ("white", "green",
+# A Tk-valid colour name ("white", "green",
 # "#fff") is accepted by pydantic and by the TK backend but is not
 # `#rrggbb`, so `hex_color_to_obs_int` raises `ValueError` at runtime deep in
 # the OBS worker (build_text_settings). Flipping `worker_type` TK -> OBS is

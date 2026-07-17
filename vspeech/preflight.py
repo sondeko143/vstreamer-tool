@@ -214,9 +214,9 @@ def _check_subtitle(config: Config) -> list[ConfigProblem]:
     # OBS は #rrggbb しか受け付けない (hex_color_to_obs_int) が、TK は
     # "white" のような Tk 色名も正当に使える。フィールド自体に pydantic
     # パターンバリデータを付けると動いている TK 設定を壊すので、この検査は
-    # worker_type == OBS のここでしか行わない (fix pass 1, finding 1
-    # (Critical))。ADR-0040 は worker_type の切り替えを「同じイベント、
-    # 別バックエンド」として売っているため、これは typo ではなく移行経路。
+    # worker_type == OBS のここでしか行わない。ADR-0040 は worker_type の
+    # 切り替えを「同じイベント、別バックエンド」として売っているため、これは
+    # typo ではなく移行経路。
     for name, value in (
         ("subtitle.text.font_color", subtitle.text.font_color),
         ("subtitle.text.outline_color", subtitle.text.outline_color),

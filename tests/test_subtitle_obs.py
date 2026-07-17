@@ -90,7 +90,7 @@ class SucceedingClient(FakeObsClient):
 class AuthRejectedClient:
     """`identify()` always raises `ObsIdentifyError` -- a password typo, the
     kind of failure ADR-0042 says must fail loud (retrying it forever would
-    never succeed). fix pass 4, fail-loud finding 1 (Critical).
+    never succeed).
     """
 
     def __init__(self, _ws):
@@ -125,9 +125,9 @@ class RetryableIdentifyTimeoutClient:
     `ObsIdentifyError`/`ObsResourceNotFoundError` subclasses) -- an identify
     round-trip that timed out or got a malformed response, the kind of
     failure ADR-0042 says must stay fail-open (it is retryable; the next
-    attempt might just work). fix pass 4, fail-loud finding 1's third case:
-    proves the inner catch must stay narrow (`ObsIdentifyError`,
-    `ObsResourceNotFoundError`) and not widen to `ObsProtocolError`.
+    attempt might just work). Proves the inner catch must stay narrow
+    (`ObsIdentifyError`, `ObsResourceNotFoundError`) and not widen to
+    `ObsProtocolError`.
     """
 
     def __init__(self, _ws):
@@ -142,9 +142,8 @@ class RetryableIdentifyTimeoutClient:
 
 class AlwaysFailingSetClient:
     """identify/GetInputSettings は毎回成功するが、SetInputSettings は毎回
-    失敗する -- typo ではなく持続的な OBS 側の拒否を模す。fix pass 1,
-    finding 2 (Important, measured) の再現専用: 「識別できた直後に毎回
-    壊れる」失敗が、backoff/warn-once を無効化しないことを確かめる。
+    失敗する -- typo ではなく持続的な OBS 側の拒否を模す。「識別できた直後に
+    毎回壊れる」失敗が、backoff/warn-once を無効化しないことを確かめる。
     """
 
     def __init__(self, _ws):
@@ -165,7 +164,7 @@ def make_tick_hoist_client(pushed: list[tuple[int, str, str]], crash_text: str):
     """セッションごとに `pushed` へ (session_index, source, text) を記録する
     `ObsWsClient` 代替のファクトリ。セッション 0 で `crash_text` そのものを
     push しようとした瞬間に切断を起こす -- 「字幕が表示された直後に OBS が
-    落ちた」を模す。fix pass 1, finding 3 (Important, measured) 専用。
+    落ちた」を模す。
     """
     session_counter = {"n": -1}
 
@@ -199,10 +198,9 @@ def make_mid_session_disconnect_client(after_n_text_pushes: int):
     the Nth `SetInputSettings` text push -- simulating OBS closing the
     connection *partway through a live session* (e.g. the user restarts OBS
     while streaming), not at connect/identify time like every other
-    disconnect fake in this file. fix pass 4, fail-open finding 2 (Critical):
-    every existing fail-open test reaches the outer catch via
-    `ObsRequestError` only, so dropping `WebSocketException` from
-    `subtitle_obs_worker`'s outer catch previously stayed green.
+    disconnect fake in this file. Every other fail-open test reaches the
+    outer catch via `ObsRequestError` only, so dropping `WebSocketException`
+    from `subtitle_obs_worker`'s outer catch would stay green without this.
     """
     counter = {"n": 0}
 
@@ -222,7 +220,7 @@ def make_mid_session_disconnect_client(after_n_text_pushes: int):
 
 def make_recording_client(pushed: list[tuple[str, str]]):
     """`pushed` へ (source, text) を記録するだけの `ObsWsClient` 代替。切断も
-    クラッシュもしない -- fix pass 2, finding 4 (pause gate) 専用。
+    クラッシュもしない -- pause gate のテスト専用。
     """
 
     class Client(SucceedingClient):
@@ -240,8 +238,8 @@ def make_recording_client(pushed: list[tuple[str, str]]):
 def make_session_health_client(clock: FakeClock):
     """セッション 0 は接続直後 (elapsed=0) に即死する。セッション 1 は、死ぬ
     直前に clock を `SESSION_HEALTHY_SEC` 超まで進めてから同じように死ぬ --
-    「健全に生き延びてから落ちた」を実時間を待たずに表現する。fix pass 2,
-    finding 1 (Blocker, 未カバーだったリセット枝) 専用。
+    「健全に生き延びてから落ちた」を実時間を待たずに表現する。backoff の
+    リセット枝を狙って踏むためのテスト専用。
     """
     session_counter = {"n": -1}
 
@@ -276,9 +274,8 @@ def make_style_recording_client(pushed: list[tuple[str, dict]]):
     """Records every `SetInputSettings` call as `(inputName, inputSettings)`
     into `pushed` -- unlike `make_recording_client`, this keeps the *whole*
     settings dict (not just `text`), so a test can inspect style fields like
-    `color`. No crash/disconnect. fix pass 4, finding 4 (reload-rebind)
-    only -- needs to see the pushed colour, not just whether the worker
-    crashed.
+    `color`. No crash/disconnect. For reload-rebind tests that
+    need to see the pushed colour, not just whether the worker crashed.
     """
 
     class Client(SucceedingClient):
@@ -300,10 +297,10 @@ def make_ingest_before_aging_push_crash_client(pushed: list[tuple[int, str, str]
     raises the instant it sees its 3rd text push to `vspeech-text`
     (`"n"`'s source) -- the 1st is the initial connect's empty push, the 2nd
     is an earlier message being ingested and pushed, and the 3rd is the
-    *aging* push that clears that earlier message once it expires. fix pass
-    5, item 1: pins `_run_session`'s ingest-before-either-push order by
-    making the aging push (not the ingest push) the one that fails, on a
-    turn where a message and an expiry land together.
+    *aging* push that clears that earlier message once it expires. Pins
+    `_run_session`'s ingest-before-either-push order by making the aging
+    push (not the ingest push) the one that fails, on a turn where a
+    message and an expiry land together.
     """
     session_counter = {"n": -1}
 
@@ -342,11 +339,11 @@ def make_style_recording_crash_on_text_client(
     """Records every `SetInputSettings` call (style *and* text alike) as
     `(session_index, inputName, inputSettings)` -- unlike
     `make_style_recording_client`, which doesn't tag a session index because
-    fix pass 4's reload-rebind test only ever needed one session. Session 0
+    its reload-rebind test only ever needed one session. Session 0
     raises the instant `crash_text` is pushed as a *text* push
-    (`"text" in settings`), forcing a reconnect -- fix pass 5, item 3 needs
-    to see the *style* dict a fresh session pushes at connect time, before
-    any reload-triggered self-heal has a chance to run.
+    (`"text" in settings`), forcing a reconnect -- lets a test see the
+    *style* dict a fresh session pushes at connect time, before any
+    reload-triggered self-heal has a chance to run.
     """
     session_counter = {"n": -1}
 
@@ -434,8 +431,7 @@ def make_fake_connect():
 class _RefusingConnection:
     """`async with` entry that raises a given exception immediately, instead
     of returning a connection -- simulates OBS being unreachable at all
-    (e.g. not running, wrong host) without touching the network. fix pass 4,
-    fail-open finding 2.
+    (e.g. not running, wrong host) without touching the network.
     """
 
     def __init__(self, exc: BaseException):
@@ -461,7 +457,7 @@ class _AuthRejectingWs:
     """A `websockets` connection object whose `recv()` raises
     `ConnectionClosedError` with a 4009 close -- the real obs-websocket
     protocol shape for an auth rejection (measured on OBS 32.1.2 /
-    obs-websocket 5.7.3, ADR-0042 fix pass 7: obs-websocket does not reply
+    obs-websocket 5.7.3; ADR-0042: obs-websocket does not reply
     with an error message on auth rejection, it closes the socket). `send()`
     is a no-op because the real server never gets to answer Identify --
     Hello's own `recv()` is where the close already happens.
@@ -492,9 +488,9 @@ def make_auth_rejecting_connect():
     every other fake `ObsWsClient`/`connect` combination in this file, a
     test using this does NOT also monkeypatch `ObsWsClient` -- it drives
     the *real* `ObsWsClient.identify()`, so the close-code-to-
-    `ObsIdentifyError` conversion `identify()` is responsible for (ADR-0042
-    fix pass 7) is exercised end to end together with the worker's
-    unchanged inner fail-loud catch, not assumed.
+    `ObsIdentifyError` conversion `identify()` is responsible for (ADR-0042)
+    is exercised end to end together with the worker's unchanged inner
+    fail-loud catch, not assumed.
     """
 
     def fake_connect(url: str):
@@ -601,21 +597,10 @@ async def test_push_text_sends_empty_string_when_the_panel_drained():
 
 
 async def test_push_text_sets_overlay_true_on_its_own_call():
-    # fix pass 4, finding 6 (Minor): renamed from
-    # `test_push_text_uses_overlay_so_it_does_not_clobber_style`. That name
-    # and its `all(... for t, d in client.calls if t == "SetInputSettings")`
-    # assertion *read* as covering "does not clobber style" -- i.e. every
-    # `SetInputSettings` call this worker can make -- but this test only
-    # ever calls `push_text`, so `client.calls` holds exactly one
-    # `SetInputSettings` and `all()` ranges over a single element. Proven:
-    # mutating `_push_panel_style` (the *style*-push function, a different
-    # code path entirely) from `overlay: True` to `overlay: False` left this
-    # test green. Narrowed the name and assertion to what this test actually
-    # exercises (`push_text`'s own `overlay` flag, asserted directly rather
-    # than via a misleadingly-broad `all()`);
+    # Pins `push_text`'s own `overlay` flag directly -- `client.calls` here
+    # holds exactly one `SetInputSettings` call (from `push_text`).
     # `test_push_panel_style_sets_overlay_true_so_it_does_not_clobber_other_settings`
-    # below covers the style-push path this test's old name implied but
-    # never touched.
+    # below covers the separate style-push path.
     config = make_config()
     panels = make_panels(config.subtitle)
     client = FakeObsClient()
@@ -626,16 +611,13 @@ async def test_push_text_sets_overlay_true_on_its_own_call():
 
 
 async def test_push_panel_style_sets_overlay_true_so_it_does_not_clobber_other_settings():
-    # fix pass 4, finding 6 (Minor), the other half: the mutation
-    # `_push_panel_style: overlay True -> False` survived every pre-existing
-    # test because none of them call `_push_panel_style` and check its
-    # `overlay` field -- `test_push_panel_style_sends_a_single_panels_config_values`
-    # below checks colour/valign/font fields but not `overlay`. This drives
-    # `_push_panel_style` (the style-push path) directly and pins its
+    # Drives `_push_panel_style` (the style-push path) directly and pins its
     # `overlay` flag, same reasoning as `push_text`'s: OBS's `SetInputSettings`
     # replaces the *whole* input's settings unless `overlay: True` asks it to
     # merge, so a style push without it would clobber whatever `push_text`
     # (or a human, via the OBS UI) had already set.
+    # `test_push_panel_style_sends_a_single_panels_config_values` below checks
+    # colour/valign/font fields but not `overlay`.
     config = make_config()
     panels = make_panels(config.subtitle)
     client = FakeObsClient()
@@ -646,15 +628,8 @@ async def test_push_panel_style_sets_overlay_true_so_it_does_not_clobber_other_s
 
 
 async def test_push_panel_style_sends_a_single_panels_config_values():
-    # fix pass 3, finding 2 (Minor): this test used to call the unguarded
-    # public wrapper `push_styles`, which had no caller left in `vspeech/` --
-    # `_push_styles_or_warn` loops `_push_panel_style` itself (fix pass 2,
-    # finding 5), so `push_styles` was dead code kept alive only by this
-    # test, sitting on the obvious public name for a future caller to
-    # reintroduce the exact bare-`ValueError`-escape Critical this worker
-    # spent two passes closing. Deleted `push_styles`; this test now pins the
-    # same per-panel field mapping directly against `_push_panel_style`, the
-    # guarded path's actual building block. Iterating over *both* panels in
+    # Pins the per-panel field mapping directly against `_push_panel_style`,
+    # the guarded path's building block. Iterating over *both* panels in
     # one pass (and surviving a bad first panel) is covered separately by
     # `test_a_bad_first_panel_color_does_not_block_the_second_panels_good_style`
     # (via `_push_styles_or_warn`, the only remaining caller).
@@ -678,20 +653,16 @@ async def test_push_panel_style_sends_a_single_panels_config_values():
     assert translated_settings["valign"] == "top"
 
 
-# --- fix pass 1: the 8 tests above only ever exercise pure helpers through
-# FakeObsClient. Nothing below this line existed before fix pass 1 -- these
-# are the first tests to drive _run_session / subtitle_obs_worker / backoff /
-# warn-once / reload. (This comment originally also claimed "the pause gate"
-# as covered here -- it wasn't; none of fix pass 1's tests touch
-# context.running. Fixed in fix pass 2, finding 4: see
-# test_pause_gate_holds_a_queued_message_until_context_running_is_set below,
-# which is the actual pause-gate coverage.)
+# --- The tests below drive _run_session / subtitle_obs_worker end to end
+# (backoff, warn-once, reload, the pause gate) rather than exercising pure
+# helpers through FakeObsClient alone. The actual pause-gate coverage is
+# test_pause_gate_holds_a_queued_message_until_context_running_is_set below.
 
 
 async def test_push_styles_or_warn_swallows_a_tk_only_color_and_warns(monkeypatch):
-    # fix pass 1, finding 1 (Critical): direct, fast proof of the shared fix
-    # both trigger sites (connect-time push_styles and the reload path)
-    # delegate to. A Tk-valid colour name must not raise past this function.
+    # Direct, fast proof of the shared function both trigger sites
+    # (connect-time push_styles and the reload path) delegate to. A
+    # Tk-valid colour name must not raise past this function.
     fake_logger = RecordingLogger()
     monkeypatch.setattr(subtitle_obs_mod, "logger", fake_logger)
     config = make_config()
@@ -716,12 +687,12 @@ async def test_push_styles_or_warn_swallows_a_tk_only_color_and_warns(monkeypatc
 async def test_a_bad_first_panel_color_does_not_block_the_second_panels_good_style(
     monkeypatch,
 ):
-    # fix pass 2, finding 5 (Minor): before this fix, `_push_styles_or_warn`
-    # wrapped the *whole* `push_styles` panel loop in one try/except, so a
-    # bad "n" (text) colour -- the panel iterated *first* -- aborted the loop
-    # before the "s" (translated) panel, even though its colour was fine.
-    # Each panel is now guarded independently: breaking the first panel must
-    # not stop the second, still-valid panel from getting its update.
+    # `_push_styles_or_warn` used to wrap the *whole* panel loop in one
+    # try/except, so a bad "n" (text) colour -- the panel iterated *first* --
+    # aborted the loop before the "s" (translated) panel, even though its
+    # colour was fine. Each panel is now guarded independently: breaking the
+    # first panel must not stop the second, still-valid panel from getting
+    # its update.
     fake_logger = RecordingLogger()
     monkeypatch.setattr(subtitle_obs_mod, "logger", fake_logger)
     config = make_config()
@@ -742,12 +713,11 @@ async def test_a_bad_first_panel_color_does_not_block_the_second_panels_good_sty
 async def test_subtitle_obs_worker_does_not_let_a_bad_color_escape_at_first_connect(
     monkeypatch,
 ):
-    # fix pass 1, finding 1 (Critical), the *other* trigger site named in the
-    # review: push_styles at the very first connect (subtitle_obs.py:217
-    # pre-fix), reached whenever a reload changed the colour while OBS was
-    # still down and it then comes up -- preflight never re-runs, so this is
-    # the only remaining guard. A bare ValueError here used to take the
-    # whole TaskGroup (and the live voice pipeline) down with it.
+    # The other trigger site for a bad colour: push_styles at the very
+    # first connect, reached whenever a reload changed the colour while OBS
+    # was still down and it then comes up -- preflight never re-runs, so
+    # this is the only remaining guard. A bare ValueError here used to take
+    # the whole TaskGroup (and the live voice pipeline) down with it.
     fake_logger = RecordingLogger()
     monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
     monkeypatch.setattr(subtitle_obs_mod, "ObsWsClient", SucceedingClient)
@@ -780,10 +750,9 @@ async def test_subtitle_obs_worker_does_not_let_a_bad_color_escape_at_first_conn
 async def test_reload_with_a_tk_only_color_warns_and_keeps_the_session_running(
     monkeypatch,
 ):
-    # fix pass 1, finding 1 (Critical): the reload trigger site
-    # (subtitle_obs.py:173 pre-fix). A config edit that lands on a *live*
-    # session must degrade (warn + keep the previous style + keep running),
-    # not kill vc/playback along with it.
+    # The reload trigger site for a bad colour. A config edit that lands
+    # on a *live* session must degrade (warn + keep the previous style +
+    # keep running), not kill vc/playback along with it.
     fake_logger = RecordingLogger()
     monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
     monkeypatch.setattr(subtitle_obs_mod, "ObsWsClient", SucceedingClient)
@@ -822,7 +791,7 @@ async def test_reload_with_a_tk_only_color_warns_and_keeps_the_session_running(
 async def test_backoff_and_warn_once_survive_a_recurring_post_identify_failure(
     monkeypatch,
 ):
-    # fix pass 1, finding 2 (Important, measured). The old code reset
+    # The old code reset
     # backoff/warned as soon as identify+validate_sources succeeded, so a
     # failure that recurs *after* that point (SetInputSettings rejected
     # every single session) never actually backed off, and warned on every
@@ -856,7 +825,7 @@ async def test_backoff_and_warn_once_survive_a_recurring_post_identify_failure(
 async def test_display_clock_advances_across_an_outage_so_stale_text_is_not_re_pushed(
     monkeypatch,
 ):
-    # fix pass 1, finding 3 (Important, measured). `last_tick` used to be a
+    # `last_tick` used to be a
     # `_run_session` local, re-initialised on every reconnect, so the
     # elapsed outage time never reached `age_panels` and a minute-old
     # subtitle got re-pushed verbatim on recovery. Measured pre-fix with a
@@ -904,19 +873,12 @@ async def test_display_clock_advances_across_an_outage_so_stale_text_is_not_re_p
         await task
 
 
-# --- fix pass 2: the review that closed fix pass 1 found the tests above
-# genuinely proved their three findings, but flagged one blocker (the
-# SESSION_HEALTHY_SEC reset branch had zero coverage) and four minors. The
-# tests below are fix pass 2's additions.
-
-
 async def test_a_healthy_session_dying_resets_backoff_and_warns_again(monkeypatch):
-    # fix pass 2, finding 1 (Blocker, measured): the >= SESSION_HEALTHY_SEC
-    # reset branch (subtitle_obs.py ~364-369) had zero coverage -- both fix
-    # pass 1 failure tests above kill the session at ~0 elapsed, so that arm
-    # never ran. A re-review forced the condition permanently false and
-    # 475/475 still passed. Session 0 here dies instantly (elapsed=0, same
-    # shape as the crash-loop test above, so it must NOT reset). Session 1 is
+    # The >= SESSION_HEALTHY_SEC
+    # reset branch had zero coverage -- both prior failure tests above kill
+    # the session at ~0 elapsed, so that arm never ran. Session 0 here dies
+    # instantly (elapsed=0, same shape as the crash-loop test above, so it
+    # must NOT reset). Session 1 is
     # made to look like it lived past SESSION_HEALTHY_SEC before dying --
     # the fake client advances the fake clock immediately before raising, no
     # real sleep -- which must reset backoff/warned, so the second outage
@@ -964,7 +926,7 @@ async def test_a_healthy_session_dying_resets_backoff_and_warns_again(monkeypatc
 async def test_push_styles_or_warn_only_warns_once_for_a_persisting_bad_value(
     monkeypatch,
 ):
-    # fix pass 2, finding 3 (Minor, measured): a bad colour plus a flapping
+    # A bad colour plus a flapping
     # OBS used to log this warning on every single reconnect (measured: 20
     # attempts -> 20 style warnings, against 1 correctly-gated "cannot reach"
     # warning) even though the colour never changed. `style_warned` gates it
@@ -987,7 +949,7 @@ async def test_push_styles_or_warn_only_warns_once_for_a_persisting_bad_value(
     assert len(style_warnings) == 1
 
     # fixed, then broken again with a *different* value -- must warn again,
-    # not stay silenced forever (finding 3's explicit second requirement).
+    # not stay silenced forever.
     config.subtitle.text.font_color = "#ff8000"
     await subtitle_obs_mod._push_styles_or_warn(
         client, config.subtitle, panels, style_warned
@@ -1004,9 +966,7 @@ async def test_push_styles_or_warn_only_warns_once_for_a_persisting_bad_value(
 async def test_pause_gate_holds_a_queued_message_until_context_running_is_set(
     monkeypatch,
 ):
-    # fix pass 2, finding 4 (Minor): the "fix pass 1" section comment above
-    # claimed these tests covered "the pause gate" -- none of them touch
-    # context.running. This drives it directly. A message already in flight
+    # Drives the pause gate directly. A message already in flight
     # when the gate closes still reaches OBS (_run_session checks
     # context.running *after* processing a message, not before -- see
     # subtitle_obs.py's `if not context.running.is_set(): await
@@ -1052,30 +1012,22 @@ async def test_pause_gate_holds_a_queued_message_until_context_running_is_set(
         await task
 
 
-# --- fix pass 3: a review that closed fix pass 2 confirmed all prior
-# findings genuinely fixed and flagged two last items: one Important
-# (below), one Minor (the push_styles deletion above -- retargeted, not
-# added, so it has no new test of its own).
-
-
 async def test_style_warn_once_persists_across_reconnects_not_just_within_a_session(
     monkeypatch,
 ):
-    # fix pass 3, finding 1 (Important, measured). `style_warned` is created
+    # `style_warned` is created
     # once in `subtitle_obs_worker`, *above* the `while True:` reconnect
     # loop, and threaded into every session -- `_push_styles_or_warn`'s own
-    # docstring says that placement is *why* a flapping OBS doesn't
-    # reproduce fix pass 2's finding 3 (20 reconnects -> 20 style warnings).
-    # But nothing actually drove a reconnect loop with a persistently bad
-    # colour through `subtitle_obs_worker` before this test:
-    # `test_push_styles_or_warn_only_warns_once_for_a_persisting_bad_value`
+    # docstring says that placement is *why* a flapping OBS doesn't warn on
+    # every single reconnect. But nothing actually drove a reconnect loop
+    # with a persistently bad colour through `subtitle_obs_worker` before
+    # this test: `test_push_styles_or_warn_only_warns_once_for_a_persisting_bad_value`
     # only proves the *mechanism* by calling `_push_styles_or_warn` directly
     # with a hand-shared dict -- it never touches the worker's own wiring, so
     # it would still pass even if `subtitle_obs_worker` created a fresh dict
     # per session. This test drives the real reconnect loop instead.
     #
-    # Reuses `AlwaysFailingSetClient` (originally built for fix pass 1,
-    # finding 2's backoff-reset repro) for a second purpose here: every
+    # Reuses `AlwaysFailingSetClient` for a second purpose here: every
     # `SetInputSettings` it receives fails, which -- once the "n" panel's bad
     # colour has already been handled locally by `build_text_settings`
     # raising before any request is sent -- makes the *next* panel's
@@ -1083,12 +1035,10 @@ async def test_style_warn_once_persists_across_reconnects_not_just_within_a_sess
     # That gives a clean "one style warn-once decision per session, followed
     # by a forced disconnect" shape without a bespoke fake.
     #
-    # Measured with `style_warned` moved inside the loop (this test's own
-    # mutation-proof, see the task report): 6 reconnects -> 6 "invalid
-    # style" warnings, reproducing finding 3's exact original signature,
-    # while the adjacent "cannot reach" warn-once correctly stays at 1
-    # either way (sessions here die near-instantly, so they never cross
-    # SESSION_HEALTHY_SEC and reset it).
+    # Measured with `style_warned` moved inside the loop: 6 reconnects -> 6
+    # "invalid style" warnings, while the adjacent "cannot reach" warn-once
+    # correctly stays at 1 either way (sessions here die near-instantly, so
+    # they never cross SESSION_HEALTHY_SEC and reset it).
     sleeps: list[float] = []
 
     async def fake_sleep(sec: float) -> None:
@@ -1120,23 +1070,16 @@ async def test_style_warn_once_persists_across_reconnects_not_just_within_a_sess
     assert len(reach_warnings) == 1
 
 
-# --- fix pass 4: a coverage audit (not a code review) ran 49 mutations
-# against this file and found the worker's own logic already correct -- 10
-# of 49 survived while all 18 pre-fix-pass-4 tests stayed green. Verdict:
-# the suite pinned the *mechanisms* the three prior fix passes added (the
-# DEGRADE colour path, the backoff/warn-once reset, the aging clock's
-# cross-reconnect lifetime) and left the *file's reason for existing*
-# unpinned -- ADR-0042's fail-loud/fail-open tiers (docs/adr/0042-subtitle-
-# obs-failure-tiers.md), the aging/expiry loop, and the reload-rebind
-# semantics real reloads actually use. See task-7-report.md's "Fix pass 4"
-# section for the mutation -> test table and RED/GREEN proof for each test
-# below.
+# --- The tests below cover ADR-0042's fail-loud/fail-open tiers
+# (docs/adr/0042-subtitle-obs-failure-tiers.md), the aging/expiry loop, and
+# the reload-rebind semantics real reloads actually use -- the file's
+# reason for existing, as distinct from the DEGRADE colour path, the
+# backoff/warn-once reset, and the aging clock's cross-reconnect lifetime
+# already pinned above.
 
 
 async def test_an_auth_rejection_becomes_a_worker_startup_error(monkeypatch):
-    # ADR-0042 fail-loud, finding 1 (Critical): WorkerStartupError and
-    # ObsIdentifyError appear nowhere in this test file before fix pass 4 --
-    # every fake's identify() returns None. Dropping ObsIdentifyError from
+    # ADR-0042 fail-loud: dropping ObsIdentifyError from
     # subtitle_obs_worker's inner `except (ObsIdentifyError,
     # ObsResourceNotFoundError)` lets a password typo fall through to the
     # outer fail-open catch (ObsIdentifyError IS an ObsProtocolError) and
@@ -1164,7 +1107,7 @@ async def test_an_auth_rejection_becomes_a_worker_startup_error(monkeypatch):
 
 
 async def test_a_missing_source_becomes_a_worker_startup_error(monkeypatch):
-    # ADR-0042 fail-loud, finding 1 (Critical), the other half:
+    # ADR-0042 fail-loud, the other half:
     # ObsResourceNotFoundError from validate_sources must also become
     # WorkerStartupError. Also kills "delete validate_sources entirely":
     # without the upfront check, the missing source's ObsResourceNotFoundError
@@ -1195,16 +1138,15 @@ async def test_a_missing_source_becomes_a_worker_startup_error(monkeypatch):
 
 
 async def test_a_retryable_identify_timeout_is_fail_open_not_fatal(monkeypatch):
-    # ADR-0042 fail-loud, finding 1's third case (Critical): a bare
+    # ADR-0042 fail-loud, the third case: a bare
     # ObsProtocolError from identify() (e.g. a response timeout) must stay
-    # fail-open -- it is exactly the case the module docstring (L18-21)
-    # names as the reason worker_startup's blanket `except Exception` isn't
-    # used here. Widening subtitle_obs_worker's inner catch from
-    # `(ObsIdentifyError, ObsResourceNotFoundError)` to `ObsProtocolError`
-    # would make this fatal instead -- this is the test that kills that
-    # specific mutation (the two tests above don't: they'd stay green even
-    # if the inner catch were widened, since ObsIdentifyError/
-    # ObsResourceNotFoundError are still caught either way).
+    # fail-open -- it is exactly the case the module docstring names as the
+    # reason worker_startup's blanket `except Exception` isn't used here.
+    # Widening subtitle_obs_worker's inner catch from `(ObsIdentifyError,
+    # ObsResourceNotFoundError)` to `ObsProtocolError` would make this fatal
+    # instead -- the two tests above don't catch that: they'd stay green
+    # even if the inner catch were widened, since ObsIdentifyError/
+    # ObsResourceNotFoundError are still caught either way.
     sleeps: list[float] = []
 
     async def fake_sleep(sec: float) -> None:
@@ -1231,10 +1173,10 @@ async def test_a_retryable_identify_timeout_is_fail_open_not_fatal(monkeypatch):
 
 
 async def test_a_refused_connection_is_fail_open_not_fatal(monkeypatch):
-    # ADR-0042 fail-open, finding 2 (Critical): "OBS is not running" is the
-    # ADR's headline scenario, but every pre-fix-pass-4 test reaches
-    # fail-open through ObsRequestError only -- none ever makes connect()
-    # itself fail. Dropping OSError from subtitle_obs_worker's outer catch
+    # ADR-0042 fail-open: "OBS is not running" is the
+    # ADR's headline scenario, but every test above reaches fail-open
+    # through ObsRequestError only -- none ever makes connect() itself
+    # fail. Dropping OSError from subtitle_obs_worker's outer catch
     # would let a refused connection escape unguarded and kill the
     # TaskGroup.
     sleeps: list[float] = []
@@ -1269,13 +1211,13 @@ async def test_a_refused_connection_is_fail_open_not_fatal(monkeypatch):
 
 
 async def test_a_mid_session_disconnect_is_fail_open_not_fatal(monkeypatch):
-    # ADR-0042 fail-open, finding 2 (Critical): every pre-fix-pass-4 test
+    # ADR-0042 fail-open: every test above
     # that reaches fail-open does so at connect/identify time. Dropping
     # WebSocketException from subtitle_obs_worker's outer catch would let a
     # *mid-session* ConnectionClosedError (OBS restarting while the pipeline
     # is live) escape the worker and kill the whole TaskGroup -- taking the
-    # live voice pipeline down with it, the exact Critical this file exists
-    # to prevent (module docstring L7-9).
+    # live voice pipeline down with it, exactly what this file exists to
+    # prevent (see the module docstring).
     fake_logger = RecordingLogger()
     monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
     monkeypatch.setattr(
@@ -1312,14 +1254,15 @@ async def test_a_mid_session_disconnect_is_fail_open_not_fatal(monkeypatch):
 async def test_a_displayed_subtitle_is_cleared_from_obs_once_its_display_time_expires(
     monkeypatch,
 ):
-    # ADR-0042, finding 3 (Critical): no pre-fix-pass-4 test ever shows a
+    # No test above ever shows a
     # subtitle appearing and then disappearing -- every fake's clock only
     # ever advances inside fake_sleep (the reconnect backoff), so
     # within-session elapsed time was always 0 and _run_session's aging push
     # (subtitle_obs.py's `for ts in age_panels(...): await push_text(...)`)
-    # never actually ran against a real expiry in any prior test. Kills both
-    # "remove the aging push" and "timeout = next_expiry_sec(...) -> None":
-    # either leaves the expired subtitle on screen in OBS forever.
+    # never actually ran against a real expiry in any prior test. This test
+    # would fail if either the aging push were removed, or
+    # `timeout = next_expiry_sec(...)` were replaced with `None`: either
+    # leaves the expired subtitle on screen in OBS forever.
     clock = FakeClock(0.0)
     pushed: list[tuple[str, str]] = []
     monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
@@ -1367,9 +1310,9 @@ async def test_a_displayed_subtitle_is_cleared_from_obs_once_its_display_time_ex
 async def test_two_messages_within_min_display_sec_coexist_instead_of_the_second_wiping_the_first(
     monkeypatch,
 ):
-    # ADR-0042, finding 3 (Critical): `drop last_tick[0] = now`
-    # (subtitle_obs.py's _run_session, right after the aging push) stays
-    # green across every pre-fix-pass-4 test. Its real effect: last_tick[0]
+    # `last_tick[0] = now`
+    # (subtitle_obs.py's _run_session, right after the aging push) is
+    # load-bearing but easy to mistake for redundant. Its real effect: last_tick[0]
     # freezes at its value from connect time, so every later iteration's
     # elapsed-time computation (now - last_tick[0]) grows across the *whole*
     # session instead of since the previous iteration -- once a session has
@@ -1430,10 +1373,10 @@ async def test_two_messages_within_min_display_sec_coexist_instead_of_the_second
 async def test_reload_rebinds_context_config_so_the_worker_actually_picks_up_the_new_value(
     monkeypatch,
 ):
-    # ADR-0042, finding 4: a real reload (process_command, lib/command.py's
+    # A real reload (process_command, lib/command.py's
     # `context.config = new_config`) *rebinds* context.config to a brand-new
     # Config instance -- it does not mutate the old one in place. The
-    # pre-fix-pass-4 reload test
+    # earlier reload test
     # (test_reload_with_a_tk_only_color_warns_and_keeps_the_session_running)
     # instead mutates context.config.subtitle.text.font_color directly on
     # the *same* object make_panels already built panels["n"].config from,
@@ -1494,19 +1437,17 @@ async def test_reload_rebinds_context_config_so_the_worker_actually_picks_up_the
         await task
 
 
-# --- fix pass 5: an audit of the fix pass 4 reorder (moving ingest_text
-# ahead of both pushes in _run_session) found the reorder itself
-# mutation-invisible -- reverting it, in full or in part, left 27/27 green,
-# because neither aging test ever has a message and an expiry land in the
-# *same* turn. It also found two pre-existing survivors outside that diff:
-# _apply_reload's own _push_all_text call, and the connect-time
-# _refresh_panel_configs call. See task-7-report.md's "Fix pass 5" section
-# for the RED/GREEN proof of the reorder test below and the experiments
-# behind the other two.
+# --- The tests below pin three load-bearing lines that read as possibly
+# redundant: `_run_session`'s ingest-before-either-push order (moving
+# ingest_text ahead of both pushes), `_apply_reload`'s own `_push_all_text`
+# call, and the connect-time `_refresh_panel_configs` call. Each only
+# matters in a narrow scenario (a message and an expiry landing in the same
+# turn; a reload with no message or expiry riding along; a config change
+# that lands before need_reload is ever set) that no earlier test exercises.
 
 
 async def test_ingest_survives_a_same_turn_aging_push_failure(monkeypatch):
-    # ADR-0042 / fix pass 4, finding 5 (audit, fix pass 5): a message and an
+    # A message and an
     # expiry landing in the *same* turn, where the *aging* push (not the
     # ingest push) is the one that fails. `_run_session` ingests -- a pure
     # state update that cannot raise -- before either push specifically so a
@@ -1523,7 +1464,7 @@ async def test_ingest_survives_a_same_turn_aging_push_failure(monkeypatch):
     # only the two *push* calls, leaving ingest_text's position alone, is an
     # equivalent mutant -- by the time either push runs, ingest_text has
     # already applied either way, so the message survives regardless of push
-    # order; not tested here, per the brief.)
+    # order; not covered here.)
     #
     # "OLDTEXT" (panel "n") is made to expire in the same turn "NEWTEXT"
     # (panel "s") is ingested, by using the `context.running` gate as a real
@@ -1596,19 +1537,19 @@ async def test_ingest_survives_a_same_turn_aging_push_failure(monkeypatch):
 async def test_apply_reload_re_pushes_current_text_so_a_delimiter_change_does_not_stay_stale(
     monkeypatch,
 ):
-    # ADR-0042 / fix pass 5, item 2 (C1, audit): does `_apply_reload`'s own
+    # Does `_apply_reload`'s own
     # `_push_all_text` call matter, or does the next natural event always
-    # cover it? Experiment: a reload can change *how* an already-displayed,
+    # cover it? A reload can change *how* an already-displayed,
     # otherwise-unchanged panel renders (delimiter here; anchor is the other
     # case) without any message or expiry following it. Nothing else in the
     # loop re-renders a panel on its own -- only a new message or an expiry
     # does -- so without this call, OBS keeps showing the pre-reload
     # rendering until one of those happens, which could be a long time (or
     # never, for a panel that's gone quiet). Measured: dropping this one
-    # line leaves the pre-existing 27/27 green, because none of them check
+    # line leaves every test above green, because none of them check
     # the panel's *rendered* text immediately after a reload that changes
-    # delimiter/anchor with no message riding along. Conclusion: load-bearing
-    # -- pinned here, not deleted.
+    # delimiter/anchor with no message riding along. Load-bearing, not
+    # redundant.
     fake_logger = RecordingLogger()
     pushed: list[tuple[str, dict]] = []
     monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
@@ -1679,11 +1620,11 @@ async def test_apply_reload_re_pushes_current_text_so_a_delimiter_change_does_no
 async def test_connect_time_refresh_repoints_panels_to_config_changed_while_connected_and_unflagged(
     monkeypatch,
 ):
-    # ADR-0042 / fix pass 5, item 3 (C2, audit): the earlier "redundant"
+    # The earlier "redundant"
     # reasoning was that _run_session's first turn always runs
     # _apply_reload and converges -- but _apply_reload only ever fires
     # `if context.need_reload`, and lib/command.py's reload handler
-    # (lines 60-74) resets and re-evaluates *each* worker's need_reload
+    # resets and re-evaluates *each* worker's need_reload
     # fresh on every single reload event, diffed only against whatever
     # context.config already is at that moment. So a *second* reload that
     # doesn't touch `subtitle` -- landing before this worker ever consumes
@@ -1759,19 +1700,16 @@ async def test_connect_time_refresh_repoints_panels_to_config_changed_while_conn
         await task
 
 
-# --- fix pass 6: a mutation-based coverage audit swept 24 mutations against
-# vspeech/worker/subtitle_obs.py -- 20 killed, 1 equivalent mutant (ignored),
-# 3 survivors. The production code was correct in all three cases; every one
-# is a *coverage* gap, and all three are the shape this worker keeps
-# producing: a load-bearing line that looks redundant. See task-7-report.md's
-# "Fix pass 6" section for the RED/GREEN proof of each test below.
+# --- The tests below pin three more load-bearing lines that look
+# redundant at a glance -- each was already correct in production; only
+# test coverage was missing.
 
 
 def make_slow_then_failing_identify_client(clock: FakeClock):
     """`identify()` advances `clock` by 6s (as if a slow round-trip actually
     took that long) and then always raises a *bare* `ObsProtocolError` --
     retryable, not the `ObsIdentifyError`/`ObsResourceNotFoundError` pair
-    ADR-0042 fails loud on. fix pass 6, survivor 1: needs identify's own
+    ADR-0042 fails loud on. Needs identify's own
     elapsed time to be visible to `subtitle_obs_worker`'s `session_started`
     measurement, to distinguish where that assignment is placed (after
     identify succeeds, the production placement, vs. hoisted above it).
@@ -1796,19 +1734,19 @@ def make_slow_then_failing_identify_client(clock: FakeClock):
 async def test_session_started_is_measured_after_identify_succeeds_not_before(
     monkeypatch,
 ):
-    # fix pass 6 (mutation audit), survivor 1 (Highest value): `session_started
+    # `session_started
     # = monotonic()` sits *after* `identify()`/`validate_sources()` succeed.
-    # Hoisting it above the identify call leaves all 30 pre-fix-pass-6 tests
-    # green -- both existing backoff tests
+    # Hoisting it above the identify call leaves every test above green --
+    # both existing backoff tests
     # (`test_backoff_and_warn_once_survive_a_recurring_post_identify_failure`,
     # `test_a_healthy_session_dying_resets_backoff_and_warns_again`) use a
     # *fast* identify (returns instantly), so the measured session duration
     # never includes identify time either way -- the hoist and the correct
     # placement are indistinguishable to them. But a slow-but-failing
     # identify would, if hoisted, look "healthy" (>= SESSION_HEALTHY_SEC) and
-    # reset backoff/warned on *every* retry -- exactly the log-spam-plus-
-    # handshake-churn fix pass 1 finding 2 already fixed once, reproduced one
-    # layer up (inside identify instead of inside SetInputSettings).
+    # reset backoff/warned on *every* retry -- the same log-spam-plus-
+    # handshake-churn shape already fixed once inside SetInputSettings,
+    # reproduced one layer up (inside identify).
     #
     # Measured: identify burns 6s (> SESSION_HEALTHY_SEC's 5s) then raises a
     # bare (retryable) ObsProtocolError, every single attempt.
@@ -1848,8 +1786,8 @@ async def test_session_started_is_measured_after_identify_succeeds_not_before(
 async def test_age_across_outage_updates_last_tick_so_the_outage_is_not_double_counted(
     monkeypatch,
 ):
-    # fix pass 6 (mutation audit), survivor 2: fix pass 4 already pinned
-    # `_run_session`'s identical `last_tick[0] = now` line (via
+    # `_run_session`'s identical `last_tick[0] = now` line is already pinned
+    # (via
     # `test_two_messages_within_min_display_sec_coexist_instead_of_the_second_wiping_the_first`)
     # -- `_age_across_outage`'s own copy, the one that runs once per
     # reconnect (right before the connect-time `_push_all_text`), was never
@@ -1937,7 +1875,7 @@ async def test_age_across_outage_updates_last_tick_so_the_outage_is_not_double_c
 
 
 async def test_refresh_panel_configs_repoints_anchor_not_just_config():
-    # fix pass 6 (mutation audit), survivor 3: the two `.anchor = ...`
+    # The two `.anchor = ...`
     # re-points in `_refresh_panel_configs` look redundant -- `ts.config
     # .anchor` is sitting right there, one line up. They are not: `Texts
     # .texts` (the join-order property `push_text` sends) reads `ts.anchor`,
@@ -1979,7 +1917,7 @@ async def test_refresh_panel_configs_repoints_anchor_not_just_config():
     assert panels["n"].texts == "AAA BBB"
 
 
-# --- fix pass 7 (hardware-found): measured against a real OBS 32.1.2 /
+# --- Measured against a real OBS 32.1.2 /
 # obs-websocket 5.7.3 with a wrong subtitle.obs.password. obs-websocket
 # does not reply to a rejected handshake with an error message -- it closes
 # the WebSocket with code 4009. `identify()`'s own `_recv()` raised the
@@ -2013,7 +1951,7 @@ async def test_a_real_obs_auth_rejection_close_becomes_a_worker_startup_error(
     # unpatched, the pre-fix bug this test targets makes the worker retry
     # with a real asyncio.sleep() backoff forever (measured on real
     # hardware as `timeout 124` -- the process staying alive, retrying) --
-    # exactly the defect this fix pass exists to kill. Without this patch,
+    # exactly the defect this test exists to catch. Without this patch,
     # a RED run of this test against the unfixed identify() hangs for real
     # wall-clock time instead of failing fast.
     sleeps: list[float] = []

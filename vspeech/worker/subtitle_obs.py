@@ -12,7 +12,7 @@ input の設定値だけを更新する (ADR-0041)。
     直前のスタイルを維持して継続)。起動時点の値は preflight (層A,
     `preflight._check_subtitle`) が fail-loud に弾くが、reload はそこを
     通らないので、reload 後 (または reload 直後の再接続) にだけ壊れた値が
-    残る余地があり、ここで拾う (fix pass 1, finding 1)。
+    残る余地があり、ここで拾う。
 繋がるまでは両者を区別できないので、繋がるまで待つ。
 
 ADR-0038 の層B は通常 exceptions.worker_startup を使うが、ここでは使わない:
@@ -51,8 +51,8 @@ from vspeech.shared_context import WorkerInput
 
 INITIAL_BACKOFF_SEC = 0.5
 MAX_BACKOFF_SEC = 5.0
-# セッションがこの秒数以上続けば「健全だった」とみなし backoff/warn を戻す
-# (fix pass 1, finding 2)。MAX_BACKOFF_SEC を流用する: どのみち次の再接続
+# セッションがこの秒数以上続けば「健全だった」とみなし backoff/warn を戻す。
+# MAX_BACKOFF_SEC を流用する: どのみち次の再接続
 # までは最大この秒数だけ待つ設計なので、それより長く生きたセッションは
 # 「即座に壊れて再接続ループしている」ものとは質的に別物と判断できる。
 SESSION_HEALTHY_SEC = MAX_BACKOFF_SEC
@@ -123,12 +123,9 @@ async def _push_panel_style(
     壊れた色設定 (Tk 専用色名など) は `build_text_settings` が `ValueError`
     を投げるので、直接呼ぶ側はそれを自分で処理する責任を負う。かつて存在した
     無防備な公開ラッパー `push_styles` (両パネルをまとめて呼ぶだけの薄い関数)
-    は、`_push_styles_or_warn` がこの関数自身をループするようになった時点で
-    `vspeech/` 側の呼び出し元を失っていたが、テストが直接呼んでいたせいで
-    死んでいることに気づかれなかった (fix pass 3, finding 2, Minor) --
-    誰かがこの分かりやすい公開名に手を伸ばして再導入すれば、この worker が
-    2 回のパスをかけて塞いだのと同じ「bare `ValueError` が `TaskGroup` ごと
-    音声パイプラインを道連れにする」Critical がそのまま戻る。削除した。
+    は削除した -- 誰かがこの分かりやすい公開名に手を伸ばして再導入すれば、
+    bare `ValueError` が `TaskGroup` ごと音声パイプラインを道連れにする
+    不具合がそのまま戻る。
     """
     await client.request(
         "SetInputSettings",
@@ -152,23 +149,23 @@ async def _push_styles_or_warn(
     preflight (層A) は起動時点の config しか見ないので、reload で入った壊れた
     `#rrggbb` (Tk 色名など) はそこで止められない -- 起点は色フィールドだけ
     TK/OBS 共有かつ preflight は起動時にしか走らないという ADR-0038/0042 の
-    隙間 (fix pass 1, finding 1 (Critical))。ここに来る `ValueError` は
+    隙間。ここに来る `ValueError` は
     `hex_color_to_obs_int` が返す「観測できて、かつ config を直せば直る」
     種類だけで、繋がっている音声パイプラインを落とす理由にはならない --
     DEGRADE (warn + 直前のスタイルを維持して継続)。ここに来る `ValueError` は
     OBS が拒否したのではなく、`hex_color_to_obs_int` がリクエスト送信前に
     ローカルで検出した壊れた入力値なので、OBS ではなく config の値を名指し
-    する (fix pass 2, finding 2)。
+    する。
 
-    パネルごとに個別の try/except でガードする (fix pass 2, finding 5):
+    パネルごとに個別の try/except でガードする:
     以前は `push_styles` をまとめて 1 つの try/except で囲っていたので、
     先に壊れたパネルより後のパネルは (値が有効でも) 一切 push されずに
     直前のスタイルのまま取り残されていた。パネルごとに独立させれば、
     どちらも「壊れていなければ最新の値を反映・壊れていれば直前の値を維持」
     をそれぞれ独立に満たせる。
 
-    `style_warned` はパネルキーごとの warn-once フラグ (fix pass 2,
-    finding 3): 同じ壊れた値が push に成功する (= config が直る) まで、
+    `style_warned` はパネルキーごとの warn-once フラグ: 同じ壊れた値が
+    push に成功する (= config が直る) まで、
     何度失敗しても 1 回しか警告しない。OBS が繋がっては切れてを繰り返す
     (フラップする) 間、再接続のたびに同じ壊れた値を送り直すと、直すまで
     毎回警告が出ていた (測定: 20 回の再接続で 20 回の警告、対して隣の
@@ -180,7 +177,7 @@ async def _push_styles_or_warn(
     同じ理由で ValueError を漏らしてはいけないので 1 箇所にまとめる。
     `style_warned` は `subtitle_obs_worker` が再接続をまたいで保持する 1 つの
     辞書を両方の呼び出し site に渡す -- セッションごとに作り直すと、
-    フラップのたびに warn-once がリセットされて finding 3 の再発になる。
+    フラップのたびに warn-once がリセットされてしまう。
     """
     for key, ts in panels.items():
         try:
@@ -234,7 +231,7 @@ async def _push_all_text(
 
 def _refresh_panel_configs(context: SharedContext, panels: dict[str, Texts]) -> None:
     panels["n"].config = context.config.subtitle.text
-    # Not redundant with the line above (fix pass 6, survivor 3, measured):
+    # Not redundant with the line above:
     # Texts.texts (the join order push_text sends) reads ts.anchor directly,
     # while build_text_settings (the style push) reads ts.config.anchor --
     # two different attributes that happen to start in sync. Re-pointing
@@ -254,7 +251,7 @@ async def _apply_reload(
 ) -> None:
     """reload で新しい config を取り込み、スタイルと現在テキストを再 push する。
 
-    色が壊れていても (fix pass 1, finding 1) `_push_styles_or_warn` が
+    色が壊れていても `_push_styles_or_warn` が
     ValueError を飲むので、ここは常に最後まで走り、テキストは必ず更新
     される。
     """
@@ -273,7 +270,7 @@ def _age_across_outage(
     `last_tick` は `subtitle_obs_worker` と `_run_session` が共有する 1 要素
     のリスト。単なるローカル変数だと再接続のたびに失われ、再接続に要した
     時間 (=OBS が落ちていた時間) がエイジングに反映されず、古い字幕が
-    そのまま復帰直後に再表示されてしまう (fix pass 1, finding 3)。
+    そのまま復帰直後に再表示されてしまう。
     `age_panels` は各パネルの `values[0]` しか老化させないが、直後の
     `_push_all_text` はパネル全部を無条件に再送するので、ここで
     `age_panels` の戻り値 (変化したパネルの一覧) を使う必要はない。
@@ -305,7 +302,7 @@ async def _run_session(
         except TimeoutError:
             pass
         now = monotonic()
-        # Ingest before either push (fix pass 4, finding 5): ingest_text is
+        # Ingest before either push: ingest_text is
         # a pure state update and cannot raise, unlike push_text below. The
         # old order (aging push, then ingest) meant a message already
         # dequeued could vanish without ever reaching OBS in any session and
@@ -339,15 +336,14 @@ async def subtitle_obs_worker(
     panels = make_panels(context.config.subtitle)
     backoff = INITIAL_BACKOFF_SEC
     warned = False
-    # セッション境界をまたいで表示時計を進め続ける (fix pass 1, finding 3)。
+    # セッション境界をまたいで表示時計を進め続ける。
     # subtitle_obs_worker と _run_session が同じ 1 要素リストを共有・変更
     # する — 詳細は _age_across_outage のドキュメント参照。
     last_tick: list[float] = [monotonic()]
-    # パネルキーごとの style warn-once フラグ (fix pass 2, finding 3)。
+    # パネルキーごとの style warn-once フラグ。
     # セッション (再接続) をまたいで同じ辞書を使い回す -- フラップのたびに
     # 作り直すと、同じ壊れた値でも再接続のたびにまた警告してしまう
-    # (mutation-proven: fix pass 3, finding 1 -- see
-    # test_style_warn_once_persists_across_reconnects_not_just_within_a_session
+    # (see test_style_warn_once_persists_across_reconnects_not_just_within_a_session
     # in tests/test_subtitle_obs.py, which goes RED if this dict is moved
     # inside the loop below).
     style_warned: dict[str, bool] = {}
@@ -356,8 +352,7 @@ async def subtitle_obs_worker(
             obs = context.config.subtitle.obs
             # そのセッションが「健全だった」と言える継続時間を測るための
             # 開始時刻。identify+ソース検証が終わるまでは None のままにし、
-            # 「即座に壊れて再接続ループしている」セッションと区別する
-            # (fix pass 1, finding 2)。
+            # 「即座に壊れて再接続ループしている」セッションと区別する。
             session_started: float | None = None
             try:
                 async with connect(obs.url) as ws:
@@ -391,7 +386,7 @@ async def subtitle_obs_worker(
                 # 戻さない -- SetInputSettings が毎回リクエスト直後に失敗する
                 # ような「繋がるが即座に壊れる」ケースが繰り返し起きると、
                 # 接続の瞬間にリセットしてしまい backoff が床に張り付いたまま
-                # 警告だけが毎回出る (fix pass 1, finding 2, 実測)。セッションが
+                # 警告だけが毎回出る。セッションが
                 # SESSION_HEALTHY_SEC 以上生きていた場合だけ「健全だった」と
                 # みなして戻す。
                 if (
