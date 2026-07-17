@@ -298,12 +298,29 @@ async def _run_session(
         except TimeoutError:
             pass
         now = monotonic()
-        for ts in age_panels(panels, now - last_tick[0]):
-            await push_text(client, context.config.subtitle.obs, panels, ts)
+        # Ingest before either push (fix pass 4, finding 5): ingest_text is
+        # a pure state update and cannot raise, unlike push_text below. The
+        # old order (aging push, then ingest) meant a message already
+        # dequeued could vanish without ever reaching OBS in any session and
+        # without being re-queued, if the *aging* push raised (killing the
+        # session) before the ingest ever ran -- narrow (needs a message and
+        # an expiry in the same turn, and that push to fail), but the
+        # surrounding code already works hard to make *ingested* text
+        # survive an outage (see _age_across_outage), so a message arriving
+        # 1ms earlier would have survived and one arriving now wouldn't.
+        # Ingesting first means the aging push's own failure can no longer
+        # lose the message -- the next session's reconnect (_push_all_text)
+        # still carries it. In the rare case the aged and newly-ingested
+        # text land on the same panel in the same turn, that panel is pushed
+        # twice in a row with identical (already up-to-date) content --
+        # redundant, not incorrect.
+        aged = age_panels(panels, now - last_tick[0])
         last_tick[0] = now
-        if message is not None:
-            ts = ingest_text(panels, message)
+        ingested = ingest_text(panels, message) if message is not None else None
+        for ts in aged:
             await push_text(client, context.config.subtitle.obs, panels, ts)
+        if ingested is not None:
+            await push_text(client, context.config.subtitle.obs, panels, ingested)
         if not context.running.is_set():
             await context.running.wait()
 

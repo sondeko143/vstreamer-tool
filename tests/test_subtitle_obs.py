@@ -3,12 +3,16 @@ from asyncio import Queue
 from uuid import uuid4
 
 import pytest
+from websockets.exceptions import ConnectionClosedError
 
 import vspeech.worker.subtitle_obs as subtitle_obs_mod
 from vspeech.config import Config
 from vspeech.config import EventType
 from vspeech.config import SubtitleWorkerType
 from vspeech.exceptions import WorkerShutdown
+from vspeech.exceptions import WorkerStartupError
+from vspeech.lib.obs_text_settings import hex_color_to_obs_int
+from vspeech.lib.obs_ws import ObsIdentifyError
 from vspeech.lib.obs_ws import ObsRequestError
 from vspeech.lib.obs_ws import ObsResourceNotFoundError
 from vspeech.shared_context import EventAddress
@@ -82,6 +86,59 @@ class SucceedingClient(FakeObsClient):
         return None
 
 
+class AuthRejectedClient:
+    """`identify()` always raises `ObsIdentifyError` -- a password typo, the
+    kind of failure ADR-0042 says must fail loud (retrying it forever would
+    never succeed). fix pass 4, fail-loud finding 1 (Critical).
+    """
+
+    def __init__(self, _ws):
+        pass
+
+    async def identify(self, password: str) -> None:
+        raise ObsIdentifyError("simulated auth rejection")
+
+    async def request(self, request_type: str, request_data=None) -> dict:
+        return {}
+
+
+def make_missing_source_client(missing: set[str]):
+    """`ObsWsClient` replacement whose `identify()` succeeds but whose
+    `GetInputSettings` (via `validate_sources`) rejects the given source
+    names -- a source-name typo, the second fail-loud case (ADR-0042).
+    Thin wrapper over `SucceedingClient`/`FakeObsClient`'s existing
+    `missing` support; needed as a factory (not a plain class) because
+    `subtitle_obs_worker` constructs `ObsWsClient(ws)` positionally, with no
+    way to also pass `missing` through that single-argument call site.
+    """
+
+    class Client(SucceedingClient):
+        def __init__(self, _ws=None):
+            super().__init__(_ws, missing=missing)
+
+    return Client
+
+
+class RetryableIdentifyTimeoutClient:
+    """`identify()` always raises a *bare* `ObsProtocolError` (not the
+    `ObsIdentifyError`/`ObsResourceNotFoundError` subclasses) -- an identify
+    round-trip that timed out or got a malformed response, the kind of
+    failure ADR-0042 says must stay fail-open (it is retryable; the next
+    attempt might just work). fix pass 4, fail-loud finding 1's third case:
+    proves the inner catch must stay narrow (`ObsIdentifyError`,
+    `ObsResourceNotFoundError`) and not widen to `ObsProtocolError`.
+    """
+
+    def __init__(self, _ws):
+        pass
+
+    async def identify(self, password: str) -> None:
+        raise subtitle_obs_mod.ObsProtocolError("identify timed out")
+
+    async def request(self, request_type: str, request_data=None) -> dict:
+        return {}
+
+
 class AlwaysFailingSetClient:
     """identify/GetInputSettings は毎回成功するが、SetInputSettings は毎回
     失敗する -- typo ではなく持続的な OBS 側の拒否を模す。fix pass 1,
@@ -136,6 +193,32 @@ def make_tick_hoist_client(pushed: list[tuple[int, str, str]], crash_text: str):
     return Client
 
 
+def make_mid_session_disconnect_client(after_n_text_pushes: int):
+    """Raises `ConnectionClosedError` (a `WebSocketException` subclass) on
+    the Nth `SetInputSettings` text push -- simulating OBS closing the
+    connection *partway through a live session* (e.g. the user restarts OBS
+    while streaming), not at connect/identify time like every other
+    disconnect fake in this file. fix pass 4, fail-open finding 2 (Critical):
+    every existing fail-open test reaches the outer catch via
+    `ObsRequestError` only, so dropping `WebSocketException` from
+    `subtitle_obs_worker`'s outer catch previously stayed green.
+    """
+    counter = {"n": 0}
+
+    class Client(SucceedingClient):
+        async def request(self, request_type: str, request_data=None) -> dict:
+            data = request_data or {}
+            if request_type == "SetInputSettings" and "text" in data.get(
+                "inputSettings", {}
+            ):
+                counter["n"] += 1
+                if counter["n"] == after_n_text_pushes:
+                    raise ConnectionClosedError(None, None)
+            return await super().request(request_type, request_data)
+
+    return Client
+
+
 def make_recording_client(pushed: list[tuple[str, str]]):
     """`pushed` へ (source, text) を記録するだけの `ObsWsClient` 代替。切断も
     クラッシュもしない -- fix pass 2, finding 4 (pause gate) 専用。
@@ -184,6 +267,28 @@ def make_session_health_client(clock: FakeClock):
                     raise ObsRequestError("SetInputSettings", 500, "boom")
                 return {}
             return {}
+
+    return Client
+
+
+def make_style_recording_client(pushed: list[tuple[str, dict]]):
+    """Records every `SetInputSettings` call as `(inputName, inputSettings)`
+    into `pushed` -- unlike `make_recording_client`, this keeps the *whole*
+    settings dict (not just `text`), so a test can inspect style fields like
+    `color`. No crash/disconnect. fix pass 4, finding 4 (reload-rebind)
+    only -- needs to see the pushed colour, not just whether the worker
+    crashed.
+    """
+
+    class Client(SucceedingClient):
+        async def request(self, request_type: str, request_data=None) -> dict:
+            result = await super().request(request_type, request_data)
+            if request_type == "SetInputSettings":
+                data = request_data or {}
+                pushed.append(
+                    (data.get("inputName", ""), data.get("inputSettings", {}))
+                )
+            return result
 
     return Client
 
@@ -244,6 +349,67 @@ def make_fake_connect():
         return _FakeConnection()
 
     return fake_connect
+
+
+class _RefusingConnection:
+    """`async with` entry that raises a given exception immediately, instead
+    of returning a connection -- simulates OBS being unreachable at all
+    (e.g. not running, wrong host) without touching the network. fix pass 4,
+    fail-open finding 2.
+    """
+
+    def __init__(self, exc: BaseException):
+        self._exc = exc
+
+    async def __aenter__(self):
+        raise self._exc
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+def make_refusing_connect(exc: BaseException):
+    """`connect()` replacement whose `async with` entry always raises `exc`."""
+
+    def fake_connect(url: str):
+        return _RefusingConnection(exc)
+
+    return fake_connect
+
+
+def make_fake_wait_for(in_queue: Queue[WorkerInput], clock: FakeClock):
+    """`wait_for` replacement for the aging/expiry tests below.
+
+    `_run_session` times its wait against `next_expiry_sec(panels)`, a real
+    wall-clock timeout we can neither wait out for real (tests must not
+    sleep real seconds) nor drive via `monotonic` alone (`wait_for`'s own
+    deadline comes from the event loop's clock, not the `monotonic` this
+    module patches for `age_panels`/`last_tick`). This plays the same role
+    `fake_sleep` plays for the backoff tests above:
+
+    - if `timeout` is `None` (nothing is currently displayed, so there is
+      nothing to expire), it really awaits `in_queue.get()` -- there is no
+      timeout to fake, so this is not a fake at all, just a pass-through
+      that blocks for real until a message arrives (or the test cancels the
+      task), exactly like the real `wait_for(..., timeout=None)`.
+    - otherwise, if a message is already queued, it returns it immediately
+      (as if it arrived before the timeout fired) with no clock movement;
+      if not, it advances `clock` by exactly `timeout` (so `age_panels`'
+      elapsed-time math sees exactly what a real expiry would have produced)
+      and raises `TimeoutError`, matching `wait_for`'s real behaviour on
+      expiry without any real wait.
+    """
+
+    async def fake_wait_for(coro, timeout: float | None):
+        if timeout is None:
+            return await coro
+        coro.close()
+        if not in_queue.empty():
+            return in_queue.get_nowait()
+        clock.advance(timeout)
+        raise TimeoutError()
+
+    return fake_wait_for
 
 
 async def _settle(ticks: int = 200) -> None:
@@ -308,12 +474,49 @@ async def test_push_text_sends_empty_string_when_the_panel_drained():
     assert client.settings_for("vspeech-text") == [{"text": ""}]
 
 
-async def test_push_text_uses_overlay_so_it_does_not_clobber_style():
+async def test_push_text_sets_overlay_true_on_its_own_call():
+    # fix pass 4, finding 6 (Minor): renamed from
+    # `test_push_text_uses_overlay_so_it_does_not_clobber_style`. That name
+    # and its `all(... for t, d in client.calls if t == "SetInputSettings")`
+    # assertion *read* as covering "does not clobber style" -- i.e. every
+    # `SetInputSettings` call this worker can make -- but this test only
+    # ever calls `push_text`, so `client.calls` holds exactly one
+    # `SetInputSettings` and `all()` ranges over a single element. Proven:
+    # mutating `_push_panel_style` (the *style*-push function, a different
+    # code path entirely) from `overlay: True` to `overlay: False` left this
+    # test green. Narrowed the name and assertion to what this test actually
+    # exercises (`push_text`'s own `overlay` flag, asserted directly rather
+    # than via a misleadingly-broad `all()`);
+    # `test_push_panel_style_sets_overlay_true_so_it_does_not_clobber_other_settings`
+    # below covers the style-push path this test's old name implied but
+    # never touched.
     config = make_config()
     panels = make_panels(config.subtitle)
     client = FakeObsClient()
     await push_text(client, config.subtitle.obs, panels, panels["n"])
-    assert all(d["overlay"] is True for t, d in client.calls if t == "SetInputSettings")
+    calls = [d for t, d in client.calls if t == "SetInputSettings"]
+    assert len(calls) == 1
+    assert calls[0]["overlay"] is True
+
+
+async def test_push_panel_style_sets_overlay_true_so_it_does_not_clobber_other_settings():
+    # fix pass 4, finding 6 (Minor), the other half: the mutation
+    # `_push_panel_style: overlay True -> False` survived every pre-existing
+    # test because none of them call `_push_panel_style` and check its
+    # `overlay` field -- `test_push_panel_style_sends_a_single_panels_config_values`
+    # below checks colour/valign/font fields but not `overlay`. This drives
+    # `_push_panel_style` (the style-push path) directly and pins its
+    # `overlay` flag, same reasoning as `push_text`'s: OBS's `SetInputSettings`
+    # replaces the *whole* input's settings unless `overlay: True` asks it to
+    # merge, so a style push without it would clobber whatever `push_text`
+    # (or a human, via the OBS UI) had already set.
+    config = make_config()
+    panels = make_panels(config.subtitle)
+    client = FakeObsClient()
+    await subtitle_obs_mod._push_panel_style(client, config.subtitle, "n", panels["n"])
+    calls = [d for t, d in client.calls if t == "SetInputSettings"]
+    assert len(calls) == 1
+    assert calls[0]["overlay"] is True
 
 
 async def test_push_panel_style_sends_a_single_panels_config_values():
@@ -789,3 +992,377 @@ async def test_style_warn_once_persists_across_reconnects_not_just_within_a_sess
 
     reach_warnings = [w for w in fake_logger.warnings if "cannot reach" in w]
     assert len(reach_warnings) == 1
+
+
+# --- fix pass 4: a coverage audit (not a code review) ran 49 mutations
+# against this file and found the worker's own logic already correct -- 10
+# of 49 survived while all 18 pre-fix-pass-4 tests stayed green. Verdict:
+# the suite pinned the *mechanisms* the three prior fix passes added (the
+# DEGRADE colour path, the backoff/warn-once reset, the aging clock's
+# cross-reconnect lifetime) and left the *file's reason for existing*
+# unpinned -- ADR-0042's fail-loud/fail-open tiers (docs/adr/0042-subtitle-
+# obs-failure-tiers.md), the aging/expiry loop, and the reload-rebind
+# semantics real reloads actually use. See task-7-report.md's "Fix pass 4"
+# section for the mutation -> test table and RED/GREEN proof for each test
+# below.
+
+
+async def test_an_auth_rejection_becomes_a_worker_startup_error(monkeypatch):
+    # ADR-0042 fail-loud, finding 1 (Critical): WorkerStartupError and
+    # ObsIdentifyError appear nowhere in this test file before fix pass 4 --
+    # every fake's identify() returns None. Dropping ObsIdentifyError from
+    # subtitle_obs_worker's inner `except (ObsIdentifyError,
+    # ObsResourceNotFoundError)` lets a password typo fall through to the
+    # outer fail-open catch (ObsIdentifyError IS an ObsProtocolError) and
+    # retry forever instead of raising WorkerStartupError -- exactly the
+    # "infinite silent retry" ADR-0042's Alternatives-rejected section names.
+    sleeps: list[float] = []
+
+    async def fake_sleep(sec: float) -> None:
+        sleeps.append(sec)
+        if len(sleeps) >= 2:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(subtitle_obs_mod, "sleep", fake_sleep)
+    monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
+    monkeypatch.setattr(subtitle_obs_mod, "ObsWsClient", AuthRejectedClient)
+
+    context = SharedContext(config=make_config())
+    context.add_worker(event=EventType.subtitle, configs_depends_on=["subtitle"])
+    in_queue: Queue[WorkerInput] = Queue()
+
+    with pytest.raises(WorkerStartupError):
+        await subtitle_obs_mod.subtitle_obs_worker(context, in_queue)
+
+    assert sleeps == []  # fatal on the very first attempt -- never retried
+
+
+async def test_a_missing_source_becomes_a_worker_startup_error(monkeypatch):
+    # ADR-0042 fail-loud, finding 1 (Critical), the other half:
+    # ObsResourceNotFoundError from validate_sources must also become
+    # WorkerStartupError. Also kills "delete validate_sources entirely":
+    # without the upfront check, the missing source's ObsResourceNotFoundError
+    # would instead surface later from a push_text/_push_panel_style call --
+    # a code path only the *outer* fail-open catch covers (it's still an
+    # ObsProtocolError), turning a permanent typo into an infinite retry.
+    sleeps: list[float] = []
+
+    async def fake_sleep(sec: float) -> None:
+        sleeps.append(sec)
+        if len(sleeps) >= 2:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(subtitle_obs_mod, "sleep", fake_sleep)
+    monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
+    monkeypatch.setattr(
+        subtitle_obs_mod, "ObsWsClient", make_missing_source_client({"vspeech-text"})
+    )
+
+    context = SharedContext(config=make_config())
+    context.add_worker(event=EventType.subtitle, configs_depends_on=["subtitle"])
+    in_queue: Queue[WorkerInput] = Queue()
+
+    with pytest.raises(WorkerStartupError):
+        await subtitle_obs_mod.subtitle_obs_worker(context, in_queue)
+
+    assert sleeps == []
+
+
+async def test_a_retryable_identify_timeout_is_fail_open_not_fatal(monkeypatch):
+    # ADR-0042 fail-loud, finding 1's third case (Critical): a bare
+    # ObsProtocolError from identify() (e.g. a response timeout) must stay
+    # fail-open -- it is exactly the case the module docstring (L18-21)
+    # names as the reason worker_startup's blanket `except Exception` isn't
+    # used here. Widening subtitle_obs_worker's inner catch from
+    # `(ObsIdentifyError, ObsResourceNotFoundError)` to `ObsProtocolError`
+    # would make this fatal instead -- this is the test that kills that
+    # specific mutation (the two tests above don't: they'd stay green even
+    # if the inner catch were widened, since ObsIdentifyError/
+    # ObsResourceNotFoundError are still caught either way).
+    sleeps: list[float] = []
+
+    async def fake_sleep(sec: float) -> None:
+        sleeps.append(sec)
+        if len(sleeps) >= 3:
+            raise asyncio.CancelledError()
+
+    fake_logger = RecordingLogger()
+    monkeypatch.setattr(subtitle_obs_mod, "sleep", fake_sleep)
+    monkeypatch.setattr(subtitle_obs_mod, "logger", fake_logger)
+    monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
+    monkeypatch.setattr(subtitle_obs_mod, "ObsWsClient", RetryableIdentifyTimeoutClient)
+
+    context = SharedContext(config=make_config())
+    context.add_worker(event=EventType.subtitle, configs_depends_on=["subtitle"])
+    in_queue: Queue[WorkerInput] = Queue()
+
+    with pytest.raises(WorkerShutdown):
+        await subtitle_obs_mod.subtitle_obs_worker(context, in_queue)
+
+    assert len(sleeps) == 3  # kept retrying instead of raising WorkerStartupError
+    reach_warnings = [w for w in fake_logger.warnings if "cannot reach" in w]
+    assert len(reach_warnings) == 1
+
+
+async def test_a_refused_connection_is_fail_open_not_fatal(monkeypatch):
+    # ADR-0042 fail-open, finding 2 (Critical): "OBS is not running" is the
+    # ADR's headline scenario, but every pre-fix-pass-4 test reaches
+    # fail-open through ObsRequestError only -- none ever makes connect()
+    # itself fail. Dropping OSError from subtitle_obs_worker's outer catch
+    # would let a refused connection escape unguarded and kill the
+    # TaskGroup.
+    sleeps: list[float] = []
+
+    async def fake_sleep(sec: float) -> None:
+        sleeps.append(sec)
+        if len(sleeps) >= 2:
+            raise asyncio.CancelledError()
+
+    fake_logger = RecordingLogger()
+    monkeypatch.setattr(subtitle_obs_mod, "sleep", fake_sleep)
+    monkeypatch.setattr(subtitle_obs_mod, "logger", fake_logger)
+    monkeypatch.setattr(
+        subtitle_obs_mod,
+        "connect",
+        make_refusing_connect(ConnectionRefusedError("OBS is not running")),
+    )
+
+    context = SharedContext(config=make_config())
+    context.add_worker(event=EventType.subtitle, configs_depends_on=["subtitle"])
+    in_queue: Queue[WorkerInput] = Queue()
+
+    with pytest.raises(WorkerShutdown):
+        await subtitle_obs_mod.subtitle_obs_worker(context, in_queue)
+
+    assert sleeps == [
+        subtitle_obs_mod.INITIAL_BACKOFF_SEC,
+        subtitle_obs_mod.INITIAL_BACKOFF_SEC * 2,
+    ]
+    reach_warnings = [w for w in fake_logger.warnings if "cannot reach" in w]
+    assert len(reach_warnings) == 1
+
+
+async def test_a_mid_session_disconnect_is_fail_open_not_fatal(monkeypatch):
+    # ADR-0042 fail-open, finding 2 (Critical): every pre-fix-pass-4 test
+    # that reaches fail-open does so at connect/identify time. Dropping
+    # WebSocketException from subtitle_obs_worker's outer catch would let a
+    # *mid-session* ConnectionClosedError (OBS restarting while the pipeline
+    # is live) escape the worker and kill the whole TaskGroup -- taking the
+    # live voice pipeline down with it, the exact Critical this file exists
+    # to prevent (module docstring L7-9).
+    fake_logger = RecordingLogger()
+    monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
+    monkeypatch.setattr(
+        subtitle_obs_mod, "ObsWsClient", make_mid_session_disconnect_client(3)
+    )
+    monkeypatch.setattr(subtitle_obs_mod, "logger", fake_logger)
+
+    context = SharedContext(config=make_config())
+    worker_meta = context.add_worker(
+        event=EventType.subtitle, configs_depends_on=["subtitle"]
+    )
+    in_queue: Queue[WorkerInput] = Queue()
+
+    task = asyncio.create_task(
+        subtitle_obs_mod.subtitle_obs_worker(context, in_queue),
+        name=worker_meta.event.name,
+    )
+    await _settle()  # first connect's 2 initial (empty) text pushes land;
+    # parked on the empty queue
+
+    await in_queue.put(make_message("hello"))  # the 3rd text push -> disconnect
+    await _settle()
+
+    assert not task.done(), (
+        f"worker crashed: {task.exception() if task.done() else None}"
+    )
+    assert any("cannot reach" in w for w in fake_logger.warnings)
+
+    task.cancel()
+    with pytest.raises(WorkerShutdown):
+        await task
+
+
+async def test_a_displayed_subtitle_is_cleared_from_obs_once_its_display_time_expires(
+    monkeypatch,
+):
+    # ADR-0042, finding 3 (Critical): no pre-fix-pass-4 test ever shows a
+    # subtitle appearing and then disappearing -- every fake's clock only
+    # ever advances inside fake_sleep (the reconnect backoff), so
+    # within-session elapsed time was always 0 and _run_session's aging push
+    # (subtitle_obs.py's `for ts in age_panels(...): await push_text(...)`)
+    # never actually ran against a real expiry in any prior test. Kills both
+    # "remove the aging push" and "timeout = next_expiry_sec(...) -> None":
+    # either leaves the expired subtitle on screen in OBS forever.
+    clock = FakeClock(0.0)
+    pushed: list[tuple[str, str]] = []
+    monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
+    monkeypatch.setattr(subtitle_obs_mod, "ObsWsClient", make_recording_client(pushed))
+    monkeypatch.setattr(subtitle_obs_mod, "monotonic", clock)
+
+    context = SharedContext(config=make_config())
+    worker_meta = context.add_worker(
+        event=EventType.subtitle, configs_depends_on=["subtitle"]
+    )
+    in_queue: Queue[WorkerInput] = Queue()
+    monkeypatch.setattr(
+        subtitle_obs_mod, "wait_for", make_fake_wait_for(in_queue, clock)
+    )
+
+    task = asyncio.create_task(
+        subtitle_obs_mod.subtitle_obs_worker(context, in_queue),
+        name=worker_meta.event.name,
+    )
+    await _settle()  # first connect settles; parked on the empty queue
+
+    await in_queue.put(make_message("hello"))
+    await _settle()  # "hello" is pushed, then the next loop's timeout fires
+    # (fake_wait_for advances the clock by min_display_sec) and the aging
+    # push should clear it -- all without any real sleep.
+
+    hello_idx = pushed.index(("vspeech-text", "hello"))
+    cleared_idx = next(
+        (
+            i
+            for i, (source, text) in enumerate(pushed)
+            if source == "vspeech-text" and text == "" and i > hello_idx
+        ),
+        None,
+    )
+    assert cleared_idx is not None, (
+        f"'hello' was never cleared from OBS after expiring: {pushed}"
+    )
+
+    task.cancel()
+    with pytest.raises(WorkerShutdown):
+        await task
+
+
+async def test_two_messages_within_min_display_sec_coexist_instead_of_the_second_wiping_the_first(
+    monkeypatch,
+):
+    # ADR-0042, finding 3 (Critical): `drop last_tick[0] = now`
+    # (subtitle_obs.py's _run_session, right after the aging push) stays
+    # green across every pre-fix-pass-4 test. Its real effect: last_tick[0]
+    # freezes at its value from connect time, so every later iteration's
+    # elapsed-time computation (now - last_tick[0]) grows across the *whole*
+    # session instead of since the previous iteration -- once a session has
+    # been alive longer than min_display_sec (2.5s, i.e. essentially
+    # always), the very next message's aging push sees a huge fake "elapsed"
+    # and wipes whatever is currently on screen the instant a new message
+    # arrives, even though it was displayed a moment ago. Simulates a
+    # session that's been connected-but-idle for 3s (> min_display_sec)
+    # before its first message ever arrives, then a second message
+    # immediately behind the first with no gap -- unfixed, this destroys
+    # "AAA" the instant "BBB" arrives instead of letting both coexist and
+    # join (panel "n" has anchor "s", so Texts.texts joins newest-first:
+    # "BBB AAA").
+    clock = FakeClock(0.0)
+    pushed: list[tuple[str, str]] = []
+    monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
+    monkeypatch.setattr(subtitle_obs_mod, "ObsWsClient", make_recording_client(pushed))
+    monkeypatch.setattr(subtitle_obs_mod, "monotonic", clock)
+
+    context = SharedContext(config=make_config())
+    worker_meta = context.add_worker(
+        event=EventType.subtitle, configs_depends_on=["subtitle"]
+    )
+    in_queue: Queue[WorkerInput] = Queue()
+    monkeypatch.setattr(
+        subtitle_obs_mod, "wait_for", make_fake_wait_for(in_queue, clock)
+    )
+
+    task = asyncio.create_task(
+        subtitle_obs_mod.subtitle_obs_worker(context, in_queue),
+        name=worker_meta.event.name,
+    )
+    await _settle()  # first connect settles; parked on the empty queue
+
+    clock.advance(3.0)  # session already alive past min_display_sec
+    await in_queue.put(make_message("AAA"))
+    await in_queue.put(make_message("BBB"))  # queued before AAA is even
+    # processed, so fake_wait_for hands it back with zero elapsed time --
+    # "arrives right behind AAA".
+    await _settle()
+
+    text_pushes = [text for source, text in pushed if source == "vspeech-text"]
+    # Only check the first 3 pushes: with no more messages ever arriving,
+    # _settle()'s tick budget is generous enough for the loop to keep
+    # spinning through subsequent *real* expiries afterward (BBB's own
+    # min_display_sec eventually elapsing too) -- that continuation is
+    # correct, expected behaviour, not the thing under test. unfixed
+    # (last_tick[0] = now dropped), this prefix is instead
+    # ["", "AAA", "BBB"] (measured): AAA gets destroyed the instant BBB
+    # arrives, so BBB is pushed alone instead of joined with AAA.
+    assert text_pushes[:3] == ["", "AAA", "BBB AAA"]
+
+    task.cancel()
+    with pytest.raises(WorkerShutdown):
+        await task
+
+
+async def test_reload_rebinds_context_config_so_the_worker_actually_picks_up_the_new_value(
+    monkeypatch,
+):
+    # ADR-0042, finding 4: a real reload (process_command, lib/command.py's
+    # `context.config = new_config`) *rebinds* context.config to a brand-new
+    # Config instance -- it does not mutate the old one in place. The
+    # pre-fix-pass-4 reload test
+    # (test_reload_with_a_tk_only_color_warns_and_keeps_the_session_running)
+    # instead mutates context.config.subtitle.text.font_color directly on
+    # the *same* object make_panels already built panels["n"].config from,
+    # so ts.config sees the edit with zero reload logic ever running.
+    # `_apply_reload: drop _refresh_panel_configs` stays green under that
+    # test, because dropping the call that re-points panels["n"].config at
+    # the new Config's subtitle.text changes nothing when there IS no new
+    # Config object. This test rebinds context.config the way a real reload
+    # does, and checks the *pushed* style value, not just "did it crash".
+    fake_logger = RecordingLogger()
+    pushed: list[tuple[str, dict]] = []
+    monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
+    monkeypatch.setattr(
+        subtitle_obs_mod, "ObsWsClient", make_style_recording_client(pushed)
+    )
+    monkeypatch.setattr(subtitle_obs_mod, "logger", fake_logger)
+
+    config = make_config()  # default font_color "#ffffff" at first connect
+    context = SharedContext(config=config)
+    worker_meta = context.add_worker(
+        event=EventType.subtitle, configs_depends_on=["subtitle"]
+    )
+    in_queue: Queue[WorkerInput] = Queue()
+
+    task = asyncio.create_task(
+        subtitle_obs_mod.subtitle_obs_worker(context, in_queue),
+        name=worker_meta.event.name,
+    )
+    await _settle()  # first connect settles
+
+    # a real reload rebinds context.config to a brand-new instance (mirrors
+    # lib/command.py's `context.config = new_config`), not an in-place
+    # mutation of the object panels["n"].config already points at.
+    new_config = config.model_copy(deep=True)
+    new_config.subtitle.text.font_color = "#0080ff"
+    context.config = new_config
+    worker_meta.need_reload = True
+    await in_queue.put(make_message("hello"))  # unblocks the current wait_for
+    await _settle()  # the next loop iteration applies the reload
+
+    assert not task.done(), (
+        f"worker crashed: {task.exception() if task.done() else None}"
+    )
+    assert worker_meta.need_reload is False
+
+    text_style_pushes = [
+        settings
+        for name, settings in pushed
+        if name == "vspeech-text" and "color" in settings
+    ]
+    # unfixed (_refresh_panel_configs dropped), panels["n"].config is still
+    # the *old* Config's subtitle.text object -- this would stay the default
+    # font_color's int forever, never observing the reload.
+    assert text_style_pushes[-1]["color"] == hex_color_to_obs_int("#0080ff")
+
+    task.cancel()
+    with pytest.raises(WorkerShutdown):
+        await task
