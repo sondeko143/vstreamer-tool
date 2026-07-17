@@ -1,6 +1,6 @@
 # 0040. 字幕の OBS 出力を新 EventType ではなく subtitle.worker_type のバックエンドとして足す
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-16
 - Related: spec [2026-07-16-subtitle-obs-websocket-backend-design.md](../superpowers/specs/2026-07-16-subtitle-obs-websocket-backend-design.md); [ADR-0041](0041-subtitle-obs-config-authority.md)（スタイル権威と境界）; [ADR-0042](0042-subtitle-obs-failure-tiers.md)（失敗の階層化）; [ADR-0043](0043-obs-websocket-client-in-house.md)（依存）
 

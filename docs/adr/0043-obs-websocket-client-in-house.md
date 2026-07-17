@@ -1,6 +1,6 @@
 # 0043. obs-websocket クライアントを websockets 上に自前実装する（simpleobsws を却下）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-16
 - Related: spec [2026-07-16-subtitle-obs-websocket-backend-design.md](../superpowers/specs/2026-07-16-subtitle-obs-websocket-backend-design.md); [ADR-0042](0042-subtitle-obs-failure-tiers.md)（再接続ポリシー）
 

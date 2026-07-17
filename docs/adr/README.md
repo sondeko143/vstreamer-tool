@@ -57,7 +57,7 @@
 | [0037](0037-transcription-vad-skip-gate.md) | Silero VAD スキップゲートを transcription パスへ拡張する（独立ワーカーを却下、0019 を拡張） | Accepted (extends 0019) | 2026-07-16 |
 | [0038](0038-worker-config-preflight-fail-loud.md) | 設定不備は起動時 preflight で fail-loud に集約する（全 worker へ一般化、0019 を一般化） | Accepted | 2026-07-16 |
 | [0039](0039-whisper-hosts-need-cuda12-toolkit.md) | whisper GPU ホストに CUDA 12 ツールキット（cuBLAS + cuDNN 9）を要求する（0028 を refine） | Accepted | 2026-07-16 |
-| [0040](0040-subtitle-obs-backend-via-worker-type.md) | 字幕の OBS 出力を新 EventType ではなく subtitle.worker_type のバックエンドとして足す | Proposed | 2026-07-16 |
-| [0041](0041-subtitle-obs-config-authority.md) | OBS バックエンドは config を表示スタイルの権威とし、OBS の構造には触れない | Proposed | 2026-07-16 |
-| [0042](0042-subtitle-obs-failure-tiers.md) | OBS 接続の失敗を「観測できたものだけ即死」で階層化する（0038 を refine） | Proposed | 2026-07-16 |
-| [0043](0043-obs-websocket-client-in-house.md) | obs-websocket クライアントを websockets 上に自前実装する（simpleobsws を却下） | Proposed | 2026-07-16 |
+| [0040](0040-subtitle-obs-backend-via-worker-type.md) | 字幕の OBS 出力を新 EventType ではなく subtitle.worker_type のバックエンドとして足す | Accepted | 2026-07-16 |
+| [0041](0041-subtitle-obs-config-authority.md) | OBS バックエンドは config を表示スタイルの権威とし、OBS の構造には触れない | Accepted | 2026-07-16 |
+| [0042](0042-subtitle-obs-failure-tiers.md) | OBS 接続の失敗を「観測できたものだけ即死」で階層化する（0038 を refine） | Accepted | 2026-07-16 |
+| [0043](0043-obs-websocket-client-in-house.md) | obs-websocket クライアントを websockets 上に自前実装する（simpleobsws を却下） | Accepted | 2026-07-16 |

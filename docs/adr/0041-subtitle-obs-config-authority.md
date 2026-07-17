@@ -1,6 +1,6 @@
 # 0041. OBS バックエンドは config を表示スタイルの権威とし、OBS の構造には触れない
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-16
 - Related: spec [2026-07-16-subtitle-obs-websocket-backend-design.md](../superpowers/specs/2026-07-16-subtitle-obs-websocket-backend-design.md); [ADR-0040](0040-subtitle-obs-backend-via-worker-type.md)（配線）
 
