@@ -2,6 +2,7 @@ from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from tkinter import BOTH
+from tkinter import TclError
 from tkinter import W
 from tkinter import X
 from typing import Any
@@ -135,6 +136,28 @@ class PipelineForm(Frame):
             content.pack(fill=X)
         else:
             content.pack_forget()
+
+    def focus_field(self, path: str) -> bool:
+        """`path` に束ねた widget へスクロールしてフォーカスする。
+
+        見つかれば True。worker が無効で畳まれている等で widget が無ければ
+        False（呼び出し側がその旨を出す）。
+        """
+        for widget, (bound_path, _coerce) in self.bindings.items():
+            if bound_path != path or not widget.winfo_exists():
+                continue
+            # ScrolledFrame の中身なので、まず可視域へ入れてからフォーカス。
+            self.body.update_idletasks()
+            try:
+                self.body.yview_moveto(
+                    max(0.0, widget.winfo_rooty() - self.body.winfo_rooty())
+                    / max(1, self.body.winfo_height())
+                )
+            except TclError:
+                pass
+            widget.focus_set()
+            return True
+        return False
 
     def read_into(self, config: Config) -> list[str]:
         # Returns the dotted paths of any fields whose widget value could not be

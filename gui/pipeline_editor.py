@@ -18,6 +18,9 @@ from gui.profile import PipelineEntry
 from gui.profile import load_pipeline_config
 from gui.profile import save_pipeline_config
 from gui.rawedit import RawTomlEditor
+from gui.readiness import Readiness
+from gui.readiness import evaluate
+from gui.readiness_panel import ReadinessPanel
 from gui.widgets import ScrolledText
 from gui.widgets import Textbox
 from vspeech.config import Config
@@ -55,6 +58,12 @@ class PipelineEditor(Frame):
         self.banner = Label(self, text="", bootstyle="danger")
         self.banner.pack(fill=X)
 
+        self.readiness: Readiness | None = None
+        # 「preflight は不足と言うが承知の上で起動する」を 1 回だけ通すフラグ。
+        self.force_start = False
+        self.panel = ReadinessPanel(self, on_fix=self._focus_field)
+        self.panel.pack(fill=X)
+
         notebook = Notebook(self)
         notebook.pack(fill=BOTH, expand=True)
         self.form = PipelineForm(notebook, on_change=self.on_dirty)
@@ -72,6 +81,16 @@ class PipelineEditor(Frame):
             controls, text="Stop", command=self._stop_click, state=DISABLED
         )
         self.stop_bt.pack(side=LEFT, padx=4, pady=4)
+        self.start_hint = Label(controls, text="", bootstyle="danger")
+        self.start_hint.pack(side=LEFT, padx=(0, 4))
+        # 未充足でも起動する escape hatch。技術者が「preflight は不足と言うが
+        # 承知の上で起動する」を選べるように小さく残す（既定は無効化側）。
+        self.force_bt = Button(
+            controls,
+            text="未充足でも起動",
+            bootstyle="link-danger",
+            command=self._force_start_click,
+        )
         self.status = Label(controls, text="■ stopped")
         self.status.pack(side=LEFT, padx=8)
         self.apply_raw_bt = Button(controls, text="Apply Raw", command=self.apply_raw)
@@ -96,6 +115,14 @@ class PipelineEditor(Frame):
     def _start_click(self) -> None:
         self.on_start()
 
+    def _force_start_click(self) -> None:
+        self.force_start = True
+        try:
+            self.on_start()
+        finally:
+            self.force_start = False
+        self._refresh_start_button()
+
     def _stop_click(self) -> None:
         self.on_stop()
 
@@ -110,9 +137,43 @@ class PipelineEditor(Frame):
         self.status.configure(text="● running" if running else "■ stopped")
         self._refresh_start_button()
 
+    @property
+    def readiness_ok(self) -> bool:
+        return self.readiness is None or self.readiness.ok
+
+    def refresh_readiness(self) -> None:
+        """フォームの現在値を config へ書き戻してから再評価する。
+
+        判断は vspeech.preflight が持つ (ADR-0045) ので、ここは呼ぶだけ。
+        preflight はデバイス列挙などの I/O を伴うため、呼ぶのは
+        load / save / raw 適用の時だけにする（毎キーストロークでは呼ばない）。
+        """
+        if self.config is None:
+            self.readiness = None
+            self.panel.clear()
+        else:
+            self.sync_form_to_config()
+            self.readiness = evaluate(self.config)
+            self.panel.show(self.readiness)
+        self._refresh_start_button()
+
+    def _focus_field(self, path: str) -> None:
+        self.notebook.select(self.form)
+        if not self.form.focus_field(path):
+            self.banner.configure(
+                text=f"⚠ {path} はフォームに出ていません（Raw TOML で編集してください）"
+            )
+
     def _refresh_start_button(self) -> None:
         can_start = self.entry is not None and not self.broken and not self.running
-        self.start_bt.configure(state=NORMAL if can_start else DISABLED)
+        gated = can_start and not self.readiness_ok and not self.force_start
+        self.start_bt.configure(state=DISABLED if gated or not can_start else NORMAL)
+        if gated and self.readiness is not None:
+            self.start_hint.configure(text=f"{self.readiness.problem_count} 件未充足")
+            self.force_bt.pack(side=LEFT, padx=4)
+        else:
+            self.start_hint.configure(text="")
+            self.force_bt.pack_forget()
 
     def set_log(self, lines: list[str]) -> None:
         # `self.log` is a ttkbootstrap ScrolledText (a Frame wrapper); only its
@@ -139,6 +200,8 @@ class PipelineEditor(Frame):
         self.banner.configure(text="")
         self.stop_bt.configure(state=DISABLED)
         self.status.configure(text="■ stopped")
+        self.readiness = None
+        self.panel.clear()
         self._refresh_start_button()
         self.set_log([])
 
@@ -167,7 +230,7 @@ class PipelineEditor(Frame):
                 self.banner.configure(text=f"❗ config 読込失敗: {result.error}")
             self.raw.set_text(result.raw_text or "")
             self.notebook.select(self.raw)
-        self._refresh_start_button()
+        self.refresh_readiness()
 
     # --- form/raw sync --------------------------------------------------
 
@@ -197,7 +260,7 @@ class PipelineEditor(Frame):
         self.banner.configure(text="")
         self.config = config
         self.form.bind_config(config)
-        self._refresh_start_button()
+        self.refresh_readiness()
         self.on_dirty()
 
     def save(self) -> bool:
@@ -212,7 +275,7 @@ class PipelineEditor(Frame):
             self.broken = False
             self.banner.configure(text="")
             self.form.bind_config(self.config)
-            self._refresh_start_button()
+            # ボタン状態は末尾の refresh_readiness() が更新するのでここでは呼ばない。
         else:
             failed = self.sync_form_to_config()
             self.banner.configure(
@@ -223,5 +286,6 @@ class PipelineEditor(Frame):
                 )
             )
         save_pipeline_config(self.paths, self.entry, self.config)
+        self.refresh_readiness()
         logger.info("saved pipeline %s", self.entry.id)
         return True
