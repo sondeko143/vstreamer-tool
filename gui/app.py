@@ -26,10 +26,13 @@ from gui.ports import is_port_free
 from gui.process import PipelineRunner
 from gui.profile import PipelineEntry
 from gui.profile import load_default_config
+from gui.profile import load_pipeline_config
 from gui.profile import load_profile
 from gui.profile import save_pipeline_config
 from gui.profile import save_profile
 from gui.recipes import RECIPES_BY_KEY
+from gui.shared_dialog import SharedPathsDialog
+from gui.shared_paths import apply_shared
 from vspeech.logger import logger
 
 LOG_BUFFER_MAX = 2000
@@ -66,6 +69,7 @@ class App(Frame):
         self.listbox.bind("<Button-1>", self._ignore_empty_click)
         Button(left, text="+ new", command=self.new_pipeline).pack(fill="x")
         Button(left, text="del", command=self.delete_pipeline).pack(fill="x")
+        Button(left, text="共有パス", command=self.edit_shared_paths).pack(fill="x")
 
         self.editor = PipelineEditor(
             self,
@@ -239,6 +243,45 @@ class App(Frame):
             if quick:
                 self.editor.show_launch_failure(failure_tail)
         self._refresh_list()
+
+    # --- shared asset paths (ADR-0046) -----------------------------------
+
+    def edit_shared_paths(self) -> None:
+        dialog = SharedPathsDialog(self, self.paths, self.default_config)
+        if not dialog.saved:
+            return
+        if dialog.propagate_requested:
+            self._propagate_shared_paths()
+        # 編集中の pipeline は propagate で config が変わりうるので読み直す。
+        selection = self.listbox.curselection()
+        if selection:
+            self.editor.load_entry(self.profile.pipelines[selection[0]])
+            self.editor.refresh_readiness()
+
+    def _propagate_shared_paths(self) -> None:
+        """共有素材パスを既存の全 pipeline へ書き込む (ADR-0046)。
+
+        pipeline config は自己完結を保つので、値は実際に各ファイルへ書く。
+        壊れて読めない pipeline は飛ばして名指しで報告する — 黙って捨てない。
+        """
+        skipped: list[str] = []
+        for entry in self.profile.pipelines:
+            result = load_pipeline_config(self.paths, entry)
+            if not result.ok or result.value is None:
+                # ユーザー向けバナーには読みやすい name、ログには相関用に安定な id。
+                skipped.append(entry.name)
+                continue
+            changed = apply_shared(self.default_config, result.value)
+            if changed:
+                save_pipeline_config(self.paths, entry, result.value)
+                logger.info(
+                    "propagated %s to pipeline %s", ", ".join(changed), entry.id
+                )
+        save_profile(self.paths, self.profile)
+        if skipped:
+            self.editor.banner.configure(
+                text=f"⚠ 読めない pipeline へは反映できませんでした: {', '.join(skipped)}"
+            )
 
     # --- new / delete ---------------------------------------------------
 

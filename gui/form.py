@@ -1,12 +1,10 @@
 from collections.abc import Callable
 from functools import partial
-from pathlib import Path
 from tkinter import BOTH
 from tkinter import TclError
 from tkinter import W
 from tkinter import X
 from typing import Any
-from typing import get_args
 
 from pydantic import SecretStr
 from ttkbootstrap import Frame
@@ -15,6 +13,9 @@ from ttkbootstrap import Labelframe
 from ttkbootstrap.widgets.scrolled import ScrolledFrame
 
 from gui.autocomplete_combobox import AutocompleteCombobox
+from gui.config_paths import field_types as _field_types
+from gui.config_paths import get_value as _get
+from gui.config_paths import set_value as _set
 from gui.widgets import Checkbutton
 from gui.widgets import Spinbox
 from gui.widgets import Textbox
@@ -28,49 +29,6 @@ except Exception:  # audio extra not installed
 
     def list_all_devices(input: bool = False, output: bool = False) -> dict[str, int]:
         return {}
-
-
-def _get(config: Config, path: str) -> Any:
-    node: Any = config
-    for part in path.split("."):
-        node = getattr(node, part)
-    if isinstance(node, SecretStr):
-        return node.get_secret_value()
-    return node
-
-
-def _coerce_value(node: Any, child: str, value: Any) -> Any:
-    # None passes through cleanly (read_into only sends None for Optional
-    # fields). Blank strings never reach here — read_into intercepts them — so
-    # Path/SecretStr always wrap a real value.
-    if value is None:
-        return None
-    annotation = type(node).model_fields[child].annotation
-    types = get_args(annotation) or (annotation,)
-    if SecretStr in types:
-        return SecretStr(str(value))
-    if Path in types:
-        return Path(str(value))
-    return value
-
-
-def _field_types(config: Config, path: str) -> tuple[Any, ...]:
-    """The pydantic annotation of `path`'s field, flattened to a tuple of types
-    (e.g. `int | None` -> `(int, NoneType)`, a bare `int` -> `(int,)`)."""
-    *parents, child = path.split(".")
-    node: Any = config
-    for part in parents:
-        node = getattr(node, part)
-    annotation = type(node).model_fields[child].annotation
-    return get_args(annotation) or (annotation,)
-
-
-def _set(config: Config, path: str, value: Any) -> None:
-    *parents, child = path.split(".")
-    node: Any = config
-    for part in parents:
-        node = getattr(node, part)
-    setattr(node, child, _coerce_value(node, child, value))
 
 
 class PipelineForm(Frame):
