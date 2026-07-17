@@ -61,3 +61,4 @@
 | [0041](0041-subtitle-obs-config-authority.md) | OBS バックエンドは config を表示スタイルの権威とし、OBS の構造には触れない | Accepted | 2026-07-16 |
 | [0042](0042-subtitle-obs-failure-tiers.md) | OBS 接続の失敗を「観測できたものだけ即死」で階層化する（0038 を refine） | Accepted | 2026-07-16 |
 | [0043](0043-obs-websocket-client-in-house.md) | obs-websocket クライアントを websockets 上に自前実装する（simpleobsws を却下） | Accepted | 2026-07-16 |
+| [0044](0044-font-size-tk-points-to-obs-lfheight.md) | font_size を Tk の符号規約のまま OBS へ渡し正値だけ 96 DPI でピクセル換算する（0041 を refine） | Accepted (refines 0041) | 2026-07-17 |
