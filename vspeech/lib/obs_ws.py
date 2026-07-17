@@ -157,6 +157,12 @@ def build_auth_string(password: str, salt: str, challenge: str) -> str:
 # バージョン不一致・不正な Identify なども同じ帯を使う)。この帯に入る close
 # だけが「再接続しても直らない」と型で示せる signal で、identify() はこれ
 # だけを ObsIdentifyError に変換する。
+#
+# 帯で絞るのが要で、`ConnectionClosed` を一律に拒否とみなしてはいけない:
+# OBS を普通に終了すると 1001 (going away) で切れる (実測)。一律にすれば
+# ユーザーが OBS を閉じるたびに fail-loud が発火し、字幕の都合で音声
+# パイプラインを殺す -- ADR-0042 が存在する理由そのものになる。粒度は
+# 4009 と 1001 の両方を実機で測って初めて決められた。
 _HANDSHAKE_REJECTION_CLOSE_CODES = range(4000, 5000)
 
 
