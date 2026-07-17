@@ -20,6 +20,8 @@ from vspeech.config import TtsWorkerType
 from vspeech.config import VcConfig
 from vspeech.exceptions import ConfigError
 from vspeech.exceptions import ConfigProblem
+from vspeech.lib.obs_text_settings import hex_color_to_obs_int
+from vspeech.lib.subtitle_state import TRANSPARENT_BG_COLOR
 
 Checker = Callable[[Config], list[ConfigProblem]]
 
@@ -187,7 +189,8 @@ def _check_subtitle(config: Config) -> list[ConfigProblem]:
     if config.subtitle.worker_type != SubtitleWorkerType.OBS:
         return []  # TK は接続先を持たない
     w = "subtitle"
-    obs = config.subtitle.obs
+    subtitle = config.subtitle
+    obs = subtitle.obs
     problems: list[ConfigProblem] = []
     if not obs.url:
         problems.append(
@@ -208,6 +211,29 @@ def _check_subtitle(config: Config) -> list[ConfigProblem]:
             problems.append(
                 ConfigProblem(w, f"OBS バックエンドには {name} が必須ですが空です")
             )
+    # OBS は #rrggbb しか受け付けない (hex_color_to_obs_int) が、TK は
+    # "white" のような Tk 色名も正当に使える。フィールド自体に pydantic
+    # パターンバリデータを付けると動いている TK 設定を壊すので、この検査は
+    # worker_type == OBS のここでしか行わない (fix pass 1, finding 1
+    # (Critical))。ADR-0040 は worker_type の切り替えを「同じイベント、
+    # 別バックエンド」として売っているため、これは typo ではなく移行経路。
+    for name, value in (
+        ("subtitle.text.font_color", subtitle.text.font_color),
+        ("subtitle.text.outline_color", subtitle.text.outline_color),
+        ("subtitle.translated.font_color", subtitle.translated.font_color),
+        ("subtitle.translated.outline_color", subtitle.translated.outline_color),
+    ):
+        try:
+            hex_color_to_obs_int(value)
+        except ValueError as e:
+            problems.append(ConfigProblem(w, f"{name}: {e}"))
+    # bg_color だけ TRANSPARENT_BG_COLOR という番兵も正当な値として受け付ける
+    # -- lib/obs_text_settings.build_text_settings の扱いをそのまま踏襲する。
+    if subtitle.bg_color != TRANSPARENT_BG_COLOR:
+        try:
+            hex_color_to_obs_int(subtitle.bg_color)
+        except ValueError as e:
+            problems.append(ConfigProblem(w, f"subtitle.bg_color: {e}"))
     # 認証の成立とソースの実在は層B (接続してからでないと未起動と区別できない, ADR-0042)。
     return problems
 

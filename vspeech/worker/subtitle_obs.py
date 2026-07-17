@@ -8,6 +8,11 @@ input の設定値だけを更新する (ADR-0041)。
   - 接続できない / 切断 / タイムアウト / 不正メッセージ -> fail-open
     (warn once + バックオフ再接続)。字幕は落ちるが音声は生き続ける。
   - 認証失敗 / ソース不在 -> fail-loud (WorkerStartupError)
+  - 壊れた色設定 (#rrggbb でない Tk 専用色名など) -> DEGRADE (warn +
+    直前のスタイルを維持して継続)。起動時点の値は preflight (層A,
+    `preflight._check_subtitle`) が fail-loud に弾くが、reload はそこを
+    通らないので、reload 後 (または reload 直後の再接続) にだけ壊れた値が
+    残る余地があり、ここで拾う (fix pass 1, finding 1)。
 繋がるまでは両者を区別できないので、繋がるまで待つ。
 
 ADR-0038 の層B は通常 exceptions.worker_startup を使うが、ここでは使わない:
@@ -46,6 +51,11 @@ from vspeech.shared_context import WorkerInput
 
 INITIAL_BACKOFF_SEC = 0.5
 MAX_BACKOFF_SEC = 5.0
+# セッションがこの秒数以上続けば「健全だった」とみなし backoff/warn を戻す
+# (fix pass 1, finding 2)。MAX_BACKOFF_SEC を流用する: どのみち次の再接続
+# までは最大この秒数だけ待つ設計なので、それより長く生きたセッションは
+# 「即座に壊れて再接続ループしている」ものとは質的に別物と判断できる。
+SESSION_HEALTHY_SEC = MAX_BACKOFF_SEC
 
 
 class ObsRequester(Protocol):
@@ -119,6 +129,34 @@ async def push_styles(
         )
 
 
+async def _push_styles_or_warn(
+    client: ObsRequester, config: SubtitleConfig, panels: dict[str, Texts]
+) -> None:
+    """`push_styles` を試すが、色の値が壊れていてもプロセスを道連れにしない。
+
+    preflight (層A) は起動時点の config しか見ないので、reload で入った壊れた
+    `#rrggbb` (Tk 色名など) はそこで止められない -- 起点は色フィールドだけ
+    TK/OBS 共有かつ preflight は起動時にしか走らないという ADR-0038/0042 の
+    隙間 (fix pass 1, finding 1 (Critical))。ここに来る `ValueError` は
+    `hex_color_to_obs_int` が返す「観測できて、かつ config を直せば直る」
+    種類だけで、繋がっている音声パイプラインを落とす理由にはならない --
+    DEGRADE (warn + 直前のスタイルを維持して継続)。`push_styles` はパネル
+    ごとに `SetInputSettings` を送るので、途中で失敗しても既に送信済みの
+    パネルへは反映済み・失敗したパネルは OBS 側の直前の値がそのまま残る。
+
+    呼び出し側は 2 箇所 (初回/再接続時の接続直後、reload 時) あり、どちらも
+    同じ理由で ValueError を漏らしてはいけないので 1 箇所にまとめる。
+    """
+    try:
+        await push_styles(client, config, panels)
+    except ValueError as e:
+        logger.warning(
+            "subtitle worker [obs] style rejected by OBS (%s); keeping the "
+            "previous style and continuing.",
+            e,
+        )
+
+
 async def push_text(
     client: ObsRequester,
     obs: SubtitleObsConfig,
@@ -154,24 +192,54 @@ def _refresh_panel_configs(context: SharedContext, panels: dict[str, Texts]) -> 
     panels["s"].anchor = context.config.subtitle.translated.anchor
 
 
+async def _apply_reload(
+    context: SharedContext, client: ObsRequester, panels: dict[str, Texts]
+) -> None:
+    """reload で新しい config を取り込み、スタイルと現在テキストを再 push する。
+
+    色が壊れていても (fix pass 1, finding 1) `_push_styles_or_warn` が
+    ValueError を飲むので、ここは常に最後まで走り、テキストは必ず更新
+    される。
+    """
+    context.reset_need_reload()
+    _refresh_panel_configs(context, panels)
+    await _push_styles_or_warn(client, context.config.subtitle, panels)
+    await _push_all_text(client, context.config.subtitle.obs, panels)
+
+
+def _age_across_outage(
+    panels: dict[str, Texts], last_tick: list[float], now: float
+) -> None:
+    """接続直後の一斉 push の前に、直前のセッション終了 (または起動) からの
+    経過時間ぶん字幕を老化させる。
+
+    `last_tick` は `subtitle_obs_worker` と `_run_session` が共有する 1 要素
+    のリスト。単なるローカル変数だと再接続のたびに失われ、再接続に要した
+    時間 (=OBS が落ちていた時間) がエイジングに反映されず、古い字幕が
+    そのまま復帰直後に再表示されてしまう (fix pass 1, finding 3)。
+    `age_panels` は各パネルの `values[0]` しか老化させないが、直後の
+    `_push_all_text` はパネル全部を無条件に再送するので、ここで
+    `age_panels` の戻り値 (変化したパネルの一覧) を使う必要はない。
+    """
+    age_panels(panels, now - last_tick[0])
+    last_tick[0] = now
+
+
 async def _run_session(
     context: SharedContext,
     client: ObsRequester,
     in_queue: Queue[WorkerInput],
     panels: dict[str, Texts],
+    last_tick: list[float],
 ) -> None:
     """繋がっている間の本ループ。30fps のビジーループは持たない。
 
     次に消える字幕の時刻までを timeout にして待つので、何も起きていない間は
     1 回も起きない。
     """
-    last_tick = monotonic()
     while True:
         if context.need_reload:
-            context.reset_need_reload()
-            _refresh_panel_configs(context, panels)
-            await push_styles(client, context.config.subtitle, panels)
-            await _push_all_text(client, context.config.subtitle.obs, panels)
+            await _apply_reload(context, client, panels)
         timeout = next_expiry_sec(panels)
         message: WorkerInput | None = None
         try:
@@ -179,9 +247,9 @@ async def _run_session(
         except TimeoutError:
             pass
         now = monotonic()
-        for ts in age_panels(panels, now - last_tick):
+        for ts in age_panels(panels, now - last_tick[0]):
             await push_text(client, context.config.subtitle.obs, panels, ts)
-        last_tick = now
+        last_tick[0] = now
         if message is not None:
             ts = ingest_text(panels, message)
             await push_text(client, context.config.subtitle.obs, panels, ts)
@@ -196,9 +264,18 @@ async def subtitle_obs_worker(
     panels = make_panels(context.config.subtitle)
     backoff = INITIAL_BACKOFF_SEC
     warned = False
+    # セッション境界をまたいで表示時計を進め続ける (fix pass 1, finding 3)。
+    # subtitle_obs_worker と _run_session が同じ 1 要素リストを共有・変更
+    # する — 詳細は _age_across_outage のドキュメント参照。
+    last_tick: list[float] = [monotonic()]
     try:
         while True:
             obs = context.config.subtitle.obs
+            # そのセッションが「健全だった」と言える継続時間を測るための
+            # 開始時刻。identify+ソース検証が終わるまでは None のままにし、
+            # 「即座に壊れて再接続ループしている」セッションと区別する
+            # (fix pass 1, finding 2)。
+            session_started: float | None = None
             try:
                 async with connect(obs.url) as ws:
                     client = ObsWsClient(ws)
@@ -211,17 +288,31 @@ async def subtitle_obs_worker(
                         # (タイムアウト・不正メッセージ) は下の except へ落ちる。
                         raise WorkerStartupError("subtitle", str(e)) from e
                     logger.info("subtitle worker [obs] connected to %s", obs.url)
-                    backoff = INITIAL_BACKOFF_SEC
-                    warned = False
+                    session_started = monotonic()
                     _refresh_panel_configs(context, panels)
-                    await push_styles(client, context.config.subtitle, panels)
+                    await _push_styles_or_warn(client, context.config.subtitle, panels)
+                    _age_across_outage(panels, last_tick, monotonic())
                     await _push_all_text(client, obs, panels)
-                    await _run_session(context, client, in_queue, panels)
+                    await _run_session(context, client, in_queue, panels, last_tick)
             except (OSError, WebSocketException, ObsProtocolError) as e:
                 # OBS 未起動・切断・タイムアウト・不正メッセージ。字幕は落ちるが
                 # 音声パイプラインは巻き込まない。ObsProtocolError を external に
                 # 落とさないこと: 素の TimeoutError/KeyError が worker を貫通すると
                 # TaskGroup ごとプロセスが死ぬ。
+                #
+                # backoff/warned は「identify+ソース検証まで到達した」だけでは
+                # 戻さない -- SetInputSettings が毎回リクエスト直後に失敗する
+                # ような「繋がるが即座に壊れる」ケースが繰り返し起きると、
+                # 接続の瞬間にリセットしてしまい backoff が床に張り付いたまま
+                # 警告だけが毎回出る (fix pass 1, finding 2, 実測)。セッションが
+                # SESSION_HEALTHY_SEC 以上生きていた場合だけ「健全だった」と
+                # みなして戻す。
+                if (
+                    session_started is not None
+                    and monotonic() - session_started >= SESSION_HEALTHY_SEC
+                ):
+                    backoff = INITIAL_BACKOFF_SEC
+                    warned = False
                 if not warned:
                     logger.warning(
                         "subtitle worker [obs] cannot reach %s (%s); "

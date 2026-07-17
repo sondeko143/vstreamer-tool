@@ -11,6 +11,7 @@ from vspeech.config import TranscriptionConfig
 from vspeech.config import TranscriptionWorkerType
 from vspeech.exceptions import ConfigError
 from vspeech.lib.audio import DeviceInfo
+from vspeech.lib.subtitle_state import TRANSPARENT_BG_COLOR
 from vspeech.preflight import _check_subtitle
 from vspeech.preflight import preflight
 
@@ -307,3 +308,81 @@ def test_obs_backend_accepts_a_complete_config():
     config.subtitle.obs.text_source = "vspeech-text"
     config.subtitle.obs.translated_source = "vspeech-translated"
     assert _check_subtitle(config) == []
+
+
+def _obs_config() -> Config:
+    config = Config()
+    config.subtitle.enable = True
+    config.subtitle.worker_type = SubtitleWorkerType.OBS
+    config.subtitle.obs.text_source = "t"
+    config.subtitle.obs.translated_source = "s"
+    return config
+
+
+# fix pass 1, finding 1 (Critical): a Tk-valid colour name ("white", "green",
+# "#fff") is accepted by pydantic and by the TK backend but is not
+# `#rrggbb`, so `hex_color_to_obs_int` raises `ValueError` at runtime deep in
+# the OBS worker (build_text_settings). Flipping `worker_type` TK -> OBS is
+# ADR-0040's advertised migration path, so this must be caught here (FATAL,
+# startup) rather than crash the whole audio pipeline later.
+@pytest.mark.parametrize("bad", ["white", "green", "#fff"])
+def test_obs_backend_rejects_a_tk_only_font_color(bad: str):
+    config = _obs_config()
+    config.subtitle.text.font_color = bad
+    problems = _check_subtitle(config)
+    assert any("subtitle.text.font_color" in p.detail for p in problems)
+
+
+def test_obs_backend_rejects_a_tk_only_outline_color():
+    config = _obs_config()
+    config.subtitle.text.outline_color = "white"
+    problems = _check_subtitle(config)
+    assert any("subtitle.text.outline_color" in p.detail for p in problems)
+
+
+def test_obs_backend_rejects_a_tk_only_translated_font_color():
+    config = _obs_config()
+    config.subtitle.translated.font_color = "white"
+    problems = _check_subtitle(config)
+    assert any("subtitle.translated.font_color" in p.detail for p in problems)
+
+
+def test_obs_backend_rejects_a_tk_only_translated_outline_color():
+    config = _obs_config()
+    config.subtitle.translated.outline_color = "white"
+    problems = _check_subtitle(config)
+    assert any("subtitle.translated.outline_color" in p.detail for p in problems)
+
+
+def test_obs_backend_rejects_a_tk_only_bg_color():
+    config = _obs_config()
+    config.subtitle.bg_color = "white"
+    problems = _check_subtitle(config)
+    assert any("subtitle.bg_color" in p.detail for p in problems)
+
+
+def test_obs_backend_accepts_the_transparent_bg_sentinel():
+    # bg_color legitimately accepts the TRANSPARENT_BG_COLOR sentinel in
+    # addition to #rrggbb -- lib/obs_text_settings.build_text_settings
+    # special-cases it, and preflight must mirror that exactly rather than
+    # reject it as a bad hex colour.
+    config = _obs_config()
+    config.subtitle.bg_color = TRANSPARENT_BG_COLOR
+    assert _check_subtitle(config) == []
+
+
+def test_obs_backend_reports_every_bad_color_not_just_the_first():
+    # ADR-0038 aggregates all problems; a single bad-color check must not
+    # stop at the first field.
+    config = _obs_config()
+    config.subtitle.text.font_color = "white"
+    config.subtitle.text.outline_color = "green"
+    config.subtitle.translated.font_color = "blue"
+    config.subtitle.translated.outline_color = "red"
+    config.subtitle.bg_color = "yellow"
+    details = " ".join(p.detail for p in _check_subtitle(config))
+    assert "subtitle.text.font_color" in details
+    assert "subtitle.text.outline_color" in details
+    assert "subtitle.translated.font_color" in details
+    assert "subtitle.translated.outline_color" in details
+    assert "subtitle.bg_color" in details
