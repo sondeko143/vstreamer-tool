@@ -17,7 +17,6 @@ from vspeech.shared_context import SharedContext
 from vspeech.shared_context import SoundInput
 from vspeech.shared_context import WorkerInput
 from vspeech.worker.subtitle_obs import make_panels
-from vspeech.worker.subtitle_obs import push_styles
 from vspeech.worker.subtitle_obs import push_text
 from vspeech.worker.subtitle_obs import validate_sources
 
@@ -317,13 +316,26 @@ async def test_push_text_uses_overlay_so_it_does_not_clobber_style():
     assert all(d["overlay"] is True for t, d in client.calls if t == "SetInputSettings")
 
 
-async def test_push_styles_sends_both_panels_with_config_values():
+async def test_push_panel_style_sends_a_single_panels_config_values():
+    # fix pass 3, finding 2 (Minor): this test used to call the unguarded
+    # public wrapper `push_styles`, which had no caller left in `vspeech/` --
+    # `_push_styles_or_warn` loops `_push_panel_style` itself (fix pass 2,
+    # finding 5), so `push_styles` was dead code kept alive only by this
+    # test, sitting on the obvious public name for a future caller to
+    # reintroduce the exact bare-`ValueError`-escape Critical this worker
+    # spent two passes closing. Deleted `push_styles`; this test now pins the
+    # same per-panel field mapping directly against `_push_panel_style`, the
+    # guarded path's actual building block. Iterating over *both* panels in
+    # one pass (and surviving a bad first panel) is covered separately by
+    # `test_a_bad_first_panel_color_does_not_block_the_second_panels_good_style`
+    # (via `_push_styles_or_warn`, the only remaining caller).
     config = make_config()
     config.subtitle.text.font_color = "#ff8000"
     config.subtitle.translated.font_size = 22
     panels = make_panels(config.subtitle)
     client = FakeObsClient()
-    await push_styles(client, config.subtitle, panels)
+    await subtitle_obs_mod._push_panel_style(client, config.subtitle, "n", panels["n"])
+    await subtitle_obs_mod._push_panel_style(client, config.subtitle, "s", panels["s"])
     text_settings = client.settings_for("vspeech-text")[0]
     translated_settings = client.settings_for("vspeech-translated")[0]
     # BGR, not the un-reversed hex value: hex_color_to_obs_int("#ff8000") ==
@@ -709,3 +721,71 @@ async def test_pause_gate_holds_a_queued_message_until_context_running_is_set(
     task.cancel()
     with pytest.raises(WorkerShutdown):
         await task
+
+
+# --- fix pass 3: a review that closed fix pass 2 confirmed all prior
+# findings genuinely fixed and flagged two last items: one Important
+# (below), one Minor (the push_styles deletion above -- retargeted, not
+# added, so it has no new test of its own).
+
+
+async def test_style_warn_once_persists_across_reconnects_not_just_within_a_session(
+    monkeypatch,
+):
+    # fix pass 3, finding 1 (Important, measured). `style_warned` is created
+    # once in `subtitle_obs_worker`, *above* the `while True:` reconnect
+    # loop, and threaded into every session -- `_push_styles_or_warn`'s own
+    # docstring says that placement is *why* a flapping OBS doesn't
+    # reproduce fix pass 2's finding 3 (20 reconnects -> 20 style warnings).
+    # But nothing actually drove a reconnect loop with a persistently bad
+    # colour through `subtitle_obs_worker` before this test:
+    # `test_push_styles_or_warn_only_warns_once_for_a_persisting_bad_value`
+    # only proves the *mechanism* by calling `_push_styles_or_warn` directly
+    # with a hand-shared dict -- it never touches the worker's own wiring, so
+    # it would still pass even if `subtitle_obs_worker` created a fresh dict
+    # per session. This test drives the real reconnect loop instead.
+    #
+    # Reuses `AlwaysFailingSetClient` (originally built for fix pass 1,
+    # finding 2's backoff-reset repro) for a second purpose here: every
+    # `SetInputSettings` it receives fails, which -- once the "n" panel's bad
+    # colour has already been handled locally by `build_text_settings`
+    # raising before any request is sent -- makes the *next* panel's
+    # (valid-but-doomed) style push the thing that forces each reconnect.
+    # That gives a clean "one style warn-once decision per session, followed
+    # by a forced disconnect" shape without a bespoke fake.
+    #
+    # Measured with `style_warned` moved inside the loop (this test's own
+    # mutation-proof, see the task report): 6 reconnects -> 6 "invalid
+    # style" warnings, reproducing finding 3's exact original signature,
+    # while the adjacent "cannot reach" warn-once correctly stays at 1
+    # either way (sessions here die near-instantly, so they never cross
+    # SESSION_HEALTHY_SEC and reset it).
+    sleeps: list[float] = []
+
+    async def fake_sleep(sec: float) -> None:
+        sleeps.append(sec)
+        if len(sleeps) >= 6:
+            raise asyncio.CancelledError()
+
+    fake_logger = RecordingLogger()
+    monkeypatch.setattr(subtitle_obs_mod, "sleep", fake_sleep)
+    monkeypatch.setattr(subtitle_obs_mod, "logger", fake_logger)
+    monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
+    monkeypatch.setattr(subtitle_obs_mod, "ObsWsClient", AlwaysFailingSetClient)
+
+    config = make_config()
+    config.subtitle.text.font_color = "white"  # persistently bad, every reconnect
+    context = SharedContext(config=config)
+    context.add_worker(event=EventType.subtitle, configs_depends_on=["subtitle"])
+    in_queue: Queue[WorkerInput] = Queue()
+
+    with pytest.raises(WorkerShutdown):
+        await subtitle_obs_mod.subtitle_obs_worker(context, in_queue)
+
+    assert len(sleeps) == 6  # 6 full sessions actually ran, not fewer
+
+    style_warnings = [w for w in fake_logger.warnings if "invalid style" in w]
+    assert len(style_warnings) == 1
+
+    reach_warnings = [w for w in fake_logger.warnings if "cannot reach" in w]
+    assert len(reach_warnings) == 1

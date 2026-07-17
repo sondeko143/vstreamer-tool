@@ -117,6 +117,19 @@ async def validate_sources(client: ObsRequester, obs: SubtitleObsConfig) -> None
 async def _push_panel_style(
     client: ObsRequester, config: SubtitleConfig, key: str, ts: Texts
 ) -> None:
+    """1 パネル分のスタイルを OBS へ送る (ADR-0041: config が権威)。
+
+    呼び出し側は `_push_styles_or_warn` (guarded path) だけにすること --
+    壊れた色設定 (Tk 専用色名など) は `build_text_settings` が `ValueError`
+    を投げるので、直接呼ぶ側はそれを自分で処理する責任を負う。かつて存在した
+    無防備な公開ラッパー `push_styles` (両パネルをまとめて呼ぶだけの薄い関数)
+    は、`_push_styles_or_warn` がこの関数自身をループするようになった時点で
+    `vspeech/` 側の呼び出し元を失っていたが、テストが直接呼んでいたせいで
+    死んでいることに気づかれなかった (fix pass 3, finding 2, Minor) --
+    誰かがこの分かりやすい公開名に手を伸ばして再導入すれば、この worker が
+    2 回のパスをかけて塞いだのと同じ「bare `ValueError` が `TaskGroup` ごと
+    音声パイプラインを道連れにする」Critical がそのまま戻る。削除した。
+    """
     await client.request(
         "SetInputSettings",
         {
@@ -125,14 +138,6 @@ async def _push_panel_style(
             "overlay": True,
         },
     )
-
-
-async def push_styles(
-    client: ObsRequester, config: SubtitleConfig, panels: dict[str, Texts]
-) -> None:
-    """config のスタイルを両ソースへ流し込む (ADR-0041: config が権威)。"""
-    for key, ts in panels.items():
-        await _push_panel_style(client, config, key, ts)
 
 
 async def _push_styles_or_warn(
@@ -316,7 +321,11 @@ async def subtitle_obs_worker(
     last_tick: list[float] = [monotonic()]
     # パネルキーごとの style warn-once フラグ (fix pass 2, finding 3)。
     # セッション (再接続) をまたいで同じ辞書を使い回す -- フラップのたびに
-    # 作り直すと、同じ壊れた値でも再接続のたびにまた警告してしまう。
+    # 作り直すと、同じ壊れた値でも再接続のたびにまた警告してしまう
+    # (mutation-proven: fix pass 3, finding 1 -- see
+    # test_style_warn_once_persists_across_reconnects_not_just_within_a_session
+    # in tests/test_subtitle_obs.py, which goes RED if this dict is moved
+    # inside the loop below).
     style_warned: dict[str, bool] = {}
     try:
         while True:
