@@ -86,6 +86,8 @@ class PipelineForm(Frame):
         self.config = None
         # widget -> (config_path, coerce fn from widget value to config value)
         self.bindings: dict[Any, tuple[str, Callable[[Any], Any]]] = {}
+        # path -> その欄の見出し Label。readiness の ✗ 印を付けるために持つ。
+        self.labels: dict[str, Any] = {}
         # (box, enable-checkbutton, title, content-frame) per worker section, so
         # the section's fields collapse/expand and its box styling follow the
         # `enable` toggle.
@@ -100,6 +102,7 @@ class PipelineForm(Frame):
         for child in list(self.body.children.values()):
             child.destroy()
         self.bindings.clear()
+        self.labels.clear()
         self._section_enables = []
         self._section_recording()
         self._section_playback()
@@ -136,6 +139,21 @@ class PipelineForm(Frame):
             content.pack(fill=X)
         else:
             content.pack_forget()
+
+    def mark_problems(self, fields: set[str]) -> None:
+        """readiness が問題ありとした欄の見出しに ✗ を付ける。
+
+        「必須か」の判断はしない — 渡された path をそのまま印付けるだけ
+        (権威は vspeech.preflight, ADR-0045)。
+        """
+        for path, label in self.labels.items():
+            if not label.winfo_exists():
+                continue
+            text = label.cget("text").removeprefix("✗ ")
+            if path in fields:
+                label.configure(text=f"✗ {text}", bootstyle="danger")
+            else:
+                label.configure(text=text, bootstyle="default")
 
     def focus_field(self, path: str) -> bool:
         """`path` に束ねた widget へスクロールしてフォーカスする。
@@ -207,7 +225,8 @@ class PipelineForm(Frame):
     def _entry(self, parent: Any, path: str, label: str) -> Frame:
         assert self.config is not None  # nosec B101
         frame = Frame(parent)
-        Label(frame, text=label).pack(fill=X, pady=(6, 0))
+        self.labels[path] = Label(frame, text=label)
+        self.labels[path].pack(fill=X, pady=(6, 0))
         widget = Textbox(frame)
         widget.set(_get(self.config, path))
         widget.bind("<KeyRelease>", lambda _e: self.on_change())
@@ -220,7 +239,8 @@ class PipelineForm(Frame):
     ) -> Frame:
         assert self.config is not None  # nosec B101
         frame = Frame(parent)
-        Label(frame, text=label).pack(fill=X, pady=(6, 0))
+        self.labels[path] = Label(frame, text=label)
+        self.labels[path].pack(fill=X, pady=(6, 0))
         widget = Spinbox(frame, from_=from_, to=to, increment=inc, wrap=True)
         widget.set(_get(self.config, path))
         coerce = int if float(inc).is_integer() else float
@@ -236,7 +256,8 @@ class PipelineForm(Frame):
         assert self.config is not None  # nosec B101
         devices = list_all_devices(input=input, output=not input)
         frame = Frame(parent)
-        Label(frame, text=label).pack(fill=X, pady=(6, 0))
+        self.labels[path] = Label(frame, text=label)
+        self.labels[path].pack(fill=X, pady=(6, 0))
         current = _get(self.config, path)
         if devices:
             combo = AutocompleteCombobox[int](frame)
@@ -287,6 +308,7 @@ class PipelineForm(Frame):
         enable.pack(anchor=W)
         content = Frame(box)
         self._register_section(box, enable, "recording", content)
+        # デバイス (無い/違うと無音になる) を先に、調整つまみを後ろに置く。
         self._device_combo(
             content, "recording.input_device_index", "input device", input=True
         ).pack(fill=X)
@@ -404,8 +426,11 @@ class PipelineForm(Frame):
         enable.pack(anchor=W)
         content = Frame(box)
         self._register_section(box, enable, "vc", content)
+        # 資産パス (無いと起動しない) を先に、調整つまみを後ろに置く。
         self._entry(content, "rvc.model_file", "rvc model_file").pack(fill=X)
         self._entry(content, "rvc.hubert_model_file", "hubert asset dir").pack(fill=X)
-        self._entry(content, "rvc.rmvpe_model_file", "rmvpe model_file").pack(fill=X)
+        self._entry(content, "rvc.rmvpe_model_file", "rvc rmvpe_model_file").pack(
+            fill=X
+        )
         self._spin(content, "rvc.f0_up_key", "f0_up_key", -64, 64, 1).pack(fill=X)
         self._spin(content, "rvc.gpu_id", "gpu_id", 0, 16, 1).pack(fill=X)

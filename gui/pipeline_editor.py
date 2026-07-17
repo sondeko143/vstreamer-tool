@@ -151,10 +151,21 @@ class PipelineEditor(Frame):
         if self.config is None:
             self.readiness = None
             self.panel.clear()
+            # 壊れ config を選ぶとフォームは前 pipeline のまま残る(bind_config を
+            # 呼ばない)。その ✗ 印が居座らないよう消す。
+            self.form.mark_problems(set())
         else:
             self.sync_form_to_config()
             self.readiness = evaluate(self.config)
             self.panel.show(self.readiness)
+            self.form.mark_problems(
+                {
+                    problem.field
+                    for worker in self.readiness.workers
+                    for problem in worker.problems
+                    if problem.field is not None
+                }
+            )
         self._refresh_start_button()
 
     def _focus_field(self, path: str) -> None:
