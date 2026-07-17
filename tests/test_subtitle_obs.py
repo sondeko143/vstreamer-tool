@@ -1710,3 +1710,223 @@ async def test_connect_time_refresh_repoints_panels_to_config_changed_while_conn
     task.cancel()
     with pytest.raises(WorkerShutdown):
         await task
+
+
+# --- fix pass 6: a mutation-based coverage audit swept 24 mutations against
+# vspeech/worker/subtitle_obs.py -- 20 killed, 1 equivalent mutant (ignored),
+# 3 survivors. The production code was correct in all three cases; every one
+# is a *coverage* gap, and all three are the shape this worker keeps
+# producing: a load-bearing line that looks redundant. See task-7-report.md's
+# "Fix pass 6" section for the RED/GREEN proof of each test below.
+
+
+def make_slow_then_failing_identify_client(clock: FakeClock):
+    """`identify()` advances `clock` by 6s (as if a slow round-trip actually
+    took that long) and then always raises a *bare* `ObsProtocolError` --
+    retryable, not the `ObsIdentifyError`/`ObsResourceNotFoundError` pair
+    ADR-0042 fails loud on. fix pass 6, survivor 1: needs identify's own
+    elapsed time to be visible to `subtitle_obs_worker`'s `session_started`
+    measurement, to distinguish where that assignment is placed (after
+    identify succeeds, the production placement, vs. hoisted above it).
+    """
+
+    class Client:
+        def __init__(self, _ws):
+            pass
+
+        async def identify(self, password: str) -> None:
+            clock.advance(6.0)
+            raise subtitle_obs_mod.ObsProtocolError(
+                "identify timed out after a slow round-trip"
+            )
+
+        async def request(self, request_type: str, request_data=None) -> dict:
+            return {}
+
+    return Client
+
+
+async def test_session_started_is_measured_after_identify_succeeds_not_before(
+    monkeypatch,
+):
+    # fix pass 6 (mutation audit), survivor 1 (Highest value): `session_started
+    # = monotonic()` sits *after* `identify()`/`validate_sources()` succeed.
+    # Hoisting it above the identify call leaves all 30 pre-fix-pass-6 tests
+    # green -- both existing backoff tests
+    # (`test_backoff_and_warn_once_survive_a_recurring_post_identify_failure`,
+    # `test_a_healthy_session_dying_resets_backoff_and_warns_again`) use a
+    # *fast* identify (returns instantly), so the measured session duration
+    # never includes identify time either way -- the hoist and the correct
+    # placement are indistinguishable to them. But a slow-but-failing
+    # identify would, if hoisted, look "healthy" (>= SESSION_HEALTHY_SEC) and
+    # reset backoff/warned on *every* retry -- exactly the log-spam-plus-
+    # handshake-churn fix pass 1 finding 2 already fixed once, reproduced one
+    # layer up (inside identify instead of inside SetInputSettings).
+    #
+    # Measured: identify burns 6s (> SESSION_HEALTHY_SEC's 5s) then raises a
+    # bare (retryable) ObsProtocolError, every single attempt.
+    #   production (correct):    sleeps == [0.5, 1.0, 2.0, 4.0, 5.0], 1 warning
+    #   session_started hoisted: sleeps == [0.5] * 5,                 5 warnings
+    clock = FakeClock(0.0)
+    sleeps: list[float] = []
+
+    async def fake_sleep(sec: float) -> None:
+        sleeps.append(sec)
+        if len(sleeps) >= 5:
+            raise asyncio.CancelledError()
+
+    fake_logger = RecordingLogger()
+    monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
+    monkeypatch.setattr(
+        subtitle_obs_mod,
+        "ObsWsClient",
+        make_slow_then_failing_identify_client(clock),
+    )
+    monkeypatch.setattr(subtitle_obs_mod, "sleep", fake_sleep)
+    monkeypatch.setattr(subtitle_obs_mod, "monotonic", clock)
+    monkeypatch.setattr(subtitle_obs_mod, "logger", fake_logger)
+
+    context = SharedContext(config=make_config())
+    context.add_worker(event=EventType.subtitle, configs_depends_on=["subtitle"])
+    in_queue: Queue[WorkerInput] = Queue()
+
+    with pytest.raises(WorkerShutdown):
+        await subtitle_obs_mod.subtitle_obs_worker(context, in_queue)
+
+    assert sleeps == [0.5, 1.0, 2.0, 4.0, 5.0]
+    reach_warnings = [w for w in fake_logger.warnings if "cannot reach" in w]
+    assert len(reach_warnings) == 1
+
+
+async def test_age_across_outage_updates_last_tick_so_the_outage_is_not_double_counted(
+    monkeypatch,
+):
+    # fix pass 6 (mutation audit), survivor 2: fix pass 4 already pinned
+    # `_run_session`'s identical `last_tick[0] = now` line (via
+    # `test_two_messages_within_min_display_sec_coexist_instead_of_the_second_wiping_the_first`)
+    # -- `_age_across_outage`'s own copy, the one that runs once per
+    # reconnect (right before the connect-time `_push_all_text`), was never
+    # separately covered. Without it, the *next* aging (the first turn of
+    # `_run_session` in the new session) computes its elapsed time against
+    # the same pre-outage `last_tick[0]` `_age_across_outage` just read from
+    # -- double-counting the whole outage the instant a message lands, and
+    # wiping text that had genuinely survived it.
+    #
+    # A 10-char subtitle ("BBBBBBBBBB", with `min_display_sec` raised to 5s
+    # so it has enough headroom to survive one 3s outage but not two) is
+    # displayed, OBS dies right on that push, and a 3s outage follows
+    # (simulated via a patched `sleep`) with "CCC" already queued by the time
+    # OBS reconnects.
+    #   production: the outage ages the display down to 2s remaining once
+    #     (survives) -- CCC then joins it ("CCC BBBBBBBBBB"), and it expires
+    #     naturally afterward ("CCC" alone).
+    #   `_age_across_outage`'s `last_tick[0] = now` dropped: the surviving
+    #     display gets aged by the *same* 3s outage a second time the
+    #     instant CCC's turn runs (2s - 3s <= 0) -- wiped before it can ever
+    #     join CCC, which is instead pushed alone, twice in a row (the aged
+    #     panel's own push, then the freshly-ingested one -- both already
+    #     "CCC", see _run_session's comment on that redundancy).
+    clock = FakeClock(0.0)
+    pushed: list[tuple[int, str, str]] = []
+    bbb_text = "BBBBBBBBBB"
+
+    async def fake_sleep(sec: float) -> None:
+        clock.advance(3.0)  # a single 3s outage, no real delay.
+
+    monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
+    monkeypatch.setattr(
+        subtitle_obs_mod, "ObsWsClient", make_tick_hoist_client(pushed, bbb_text)
+    )
+    monkeypatch.setattr(subtitle_obs_mod, "sleep", fake_sleep)
+    monkeypatch.setattr(subtitle_obs_mod, "monotonic", clock)
+
+    config = make_config()
+    config.subtitle.text.min_display_sec = 5.0
+    context = SharedContext(config=config)
+    worker_meta = context.add_worker(
+        event=EventType.subtitle, configs_depends_on=["subtitle"]
+    )
+    in_queue: Queue[WorkerInput] = Queue()
+    monkeypatch.setattr(
+        subtitle_obs_mod, "wait_for", make_fake_wait_for(in_queue, clock)
+    )
+
+    task = asyncio.create_task(
+        subtitle_obs_mod.subtitle_obs_worker(context, in_queue),
+        name=worker_meta.event.name,
+    )
+    await _settle()  # session 0 connects; parked on the empty queue (timeout=None)
+
+    await in_queue.put(make_message(bbb_text))
+    # "CCC" is queued *before* the crash+reconnect settles below, not after:
+    # _settle()'s tick budget is generous enough to run session 0's crash,
+    # the whole outage, session 1's reconnect, *and* BBB's own natural
+    # expiry-via-timeout all in one shot if the queue is empty at that point
+    # (fake_wait_for's empty-queue branch never really blocks). Queuing "CCC"
+    # first (FIFO, so it waits behind BBB) guarantees it is still sitting
+    # there -- not yet consumed by a fake timeout -- the instant session 1's
+    # first _run_session turn actually checks the queue.
+    await in_queue.put(make_message("CCC"))
+    await _settle()  # BBB is ingested and pushed (crash trigger) -> session 0
+    # dies; the fake_sleep "outage" advances the clock by 3s; session 1
+    # reconnects, ages BBB down to 2s remaining (survives), re-pushes it,
+    # then its first _run_session turn dequeues "CCC" (already queued, so
+    # fake_wait_for hands it back with zero elapsed time).
+
+    session1_text_pushes = [
+        text
+        for session, source, text in pushed
+        if source == "vspeech-text" and session == 1
+    ]
+    # unfixed (drop _age_across_outage's last_tick[0] = now), this is instead
+    # [bbb_text, "CCC", "CCC"] (measured): the surviving BBB gets aged a
+    # second time for the same outage the instant CCC's turn runs, expiring
+    # before it can ever join CCC.
+    assert session1_text_pushes[:3] == [bbb_text, f"CCC {bbb_text}", "CCC"]
+
+    task.cancel()
+    with pytest.raises(WorkerShutdown):
+        await task
+
+
+async def test_refresh_panel_configs_repoints_anchor_not_just_config():
+    # fix pass 6 (mutation audit), survivor 3: the two `.anchor = ...`
+    # re-points in `_refresh_panel_configs` look redundant -- `ts.config
+    # .anchor` is sitting right there, one line up. They are not: `Texts
+    # .texts` (the join-order property `push_text` sends) reads `ts.anchor`,
+    # a *separate* dataclass field frozen at whatever `make_panels`/the last
+    # refresh set it to; `build_text_settings` (the style push, via
+    # `ts.config`) reads `ts.config.anchor` straight off the live config
+    # object instead. Re-pointing `.config` alone therefore fixes the
+    # *style* (valign) immediately but leaves the *join order* stuck on the
+    # pre-reload anchor -- see the matching comment at the two lines
+    # themselves in subtitle_obs.py.
+    #
+    # Reload changes panel "n"'s anchor "s" -> "n" ("s" makes `Texts.texts`
+    # join newest-first; without "s" it joins in insertion order).
+    #   production: valign="top" (from the new anchor) and text="AAA BBB"
+    #     (insertion order, correctly following the new anchor).
+    #   the two `.anchor` re-points dropped: valign stays "top" (unaffected
+    #     -- `build_text_settings` never reads `ts.anchor`) but text reverts
+    #     to "BBB AAA" -- OBS rendering top-anchored content in
+    #     bottom-anchored join order.
+    config = make_config()  # default: subtitle.text.anchor == "s"
+    panels = make_panels(config.subtitle)
+    from vspeech.lib.subtitle_state import ingest_text
+
+    ingest_text(panels, make_message("AAA"))
+    ingest_text(panels, make_message("BBB"))
+
+    new_config = config.model_copy(deep=True)  # mirrors lib/command.py's
+    # `context.config = new_config` reload rebind
+    new_config.subtitle.text.anchor = "n"
+    context = SharedContext(config=new_config)
+
+    subtitle_obs_mod._refresh_panel_configs(context, panels)
+
+    client = FakeObsClient()
+    await subtitle_obs_mod._push_panel_style(
+        client, new_config.subtitle, "n", panels["n"]
+    )
+    assert client.settings_for("vspeech-text")[0]["valign"] == "top"
+    assert panels["n"].texts == "AAA BBB"

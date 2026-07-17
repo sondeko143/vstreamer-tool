@@ -234,8 +234,15 @@ async def _push_all_text(
 
 def _refresh_panel_configs(context: SharedContext, panels: dict[str, Texts]) -> None:
     panels["n"].config = context.config.subtitle.text
+    # Not redundant with the line above (fix pass 6, survivor 3, measured):
+    # Texts.texts (the join order push_text sends) reads ts.anchor directly,
+    # while build_text_settings (the style push) reads ts.config.anchor --
+    # two different attributes that happen to start in sync. Re-pointing
+    # .config alone fixes the style but leaves the join order on the
+    # pre-reload anchor.
     panels["n"].anchor = context.config.subtitle.text.anchor
     panels["s"].config = context.config.subtitle.translated
+    # See the "n" panel's comment above -- same reason, same non-redundancy.
     panels["s"].anchor = context.config.subtitle.translated.anchor
 
 
