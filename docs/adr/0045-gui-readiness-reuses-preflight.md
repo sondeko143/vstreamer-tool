@@ -1,6 +1,6 @@
 # 0045. GUI の起動前 readiness は vspeech.preflight を単一の権威として再利用する（GUI 側に必須項目マップを持たない）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-17
 - Related: spec [2026-07-16-gui-run-readiness-design.md](../superpowers/specs/2026-07-16-gui-run-readiness-design.md); [ADR-0038](0038-worker-config-preflight-fail-loud.md)（起動時 preflight の fail-loud、本 ADR が再利用する権威）; [ADR-0032](0032-gui-multi-pipeline-rewrite.md)（gui → vspeech の一方向依存）
 

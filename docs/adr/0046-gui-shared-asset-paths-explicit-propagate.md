@@ -1,6 +1,6 @@
 # 0046. マシン共通の素材パスは default.toml で編集し明示 propagate する（pipeline config の自己完結を保つ）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-17
 - Related: spec [2026-07-16-gui-run-readiness-design.md](../superpowers/specs/2026-07-16-gui-run-readiness-design.md); [ADR-0032](0032-gui-multi-pipeline-rewrite.md)（1 pipeline = 1 独立サブプロセス = 1 専用 Config）; [ADR-0045](0045-gui-readiness-reuses-preflight.md)
 

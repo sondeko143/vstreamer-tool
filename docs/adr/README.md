@@ -62,5 +62,5 @@
 | [0042](0042-subtitle-obs-failure-tiers.md) | OBS 接続の失敗を「観測できたものだけ即死」で階層化する（0038 を refine） | Accepted | 2026-07-16 |
 | [0043](0043-obs-websocket-client-in-house.md) | obs-websocket クライアントを websockets 上に自前実装する（simpleobsws を却下） | Accepted | 2026-07-16 |
 | [0044](0044-font-size-tk-points-to-obs-lfheight.md) | font_size を Tk の符号規約のまま OBS へ渡し正値だけ 96 DPI でピクセル換算する（0041 を refine） | Accepted (refines 0041) | 2026-07-17 |
-| [0045](0045-gui-readiness-reuses-preflight.md) | GUI の起動前 readiness は vspeech.preflight を単一の権威として再利用する（GUI 側に必須項目マップを持たない、0038 を再利用） | Proposed | 2026-07-17 |
-| [0046](0046-gui-shared-asset-paths-explicit-propagate.md) | マシン共通の素材パスは default.toml で編集し明示 propagate する（pipeline config の自己完結を保つ、0032 を維持） | Proposed | 2026-07-17 |
+| [0045](0045-gui-readiness-reuses-preflight.md) | GUI の起動前 readiness は vspeech.preflight を単一の権威として再利用する（GUI 側に必須項目マップを持たない、0038 を再利用） | Accepted | 2026-07-17 |
+| [0046](0046-gui-shared-asset-paths-explicit-propagate.md) | マシン共通の素材パスは default.toml で編集し明示 propagate する（pipeline config の自己完結を保つ、0032 を維持） | Accepted | 2026-07-17 |
