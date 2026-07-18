@@ -21,6 +21,24 @@ from websockets.frames import Close
 
 RPC_VERSION = 1
 
+# Identify の eventSubscriptions に載せる値 (EventSubscription::None)。
+#
+# このモジュールはイベントを一切使わない (先頭の docstring 参照) が、それは
+# 「購読しない」ことを OBS に伝えて初めて成立する: obs-websocket はこのキーを
+# 省略されると EventSubscription::All とみなす (プロトコル文書の Identify:
+# `"eventSubscriptions": number(optional) = (EventSubscription::All)`)。
+# 黙っている限り OBS は op 5 のイベントを押し続け、こちらは request() が
+# 応答待ちで recv() している間しか読まない (それ以外の時間、subtitle worker は
+# 自分の in_queue で止まっている) ので、読まれないフレームが溜まる一方になる。
+#
+# 溜まった先が問題で、症状は原因とまるで似ていない: 16 フレーム
+# (websockets の max_queue 既定値) を超えると Assembler が
+# transport.pause_reading() を呼び、以後 *あらゆる* フレームの解析が止まる
+# -- Pong も含めて。すると keepalive() は ping_timeout 内に pong を受け取れず、
+# 自分で 1011 "keepalive ping timeout" を送って接続を切る。ローカルホスト
+# 相手に「ping が timeout した」という、原因を指していないログだけが残る。
+EVENT_SUBSCRIPTION_NONE = 0
+
 OP_HELLO = 0
 OP_IDENTIFY = 1
 OP_IDENTIFIED = 2
@@ -271,7 +289,13 @@ class ObsWsClient:
                     f"Hello を期待したが op={_bounded_repr(message['op'])} が来た"
                 )
             hello_data = message["d"]
-            d: dict[str, Any] = {"rpcVersion": RPC_VERSION}
+            d: dict[str, Any] = {
+                "rpcVersion": RPC_VERSION,
+                # 省略は「購読しない」ではなく All。EVENT_SUBSCRIPTION_NONE の
+                # コメント参照 -- 黙ると誰も読まないイベントが溜まり、最終的に
+                # keepalive の ping timeout として現れる。
+                "eventSubscriptions": EVENT_SUBSCRIPTION_NONE,
+            }
             # 「authentication キーが無い」と「あるが偽値」を区別する: obs-websocket
             # は認証が要る場合にのみこのキーを載せる。真偽 (`if auth:`) で判定すると
             # `{}` / `[]` / `0` / `false` / `""` を「認証不要」と誤読して無認証の

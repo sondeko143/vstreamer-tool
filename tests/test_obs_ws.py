@@ -168,14 +168,48 @@ async def test_identify_sends_rpc_version_and_auth():
     server = FakeObsServer()
     await ObsWsClient(server).identify(AUTH_PASSWORD)
     assert server.sent == [
-        {"op": 1, "d": {"rpcVersion": 1, "authentication": AUTH_EXPECTED}}
+        {
+            "op": 1,
+            "d": {
+                "rpcVersion": 1,
+                "eventSubscriptions": 0,
+                "authentication": AUTH_EXPECTED,
+            },
+        }
     ]
 
 
 async def test_identify_omits_auth_when_server_does_not_ask():
     server = FakeObsServer(require_auth=False)
     await ObsWsClient(server).identify("")
-    assert server.sent == [{"op": 1, "d": {"rpcVersion": 1}}]
+    assert server.sent == [{"op": 1, "d": {"rpcVersion": 1, "eventSubscriptions": 0}}]
+
+
+async def test_identify_unsubscribes_from_all_events():
+    """Identify must say eventSubscriptions=0, not just omit it.
+
+    Omitting it is not "no events": obs-websocket documents the default as
+    EventSubscription::All, so OBS starts pushing op-5 event frames at a client
+    that never reads them -- this module only ever recv()s while a request is in
+    flight (ObsWsClient.request), and the subtitle worker spends the rest of its
+    life blocked on its own in_queue.
+
+    Those unread frames are what actually killed the connection, and the failure
+    looks nothing like its cause: after 16 of them (websockets' default
+    max_queue high-water mark) the Assembler calls transport.pause_reading(),
+    which stops parsing *every* frame including Pong. keepalive() then gets no
+    pong within ping_timeout and fails the connection itself with
+    1011 "keepalive ping timeout" -- on a loopback socket, where a real network
+    timeout is not a plausible reading. Observed in production as a subtitle
+    reconnect after each long idle gap (short gaps survived only because each
+    subtitle push happens to drain the backlog).
+
+    Asserting on the exact payload rather than just the key, so that a future
+    edit cannot quietly widen the subscription back to a firehose nobody drains.
+    """
+    server = FakeObsServer(require_auth=False)
+    await ObsWsClient(server).identify("")
+    assert server.sent == [{"op": 1, "d": {"rpcVersion": 1, "eventSubscriptions": 0}}]
 
 
 async def test_identify_raises_when_server_wants_auth_but_password_is_empty():
