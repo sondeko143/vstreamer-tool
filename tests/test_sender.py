@@ -68,7 +68,7 @@ def fake_transport(monkeypatch, process):
         async def close(self, grace=None):
             self.closed = True
 
-    def fake_get_channel(remote, credentials):
+    async def fake_get_channel(remote, credentials):
         ch = FakeChannel(remote)
         state["channels"].append(ch)
         return ch
@@ -224,7 +224,7 @@ def test_dispatch_empty_remote_uses_local_process_command():
     assert wi.text == "hello"
 
 
-def test_get_channel_insecure_bounds_reconnect_backoff(monkeypatch):
+async def test_get_channel_insecure_bounds_reconnect_backoff(monkeypatch):
     """An insecure channel must be opened with a bounded reconnect backoff so a
     sender started before its receiver recovers promptly once the receiver is up,
     instead of waiting out gRPC's default backoff (min 20s / max 120s)."""
@@ -236,7 +236,7 @@ def test_get_channel_insecure_bounds_reconnect_backoff(monkeypatch):
         return object()
 
     monkeypatch.setattr(sender_mod, "insecure_channel", fake_insecure_channel)
-    sender_mod.get_channel("//windesk:8083", None)
+    await sender_mod.get_channel("//windesk:8083", None)
     opts = dict(captured["options"] or [])
     # Bounded well below gRPC defaults (min 20000 / max 120000).
     assert opts["grpc.max_reconnect_backoff_ms"] <= 10_000
@@ -244,7 +244,7 @@ def test_get_channel_insecure_bounds_reconnect_backoff(monkeypatch):
     assert "grpc.initial_reconnect_backoff_ms" in opts
 
 
-def test_get_channel_secure_bounds_reconnect_backoff(monkeypatch):
+async def test_get_channel_secure_bounds_reconnect_backoff(monkeypatch):
     """The secure (GCP-authorized) channel path must bound the backoff too."""
     captured: dict = {}
 
@@ -262,7 +262,7 @@ def test_get_channel_secure_bounds_reconnect_backoff(monkeypatch):
         def refresh(self, request):
             pass
 
-    sender_mod.get_channel(
+    await sender_mod.get_channel(
         "https://securehost/", cast(GcpIDTokenCredentials, FakeCred())
     )
     opts = dict(captured["options"] or [])

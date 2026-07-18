@@ -189,6 +189,91 @@ def test_auth_session_does_not_swallow_retry_after_responses():
         server.server_close()
 
 
+def test_auth_session_caps_each_attempt_timeout():
+    """1 試行あたりの時間に上限をかけていること。
+
+    google.auth はトークン更新の POST に timeout を渡さず、`Request.__call__` の
+    既定 120 秒が効く。そこへ retry を足すと最悪時間が試行回数ぶん伸び、応答を
+    返さないエンドポイント相手では gRPC の認証スレッドが積み上がる。この上限は
+    「retry を足してもなお修正前より短い」を成立させている当の仕掛けなのに、
+    まったくテストされていなかった (上限を 100000 秒にしても全部 GREEN だった)。
+    """
+    from unittest.mock import patch
+
+    from requests import Request as RequestsRequest
+    from requests.adapters import HTTPAdapter
+
+    from vspeech.lib.gcp import _AUTH_REQUEST_TIMEOUT_SEC
+    from vspeech.lib.gcp import build_auth_session
+
+    adapter = build_auth_session().get_adapter("https://oauth2.googleapis.com/token")
+    prepared = RequestsRequest("POST", "https://oauth2.googleapis.com/token").prepare()
+
+    seen: list[float] = []
+    with patch.object(HTTPAdapter, "send", return_value=None) as parent_send:
+        # google.auth が実際に渡してくる形 (既定 120 秒) と、渡されない形。
+        for given in (120.0, None, (120.0, 120.0)):
+            adapter.send(prepared, timeout=given)
+        for call in parent_send.call_args_list:
+            value = call.kwargs["timeout"]
+            seen.extend(value if isinstance(value, tuple) else [value])
+
+    assert seen, "adapter.send never reached the parent"
+    assert all(v <= _AUTH_REQUEST_TIMEOUT_SEC for v in seen)
+    # 上限が実質無しに緩められたら落ちるよう、絶対値でも縛る。
+    assert _AUTH_REQUEST_TIMEOUT_SEC <= 30.0
+
+
+def test_compute_engine_id_token_credentials_use_the_retrying_session(monkeypatch):
+    """CE credentials の Request も retry 付きであること。
+
+    ここの Request は `iam.Signer` に抱え込まれ、更新のたびにメタデータ GET と
+    iamcredentials への signBlob POST を、トークン POST より **先に** 行う。
+    素の Request() だとその 2 本が retry 無しのままで、1 回の更新に走る 3 本の
+    うち 1 本しか直っていない状態になる (実測でそうなっていた)。
+    """
+    from typing import Any
+
+    from vspeech.config import GcpConfig
+    from vspeech.lib import gcp
+    from vspeech.lib.gcp import _AUTH_RETRY
+
+    captured: dict[str, Any] = {}
+
+    def fake_ce_id_token_credentials(request, target_audience):
+        captured["request"] = request
+        return object()
+
+    monkeypatch.setattr(gcp, "CeIdTokenCredentials", fake_ce_id_token_credentials)
+    config = GcpConfig()
+    config.use_ce_credentials = True
+    gcp.get_id_token_credentials(config)
+
+    session = captured["request"].session
+    adapter = session.get_adapter("https://iamcredentials.googleapis.com/")
+    assert adapter.max_retries is _AUTH_RETRY
+    # メタデータサーバは http:// なので、そちらにも同じ adapter が要る。
+    assert session.get_adapter("http://metadata.google.internal/") is adapter
+
+
+def test_create_auth_channel_requires_a_running_loop():
+    """実行中のループが無いまま呼んだら声を上げること。
+
+    grpc.aio のチャネルは生成時点のループに束縛されるが、ループが走って
+    いなくても例外にはならず、走っていない新しいループが黙って結び付き、
+    以後の RPC が永久に返らなくなる。preflight (ADR-0045) は同期なので、
+    そこに GCP の生存確認を足した誰かが静かに踏みうる。
+    """
+    from google.auth.credentials import AnonymousCredentials
+
+    from vspeech.lib.gcp import create_auth_channel
+
+    with pytest.raises(RuntimeError):
+        create_auth_channel(
+            AnonymousCredentials(), host="translate.googleapis.com", scopes=()
+        )
+
+
 def test_auth_plugin_applies_the_service_scopes():
     """api_core と同じ scopes を credentials に適用していること。
 
@@ -291,7 +376,7 @@ async def test_speech_client_authenticates_through_the_retrying_channel(monkeypa
 
     def spy(credentials, host, scopes, options=()):
         channel = original(credentials, host=host, scopes=scopes, options=options)
-        built.update(channel=channel, host=host, options=options)
+        built.update(channel=channel, host=host, scopes=scopes, options=options)
         return channel
 
     monkeypatch.setattr(transcription, "create_auth_channel", spy)
@@ -301,6 +386,11 @@ async def test_speech_client_authenticates_through_the_retrying_channel(monkeypa
     assert isinstance(transport, SpeechGrpcAsyncIOTransport)
     assert transport.grpc_channel is built["channel"]
     assert built["host"] == "speech.googleapis.com"
+    # scopes まで見ること。Speech は cloud-platform だけ、Translate は
+    # cloud-translation も持つ別物なので、host だけ見ていると Translate の
+    # scopes を渡す取り違えが素通りする (共有定数の導入でその取り違えは
+    # 起きやすくなっている)。
+    assert built["scopes"] == SpeechGrpcAsyncIOTransport.AUTH_SCOPES
     assert dict(built["options"])["grpc.max_receive_message_length"] == -1
 
 
@@ -313,8 +403,12 @@ async def _start_and_stop(generator):
     """
     from asyncio import wait_for
 
+    # timeout はどれだけ短くてもよい: ワーカーは最初の await に達する前に
+    # 同期でクライアントを構築し、その後 `in_queue.get()` で永久に待つので、
+    # この wait_for は必ずタイムアウトする (= 決まった長さの sleep)。1 秒に
+    # すると 2 テストで 2 秒を捨てるだけなので短く取る。
     try:
-        await wait_for(generator.__anext__(), timeout=1.0)
+        await wait_for(generator.__anext__(), timeout=0.05)
     except TimeoutError:
         pass
     finally:
@@ -375,21 +469,47 @@ async def test_transcription_worker_builds_its_client_through_the_factory(monkey
     assert used.get("via_factory") is True
 
 
-def test_sender_id_token_channel_refreshes_over_the_retrying_session(monkeypatch):
-    """sender の ID トークン経路も retry 付き session で更新すること。
+async def test_sender_secure_channel_authenticates_with_the_retrying_session(
+    monkeypatch,
+):
+    """sender の ID トークン経路を、**本物の** チャネル組み立てごと検証する。
 
-    `get_channel` が作る 1 個の `Request` は 2 箇所で効く: 直下の初回 refresh と、
-    `async_secure_authorized_channel` が組む plugin が以後行う更新。後者は
-    plugin 経由なので、plugin が掴んでいる session を見て確かめる。
+    以前ここにあったテストは `async_secure_authorized_channel` 自体を差し替えて
+    いたため、修正の継ぎ目 (`AuthMetadataPlugin(credentials, request)`) が
+    assertion の下を一度も通っていなかった。その結果、その行を
+    `AuthMetadataPlugin(credentials, Request())` に戻して本番のバグを丸ごと
+    復活させても 557 件全部 GREEN のままだった (実測)。差し替えるのは grpc の
+    `secure_channel` だけに留め、認証の組み立ては本物を走らせる。
+
+    同時に「認証がチャネルに載っていること」も見る: `composite_credentials` を
+    `ssl_credentials` だけにする (= 資格情報を一切送らなくなる) 変異も、
+    以前は全テスト GREEN のまま通っていた。
     """
     from typing import Any
-    from typing import cast
 
     from vspeech.lib.gcp import _AUTH_RETRY
-    from vspeech.lib.gcp import GcpIDTokenCredentials
     from vspeech.worker import sender
 
     captured: dict[str, Any] = {}
+    real_plugin = sender.AuthMetadataPlugin
+    real_composite = sender.composite_channel_credentials
+
+    def spy_plugin(credentials, request):
+        captured["plugin_request"] = request
+        return real_plugin(credentials, request)
+
+    def spy_composite(ssl_credentials, call_credentials):
+        composed = real_composite(ssl_credentials, call_credentials)
+        captured["composed"] = composed
+        return composed
+
+    def fake_secure_channel(target, credentials, options=None):
+        captured["channel_credentials"] = credentials
+        return object()
+
+    monkeypatch.setattr(sender, "AuthMetadataPlugin", spy_plugin)
+    monkeypatch.setattr(sender, "composite_channel_credentials", spy_composite)
+    monkeypatch.setattr(sender, "secure_channel", fake_secure_channel)
 
     class FakeIdTokenCredentials:
         def with_target_audience(self, audience):
@@ -398,18 +518,19 @@ def test_sender_id_token_channel_refreshes_over_the_retrying_session(monkeypatch
         def refresh(self, request):
             captured["refresh_request"] = request
 
-    def fake_channel(credentials, request, target):
-        captured["plugin_request"] = request
-        return "channel"
+    from typing import cast
 
-    monkeypatch.setattr(sender, "async_secure_authorized_channel", fake_channel)
-    sender.get_channel(
-        "https://example.invalid:443",
-        cast(GcpIDTokenCredentials, FakeIdTokenCredentials()),
+    from vspeech.lib.gcp import GcpIDTokenCredentials
+
+    await sender.get_channel(
+        "https://securehost/", cast(GcpIDTokenCredentials, FakeIdTokenCredentials())
     )
 
-    # 初回 refresh と plugin が同じ Request を共有していること。
-    assert captured["refresh_request"] is captured["plugin_request"]
-    session = captured["plugin_request"].session
-    adapter = session.get_adapter("https://oauth2.googleapis.com/token")
+    # 以後の更新を行う plugin が retry 付き session を持っていること。
+    plugin_request = captured["plugin_request"]
+    adapter = plugin_request.session.get_adapter("https://oauth2.googleapis.com/token")
     assert adapter.max_retries is _AUTH_RETRY
+    # 初回 refresh と plugin が同じ Request を共有していること。
+    assert captured["refresh_request"] is plugin_request
+    # 認証がチャネルに実際に載っていること (ssl だけに落ちていない)。
+    assert captured["channel_credentials"] is captured["composed"]

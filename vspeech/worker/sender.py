@@ -3,6 +3,7 @@ from asyncio import Queue
 from asyncio import QueueEmpty
 from asyncio import QueueFull
 from asyncio import TaskGroup
+from asyncio import to_thread
 from collections.abc import Callable
 from typing import cast
 from urllib.parse import urlparse
@@ -65,7 +66,16 @@ def async_secure_authorized_channel(
     )
 
 
-def get_channel(address: str, credentials: GcpIDTokenCredentials | None):
+async def get_channel(address: str, credentials: GcpIDTokenCredentials | None):
+    """宛先ごとのチャネルを作る。
+
+    async なのは下の初回 `refresh()` のため。あれは requests での同期 HTTP で、
+    `_send` (イベントループ上) から呼ばれるので、そのまま呼ぶとループ全体が
+    止まる -- receiver の aio サーバも playback も vc も巻き添えになる。
+    retry を積んだぶん最悪時間が伸びた (ADR-0048) ので、なおさら手放せない:
+    実測でループが 1.5 秒止まり、最悪では約 85 秒になりうる。ADR-0004 が
+    「宛先間ブロックが消えた」と書いた性質も、ループが止まっては意味がない。
+    """
     url = urlparse(address)
     secure_port = url.scheme == "https" or url.port == 443
     if secure_port and credentials:
@@ -78,7 +88,9 @@ def get_channel(address: str, credentials: GcpIDTokenCredentials | None):
         id_token_cred: GcpIDTokenCredentials = credentials.with_target_audience(
             f"https://{url.hostname}/"
         )
-        id_token_cred.refresh(request)
+        # requests での同期 HTTP。イベントループを塞がないようスレッドへ出す
+        # (この関数が async である理由。docstring 参照)。
+        await to_thread(id_token_cred.refresh, request)
         return async_secure_authorized_channel(
             credentials=id_token_cred, request=request, target=address.strip("/")
         )
@@ -119,7 +131,7 @@ class RemoteSender:
     async def _send(self, command: Command):
         try:
             if self.channel is None:
-                self.channel = get_channel(self.remote, self.credentials)
+                self.channel = await get_channel(self.remote, self.credentials)
             stub = CommanderStub(self.channel)
             logger.info(
                 "send: s(%s), t(%s), to %s",

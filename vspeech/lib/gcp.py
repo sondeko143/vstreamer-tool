@@ -110,10 +110,13 @@ def build_auth_session() -> Session:
     """
     session = Session()
     adapter = _BoundedTimeoutAdapter(max_retries=_AUTH_RETRY)
-    # 実運用のトークンエンドポイントは https のみ。http も同じ adapter を
-    # mount するのはテスト用だが、**両方に同一の adapter を張ること**自体が
-    # 要件でもある: 別々にすると、テストが叩く http:// 側だけ retry が付いて
-    # いて本番の https:// 側は素、という状態がテスト GREEN のまま成立する。
+    # http:// も本番で効く経路であって、テスト専用ではない: compute engine の
+    # credentials はメタデータサーバ (http://metadata.google.internal) を
+    # この session で叩く。
+    #
+    # 加えて、**両方に同一の adapter を張ること**自体が要件でもある: 別々に
+    # すると、テストが叩く http:// 側だけ retry が付いていて本番の https:// 側は
+    # 素、という状態がテスト GREEN のまま成立する。
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
@@ -189,6 +192,15 @@ def unescape_private_key(service_account_info: ServiceAccountInfo):
 
 
 def get_credentials(config: GcpConfig) -> tuple[Credentials | CeCredentials, str]:
+    """サービスアカウントの読み込みに `scopes=` を渡さないこと (ADR-0048)。
+
+    スコープを付けないサービスアカウントは、トークンを audience ベースの
+    self-signed JWT としてローカルで組み立てる -- ネットワークに出ない。
+    `scopes=` を渡した瞬間その分岐から外れ、1 時間ごとに
+    oauth2.googleapis.com へ往復するようになる。つまり ADR-0048 がまさに
+    問題にしている経路が、設定を足しただけで静かに復活する
+    (`service_account.py` の `_use_self_signed_jwt` 参照)。
+    """
     if config.service_account_file_path:
         file_path = config.service_account_file_path.expanduser()
         cred = Credentials.from_service_account_file(file_path)
@@ -225,7 +237,15 @@ def get_id_token_credentials(
         # before raising TransportError, stalling sender worker startup. Only
         # pay that cost when the user has explicitly opted into CE credentials.
         try:
-            return CeIdTokenCredentials(request=Request(), target_audience="")
+            # ここの Request は 1 回の更新で 3 本の HTTP を張る経路に埋まる:
+            # `iam.Signer` がこれを抱え込み (`iam.py`)、更新のたびに
+            # メタデータサーバへの GET と iamcredentials.googleapis.com への
+            # signBlob POST を、この後のトークン POST より **先に** 行う。
+            # 素の Request() だとその 2 本が retry 無しのままなので、同じ
+            # stale-pool の窓が残る (ADR-0048)。
+            return CeIdTokenCredentials(
+                request=Request(session=build_auth_session()), target_audience=""
+            )
         except TransportError:
             return None
     else:
