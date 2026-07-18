@@ -353,6 +353,7 @@ def main(profile_dir: Path | None, theme: str):
     root = Window(themename=theme)
     root.title("vspeech pipelines")
     root.geometry("900x760")
+    root.minsize(760, 640)
     app = App(root, profile_dir)
     root.protocol("WM_DELETE_WINDOW", app.on_close)
     root.mainloop()

@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from tkinter import BOTH
+from tkinter import BOTTOM
 from tkinter import DISABLED
 from tkinter import END
 from tkinter import LEFT
@@ -65,7 +66,6 @@ class PipelineEditor(Frame):
         self.panel.pack(fill=X)
 
         notebook = Notebook(self)
-        notebook.pack(fill=BOTH, expand=True)
         self.form = PipelineForm(notebook, on_change=self.on_dirty)
         self.raw = RawTomlEditor(notebook)
         notebook.add(self.form, text="Form")
@@ -74,7 +74,6 @@ class PipelineEditor(Frame):
         notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         controls = Frame(self)
-        controls.pack(fill=X)
         self.start_bt = Button(controls, text="Start", command=self._start_click)
         self.start_bt.pack(side=LEFT, padx=4, pady=4)
         self.stop_bt = Button(
@@ -99,7 +98,6 @@ class PipelineEditor(Frame):
         self.save_bt.pack(side=LEFT, padx=4)
 
         send_frame = Frame(self)
-        send_frame.pack(fill=X)
         self.send_entry = Textbox(send_frame)
         self.send_entry.pack(side=LEFT, fill=X, expand=True, padx=4)
         Button(send_frame, text="send", command=self._send_click).pack(
@@ -107,7 +105,14 @@ class PipelineEditor(Frame):
         )
 
         self.log = ScrolledText(self, height=10, state=DISABLED)
-        self.log.pack(fill=BOTH, expand=True)
+        # アクションバー・送信・ログを下端に固定し、フォーム(内部スクロール)だけが
+        # 中央で伸縮するようにする。bottom-up に pack するので視覚順は
+        # controls → send → log。readiness パネルや ✗ 行でフォームが伸びても
+        # Start/Save ボタンが画面外へ押し出されない。
+        self.log.pack(side=BOTTOM, fill=X)
+        send_frame.pack(side=BOTTOM, fill=X)
+        controls.pack(side=BOTTOM, fill=X)
+        notebook.pack(fill=BOTH, expand=True)
         self._refresh_start_button()
 
     # --- button clicks delegate to App-provided callbacks ---------------

@@ -54,9 +54,17 @@ def configure_logger(config: Config):
     log_file_format = logging.Formatter(
         "%(asctime)s %(thread)s[%(task)s] %(levelname)s : %(message)s"
     )
-    log_sout_format = ColoredFormatter(
-        "%(asctime)s %(log_color)s%(levelname).4s%(reset)s %(thread)s[%(task)s]  : %(message)s"
-    )
+    # stdout がパイプ/リダイレクト (GUI サブプロセス) だと ColoredFormatter の
+    # ANSI エスケープがそのまま読み手に出てゴミになる。TTY のときだけ色を付け、
+    # 非 TTY では色コードを含まない素のフォーマッタにする。
+    if stdout.isatty():
+        log_sout_format: logging.Formatter = ColoredFormatter(
+            "%(asctime)s %(log_color)s%(levelname).4s%(reset)s %(thread)s[%(task)s]  : %(message)s"
+        )
+    else:
+        log_sout_format = logging.Formatter(
+            "%(asctime)s %(levelname).4s %(thread)s[%(task)s]  : %(message)s"
+        )
     now = datetime.now()
     filename = now.strftime(config.log_file.replace("%%", "%"))
     if filename:
