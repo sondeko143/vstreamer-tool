@@ -16,10 +16,12 @@ from wave import open as wav_open
 
 from aiofiles import open as aio_open
 from google.api_core.exceptions import GoogleAPICallError
+from google.auth.credentials import Credentials as BaseCredentials
 from google.cloud.speech import RecognitionAudio
 from google.cloud.speech import RecognitionConfig
 from google.cloud.speech import RecognizeRequest
 from google.cloud.speech import SpeechAsyncClient
+from google.cloud.speech_v1.services.speech.transports import SpeechGrpcAsyncIOTransport
 from grpc.aio import AioRpcError
 from httpx import AsyncClient
 from httpx import HTTPError
@@ -35,6 +37,8 @@ from vspeech.config import get_sample_size
 from vspeech.exceptions import shutdown_worker
 from vspeech.exceptions import worker_startup
 from vspeech.lib.ami import parse_response
+from vspeech.lib.gcp import GAPIC_DEFAULT_CHANNEL_OPTIONS
+from vspeech.lib.gcp import create_auth_channel
 from vspeech.lib.gcp import get_credentials
 from vspeech.lib.telemetry import telemetry
 from vspeech.lib.vad import create_vad_session
@@ -284,6 +288,27 @@ def wav(sound: SoundInput, sample_size: int):
     return temp_wav
 
 
+def create_speech_client(credentials: BaseCredentials) -> SpeechAsyncClient:
+    """Speech クライアントを、トークン更新が retry される認証チャネルの上に作る。
+
+    `SpeechAsyncClient(credentials=...)` に任せると api_core が `Request()` を
+    引数無しで作り、トークン更新が retry 無しの素の `requests.Session` で走る。
+    約 1 時間 idle した接続をプールから掴んで ConnectionReset で落ちる窓が
+    そこにある (ADR-0048)。translation 側と同じ理由・同じ組み方。
+
+    options は Speech の transport が自前のチャネル分岐で渡しているものと
+    一致することを確認済み (`speech_v1/.../transports/grpc_asyncio.py`)。
+    """
+    transport = SpeechGrpcAsyncIOTransport
+    channel = create_auth_channel(
+        credentials,
+        host=transport.DEFAULT_HOST,
+        scopes=transport.AUTH_SCOPES,
+        options=GAPIC_DEFAULT_CHANNEL_OPTIONS,
+    )
+    return SpeechAsyncClient(transport=transport(channel=channel))
+
+
 async def transcribe_request_google(
     client: SpeechAsyncClient,
     request: RecognizeRequest,
@@ -397,18 +422,7 @@ async def transcript_worker_google(
 ) -> AsyncGenerator[WorkerOutput]:
     with worker_startup("transcription"):
         credentials, _ = get_credentials(gcp_config)
-        # Deferred (ADR-0048): this has the same stale-pooled-connection window
-        # the translation worker was fixed for -- api_core builds the token
-        # refresh's `Request()` with no session, so the refresh runs without
-        # retries and dies on a connection reused across the ~1h token
-        # lifetime. Not fixed here because the fix has only been verified
-        # end-to-end against the Translation API on a host with live
-        # credentials; doing it blind to the Speech transport (different
-        # scopes/host/channel options) risks breaking the most load-bearing
-        # worker to pre-empt a failure nobody has reported here yet. To fix:
-        # mirror `create_translation_client` with SpeechAsyncClient's own
-        # transport constants, then verify against the real API.
-        client = SpeechAsyncClient(credentials=credentials)
+        client = create_speech_client(credentials)
         logger.info("transcript worker [google] started")
         vad_session = create_transcription_vad_session(config)
     while True:

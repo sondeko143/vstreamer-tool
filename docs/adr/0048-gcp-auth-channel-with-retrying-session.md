@@ -110,13 +110,21 @@ RPC の deadline を過ぎてもそのスレッドは生き残るため、応答
   gRPC 既定の 4 MiB に戻る（実測: 5 MiB の応答が `RESOURCE_EXHAUSTED`）。
   この翻訳の応答サイズでは実害が出ないが、「api_core が黙ってやっていたことを
   落とす」という本 ADR がまさに警戒している型の欠落なので明示的に渡す。
-- **影響範囲は翻訳クライアントのみ。同じ窓が残っている場所が 2 つある**:
-  `worker/transcription.py` の `SpeechAsyncClient(credentials=...)` と、
-  `worker/sender.py` の ID トークン更新用 `Request()`。どちらも同じ理由で
-  壊れうるが、今回の修正は実際の Translation API に対してしか検証できておらず、
-  Speech は scopes/host/channel options が別なので、未報告の障害を先回りする
-  ために最も重要なワーカーを壊す危険の方が大きいと判断して見送った。各所に
-  理由つきのコメントを置いてある。
+- **同じ窓を持っていた残り 2 箇所も同じ方式に揃えた**:
+  `worker/transcription.py` の GCP バックエンド（`create_speech_client`、
+  Translate と同型に組み直し）と、`worker/sender.py` の ID トークン経路
+  （`async_secure_authorized_channel` に渡す `Request` を
+  `build_auth_session()` 付きにするだけ。この 1 個の Request が初回 refresh と
+  plugin の後続更新の両方で使われる）。GAPIC の channel options は
+  `GAPIC_DEFAULT_CHANNEL_OPTIONS` として `lib/gcp.py` に 1 つ置き、Translate と
+  Speech の transport がどちらも同じ 2 つを渡していることを確認して共有する。
+- **検証の非対称性**: Translate と Speech は実 API に対して認証が通ることを
+  実測した（ADC = 本番と同じ `google.oauth2.credentials`）。sender の ID トークン
+  経路だけは実測できていない —— `get_id_token_credentials` はサービスアカウント
+  または `use_ce_credentials` を設定したときしか credentials を返さず、この
+  デプロイはどちらも使っていないため。ただし変更は「`Request` に session を
+  渡す」1 行で、チャネルの組み方（既存の `async_secure_authorized_channel`）に
+  手を入れていないので、Translate/Speech のような等価性の乖離リスクは無い。
 - 失われたものが 3 つある（いずれもこのプロジェクトでは未使用）:
   `client_options.api_endpoint` / `GOOGLE_API_USE_MTLS_ENDPOINT` /
   `GOOGLE_CLOUD_UNIVERSE_DOMAIN` によるエンドポイント上書き、`quota_project_id`、

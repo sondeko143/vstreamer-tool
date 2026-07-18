@@ -27,6 +27,7 @@ from vspeech.exceptions import EventDestinationNotFoundError
 from vspeech.exceptions import shutdown_worker
 from vspeech.lib.command import process_command
 from vspeech.lib.gcp import GcpIDTokenCredentials
+from vspeech.lib.gcp import build_auth_session
 from vspeech.lib.gcp import get_id_token_credentials
 from vspeech.logger import logger
 from vspeech.shared_context import SharedContext
@@ -68,14 +69,12 @@ def get_channel(address: str, credentials: GcpIDTokenCredentials | None):
     url = urlparse(address)
     secure_port = url.scheme == "https" or url.port == 443
     if secure_port and credentials:
-        # Deferred (ADR-0048): same window as the translation worker had --
-        # this `Request()` carries no session, so it (and the refreshes the
-        # AuthMetadataPlugin later performs with it) runs without retries and
-        # can die on a pooled connection gone stale across the token lifetime.
-        # `vspeech.lib.gcp.build_auth_session()` is what it would need. Left
-        # alone because this path only runs for ID-token (cross-host) senders,
-        # which this deployment does not use, so the fix would ship unverified.
-        request = Request()
+        # retry 付き session を積んだ Request を使う (ADR-0048)。この 1 個の
+        # Request が 2 箇所で効く: 直下の初回 refresh と、
+        # async_secure_authorized_channel が組む AuthMetadataPlugin が以後
+        # 行う更新 (同じ request を持ち回る)。素の Request() だと、どちらも
+        # 約 1 時間 idle した死んだプール接続を掴んで落ちうる。
+        request = Request(session=build_auth_session())
         id_token_cred: GcpIDTokenCredentials = credentials.with_target_audience(
             f"https://{url.hostname}/"
         )

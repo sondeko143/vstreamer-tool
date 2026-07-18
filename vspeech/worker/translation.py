@@ -22,6 +22,7 @@ from vspeech.config import GcpConfig
 from vspeech.config import TranslationConfig
 from vspeech.exceptions import shutdown_worker
 from vspeech.exceptions import worker_startup
+from vspeech.lib.gcp import GAPIC_DEFAULT_CHANNEL_OPTIONS
 from vspeech.lib.gcp import create_auth_channel
 from vspeech.lib.gcp import get_credentials
 from vspeech.lib.telemetry import telemetry
@@ -63,16 +64,6 @@ async def translate_request(
             await sleep(retry_delay_sec)
 
 
-# transport が自分でチャネルを作るときに渡している options
-# (`transports/grpc_asyncio.py` の既定チャネル分岐)。チャネルをこちらから渡すと
-# その分岐ごと飛ばされるので、ここで同じものを渡さないと gRPC 既定の 4 MiB
-# 受信上限に戻る (実測: 5 MiB の応答が RESOURCE_EXHAUSTED)。
-_CHANNEL_OPTIONS = (
-    ("grpc.max_send_message_length", -1),
-    ("grpc.max_receive_message_length", -1),
-)
-
-
 def create_translation_client(
     credentials: BaseCredentials,
 ) -> TranslationServiceAsyncClient:
@@ -93,7 +84,7 @@ def create_translation_client(
         credentials,
         host=transport.DEFAULT_HOST,
         scopes=transport.AUTH_SCOPES,
-        options=_CHANNEL_OPTIONS,
+        options=GAPIC_DEFAULT_CHANNEL_OPTIONS,
     )
     return TranslationServiceAsyncClient(transport=transport(channel=channel))
 

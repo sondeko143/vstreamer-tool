@@ -269,3 +269,147 @@ async def test_translation_client_authenticates_through_the_retrying_channel(
     # 時点で適用されなくなる。渡し直さないと受信上限が gRPC 既定の 4 MiB に
     # 戻るので、ここで運ばれていることを縛る。
     assert dict(built["options"])["grpc.max_receive_message_length"] == -1
+
+
+async def test_speech_client_authenticates_through_the_retrying_channel(monkeypatch):
+    """transcription の GCP バックエンドも同じ認証チャネルに載っていること。
+
+    translation と同型。`SpeechAsyncClient(credentials=...)` の 1 行に戻されても
+    他のテストは全部 GREEN のままなので、ここで縛る。
+    """
+    from typing import Any
+
+    from google.auth.credentials import AnonymousCredentials
+    from google.cloud.speech_v1.services.speech.transports import (
+        SpeechGrpcAsyncIOTransport,
+    )
+
+    from vspeech.worker import transcription
+
+    built: dict[str, Any] = {}
+    original = transcription.create_auth_channel
+
+    def spy(credentials, host, scopes, options=()):
+        channel = original(credentials, host=host, scopes=scopes, options=options)
+        built.update(channel=channel, host=host, options=options)
+        return channel
+
+    monkeypatch.setattr(transcription, "create_auth_channel", spy)
+    client = transcription.create_speech_client(AnonymousCredentials())
+
+    transport = client.transport
+    assert isinstance(transport, SpeechGrpcAsyncIOTransport)
+    assert transport.grpc_channel is built["channel"]
+    assert built["host"] == "speech.googleapis.com"
+    assert dict(built["options"])["grpc.max_receive_message_length"] == -1
+
+
+async def _start_and_stop(generator):
+    """ワーカーの async generator をクライアント構築の先まで進めて止める。
+
+    どのワーカーも `worker_startup` の中でクライアントを作り、直後に
+    `in_queue.get()` で待つので、短い timeout で 1 回 __anext__ を試せば
+    「構築だけ済んだ状態」に到達できる。
+    """
+    from asyncio import wait_for
+
+    try:
+        await wait_for(generator.__anext__(), timeout=1.0)
+    except TimeoutError:
+        pass
+    finally:
+        await generator.aclose()
+
+
+async def test_translation_worker_builds_its_client_through_the_factory(monkeypatch):
+    """ワーカーが実際に `create_translation_client` を通ること。
+
+    ファクトリ単体のテストだけでは、**呼び出し側**が
+    `TranslationServiceAsyncClient(credentials=...)` の 1 行に戻されたときに
+    素通りする (実測: ファクトリを残したまま呼び出し箇所だけ戻すと全部 GREEN)。
+    直った経路が実際に使われていることまで縛る。
+    """
+    from asyncio import Queue
+
+    from vspeech.config import GcpConfig
+    from vspeech.config import TranslationConfig
+    from vspeech.worker import translation
+
+    used: dict[str, bool] = {}
+    monkeypatch.setattr(translation, "get_credentials", lambda cfg: (object(), "proj"))
+    monkeypatch.setattr(
+        translation,
+        "create_translation_client",
+        lambda credentials: used.setdefault("via_factory", True) and object(),
+    )
+    await _start_and_stop(
+        translation.translation_worker_google(
+            config=TranslationConfig(), gcp_config=GcpConfig(), in_queue=Queue()
+        )
+    )
+    assert used.get("via_factory") is True
+
+
+async def test_transcription_worker_builds_its_client_through_the_factory(monkeypatch):
+    """transcription 側も同じ (上のテストと同じ理由)。"""
+    from asyncio import Queue
+
+    from vspeech.config import GcpConfig
+    from vspeech.config import TranscriptionConfig
+    from vspeech.worker import transcription
+
+    used: dict[str, bool] = {}
+    monkeypatch.setattr(transcription, "get_credentials", lambda cfg: (object(), ""))
+    monkeypatch.setattr(
+        transcription,
+        "create_speech_client",
+        lambda credentials: used.setdefault("via_factory", True) and object(),
+    )
+    config = TranscriptionConfig()
+    config.vad_gate = False  # モデル実体を要求しない
+    await _start_and_stop(
+        transcription.transcript_worker_google(
+            config=config, gcp_config=GcpConfig(), in_queue=Queue()
+        )
+    )
+    assert used.get("via_factory") is True
+
+
+def test_sender_id_token_channel_refreshes_over_the_retrying_session(monkeypatch):
+    """sender の ID トークン経路も retry 付き session で更新すること。
+
+    `get_channel` が作る 1 個の `Request` は 2 箇所で効く: 直下の初回 refresh と、
+    `async_secure_authorized_channel` が組む plugin が以後行う更新。後者は
+    plugin 経由なので、plugin が掴んでいる session を見て確かめる。
+    """
+    from typing import Any
+    from typing import cast
+
+    from vspeech.lib.gcp import _AUTH_RETRY
+    from vspeech.lib.gcp import GcpIDTokenCredentials
+    from vspeech.worker import sender
+
+    captured: dict[str, Any] = {}
+
+    class FakeIdTokenCredentials:
+        def with_target_audience(self, audience):
+            return self
+
+        def refresh(self, request):
+            captured["refresh_request"] = request
+
+    def fake_channel(credentials, request, target):
+        captured["plugin_request"] = request
+        return "channel"
+
+    monkeypatch.setattr(sender, "async_secure_authorized_channel", fake_channel)
+    sender.get_channel(
+        "https://example.invalid:443",
+        cast(GcpIDTokenCredentials, FakeIdTokenCredentials()),
+    )
+
+    # 初回 refresh と plugin が同じ Request を共有していること。
+    assert captured["refresh_request"] is captured["plugin_request"]
+    session = captured["plugin_request"].session
+    adapter = session.get_adapter("https://oauth2.googleapis.com/token")
+    assert adapter.max_retries is _AUTH_RETRY

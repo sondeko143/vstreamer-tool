@@ -119,6 +119,20 @@ def build_auth_session() -> Session:
     return session
 
 
+# GAPIC の transport が自分でチャネルを作るときに渡す options。
+#
+# チャネルをこちらから渡すとその分岐ごと飛ばされ、受信上限が gRPC 既定の 4 MiB に
+# 戻る (実測: 5 MiB の応答が RESOURCE_EXHAUSTED)。Translate と Speech の
+# transport はどちらもこの 2 つを渡していることを確認済みだが、**新しい
+# クライアントを足すときは、その transport が本当にこれと同じものを渡して
+# いるか確かめること** -- 違うものを渡していたら、この定数を使い回すと
+# 静かに落とすことになる。
+GAPIC_DEFAULT_CHANNEL_OPTIONS: tuple[tuple[str, Any], ...] = (
+    ("grpc.max_send_message_length", -1),
+    ("grpc.max_receive_message_length", -1),
+)
+
+
 def create_auth_metadata_plugin(
     credentials: BaseCredentials, host: str, scopes: Sequence[str]
 ) -> AuthMetadataPlugin:
