@@ -10,14 +10,19 @@ from html import unescape
 from time import time_ns
 
 from google.api_core.exceptions import BadRequest
+from google.auth.credentials import Credentials as BaseCredentials
 from google.cloud.exceptions import GoogleCloudError
 from google.cloud.translate_v3 import TranslateTextRequest
 from google.cloud.translate_v3 import TranslationServiceAsyncClient
+from google.cloud.translate_v3.services.translation_service.transports import (
+    TranslationServiceGrpcAsyncIOTransport,
+)
 
 from vspeech.config import GcpConfig
 from vspeech.config import TranslationConfig
 from vspeech.exceptions import shutdown_worker
 from vspeech.exceptions import worker_startup
+from vspeech.lib.gcp import create_auth_channel
 from vspeech.lib.gcp import get_credentials
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
@@ -58,6 +63,41 @@ async def translate_request(
             await sleep(retry_delay_sec)
 
 
+# transport が自分でチャネルを作るときに渡している options
+# (`transports/grpc_asyncio.py` の既定チャネル分岐)。チャネルをこちらから渡すと
+# その分岐ごと飛ばされるので、ここで同じものを渡さないと gRPC 既定の 4 MiB
+# 受信上限に戻る (実測: 5 MiB の応答が RESOURCE_EXHAUSTED)。
+_CHANNEL_OPTIONS = (
+    ("grpc.max_send_message_length", -1),
+    ("grpc.max_receive_message_length", -1),
+)
+
+
+def create_translation_client(
+    credentials: BaseCredentials,
+) -> TranslationServiceAsyncClient:
+    """翻訳クライアントを、トークン更新が retry される認証チャネルの上に作る。
+
+    `TranslationServiceAsyncClient(credentials=...)` に任せると api_core が
+    `Request()` を引数無しで作り、トークン更新が retry 無しの素の
+    `requests.Session` で走る。約 1 時間 idle した接続をプールから掴んで
+    ConnectionReset で落ちる窓がそこにあるので (`vspeech.lib.gcp` の
+    `_AUTH_RETRY` 参照)、チャネルだけこちらで組んで注入する。
+
+    transport に `aio.Channel` の実体を渡すと、ライブラリ側は credentials を
+    無視してそのチャネルを使う (`_ignore_credentials`) -- つまり認証経路は
+    完全にこちらの持ち物になる。
+    """
+    transport = TranslationServiceGrpcAsyncIOTransport
+    channel = create_auth_channel(
+        credentials,
+        host=transport.DEFAULT_HOST,
+        scopes=transport.AUTH_SCOPES,
+        options=_CHANNEL_OPTIONS,
+    )
+    return TranslationServiceAsyncClient(transport=transport(channel=channel))
+
+
 @dataclass
 class TranslationBlock:
     text: str
@@ -86,7 +126,7 @@ async def translation_worker_google(
 ) -> AsyncGenerator[WorkerOutput]:
     with worker_startup("translation"):
         credentials, project_id = get_credentials(gcp_config)
-        client = TranslationServiceAsyncClient(credentials=credentials)
+        client = create_translation_client(credentials)
     logger.info("translation worker [google] started")
     while True:
         transcribed = await in_queue.get()

@@ -397,6 +397,17 @@ async def transcript_worker_google(
 ) -> AsyncGenerator[WorkerOutput]:
     with worker_startup("transcription"):
         credentials, _ = get_credentials(gcp_config)
+        # Deferred (ADR-0048): this has the same stale-pooled-connection window
+        # the translation worker was fixed for -- api_core builds the token
+        # refresh's `Request()` with no session, so the refresh runs without
+        # retries and dies on a connection reused across the ~1h token
+        # lifetime. Not fixed here because the fix has only been verified
+        # end-to-end against the Translation API on a host with live
+        # credentials; doing it blind to the Speech transport (different
+        # scopes/host/channel options) risks breaking the most load-bearing
+        # worker to pre-empt a failure nobody has reported here yet. To fix:
+        # mirror `create_translation_client` with SpeechAsyncClient's own
+        # transport constants, then verify against the real API.
         client = SpeechAsyncClient(credentials=credentials)
         logger.info("transcript worker [google] started")
         vad_session = create_transcription_vad_session(config)

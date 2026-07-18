@@ -68,6 +68,13 @@ def get_channel(address: str, credentials: GcpIDTokenCredentials | None):
     url = urlparse(address)
     secure_port = url.scheme == "https" or url.port == 443
     if secure_port and credentials:
+        # Deferred (ADR-0048): same window as the translation worker had --
+        # this `Request()` carries no session, so it (and the refreshes the
+        # AuthMetadataPlugin later performs with it) runs without retries and
+        # can die on a pooled connection gone stale across the token lifetime.
+        # `vspeech.lib.gcp.build_auth_session()` is what it would need. Left
+        # alone because this path only runs for ID-token (cross-host) senders,
+        # which this deployment does not use, so the fix would ship unverified.
         request = Request()
         id_token_cred: GcpIDTokenCredentials = credentials.with_target_audience(
             f"https://{url.hostname}/"
