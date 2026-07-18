@@ -30,3 +30,11 @@ key.json
 hubert_contentvec/
 hubert_golden/
 tests/assets/hubert_golden/
+
+# モデル/重み実体はコミットしない（THIRD_PARTY_NOTICES.md: GPL の rmvpe など第三者重みを
+# 配布物へ同梱/再配布しないためのガード。資産はすべて利用者が各自取得しパスで指定する）。
+*.onnx
+*.pt
+*.pth
+*.safetensors
+*.npz
