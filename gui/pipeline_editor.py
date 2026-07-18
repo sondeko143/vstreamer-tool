@@ -185,7 +185,14 @@ class PipelineEditor(Frame):
         gated = can_start and not self.readiness_ok and not self.force_start
         self.start_bt.configure(state=DISABLED if gated or not can_start else NORMAL)
         if gated and self.readiness is not None:
-            self.start_hint.configure(text=f"{self.readiness.problem_count} 件未充足")
+            # readiness の評価自体が失敗したとき (error) は problem_count が 0 なので
+            # 「0 件未充足」と矛盾表示になる。評価不可として区別する。
+            if self.readiness.error is not None:
+                self.start_hint.configure(text="readiness 評価不可")
+            else:
+                self.start_hint.configure(
+                    text=f"{self.readiness.problem_count} 件未充足"
+                )
             self.force_bt.pack(side=LEFT, padx=4)
         else:
             self.start_hint.configure(text="")

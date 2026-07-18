@@ -250,21 +250,25 @@ class App(Frame):
         dialog = SharedPathsDialog(self, self.paths, self.default_config)
         if not dialog.saved:
             return
+        changed_ids: set[str] = set()
         if dialog.propagate_requested:
-            self._propagate_shared_paths()
-        # 編集中の pipeline は propagate で config が変わりうるので読み直す。
-        selection = self.listbox.curselection()
-        if selection:
-            self.editor.load_entry(self.profile.pipelines[selection[0]])
-            self.editor.refresh_readiness()
+            changed_ids = self._propagate_shared_paths()
+        # propagate で現在表示中の pipeline が実際に書き換わった時だけ読み直す。
+        # 無関係な保存で編集中の未保存変更を捨てないため。load_entry が末尾で
+        # refresh_readiness まで呼ぶので別途は呼ばない。
+        entry = self.editor.entry
+        if entry is not None and entry.id in changed_ids:
+            self.editor.load_entry(entry)
 
-    def _propagate_shared_paths(self) -> None:
-        """共有素材パスを既存の全 pipeline へ書き込む (ADR-0046)。
+    def _propagate_shared_paths(self) -> set[str]:
+        """共有素材パスを既存の全 pipeline へ書き込み、実際に書き換えた
+        pipeline の id 集合を返す (ADR-0046)。
 
         pipeline config は自己完結を保つので、値は実際に各ファイルへ書く。
         壊れて読めない pipeline は飛ばして名指しで報告する — 黙って捨てない。
         """
         skipped: list[str] = []
+        changed_ids: set[str] = set()
         for entry in self.profile.pipelines:
             result = load_pipeline_config(self.paths, entry)
             if not result.ok or result.value is None:
@@ -274,14 +278,19 @@ class App(Frame):
             changed = apply_shared(self.default_config, result.value)
             if changed:
                 save_pipeline_config(self.paths, entry, result.value)
+                changed_ids.add(entry.id)
                 logger.info(
                     "propagated %s to pipeline %s", ", ".join(changed), entry.id
                 )
+        # save_pipeline_config は entry.config_version を CURRENT に更新する
+        # (旧版から migrate された pipeline があり得る) ので manifest にも永続化する。
+        # 省くと次回ロードで stale な from_version から二重 migration になり得る。
         save_profile(self.paths, self.profile)
         if skipped:
             self.editor.banner.configure(
                 text=f"⚠ 読めない pipeline へは反映できませんでした: {', '.join(skipped)}"
             )
+        return changed_ids
 
     # --- new / delete ---------------------------------------------------
 
