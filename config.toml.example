@@ -156,7 +156,7 @@ logprob_threshold = -1.0
 [voicevox]
 speaker_id = 2
 # 0.16 では onnxruntime / 辞書 / .vvm モデルは wheel 同梱ではない。
-# 公式ダウンローダ (make voicevox-assets) で取得し、各パスを指定する。
+# 公式ダウンローダ (uv run poe voicevox-assets) で取得し、各パスを指定する。
 openjtalk_dir = "./voicevox/dict/open_jtalk_dic_utf_8-1.11"
 model_dir = "./voicevox/models/vvms"
 # voicevox 専用ビルドの onnxruntime。whisper/rvc の onnxruntime-gpu とは別物。

@@ -1,0 +1,95 @@
+# Task automation for this project, run via poethepoet: `uv run poe <task>`.
+# Split out of pyproject.toml (pulled back in via `[tool.poe] include`) so
+# pyproject stays focused on package metadata. This is the single task runner:
+# the former Makefile targets (requirements-pod / voicevox-assets / clean) were
+# folded in here too.
+#
+# The `python-health` skill drives the health gates:
+#   uv run poe check   → run every gate report-only (keeps going on failure)
+#   uv run poe fix     → apply only the mechanical fixes (ruff format + safe lint)
+# On GPU/ML projects, prefix with extras so ty/pytest resolve optional backends:
+#   uv run --all-extras poe check
+[tool.poe.tasks]
+fmt = { cmd = "ruff format .", help = "Apply ruff formatting" }
+fmt-check = { cmd = "ruff format --check .", help = "Check formatting (no writes)" }
+lint = { cmd = "ruff check .", help = "Lint (no writes)" }
+lint-fix = { cmd = "ruff check --fix .", help = "Apply safe lint fixes" }
+type = { cmd = "ty check", help = "Type-check (ty)" }
+test = { cmd = "pytest --cov=vspeech --cov-report=term-missing", help = "Tests + coverage (honors addopts)" }
+lock-check = { cmd = "uv lock --check", help = "Lockfile is in sync with pyproject" }
+audit = { cmd = "uv audit", help = "Dependency vulnerability audit" }
+security = { cmd = "uv run --with bandit bandit -q -r vspeech gui", help = "Security lint (bandit, project interpreter)" }
+deadcode = { cmd = "uv run --with vulture vulture vspeech --min-confidence 80", help = "Dead-code scan (advisory)" }
+
+# Docker デプロイ用の requirements-pod.txt を uv.lock から再生成する（旧 Makefile の
+# 既定ターゲット）。Make と違い入力の更新有無を見ずに毎回再生成するが、uv export は
+# 冪等で速いので実害はない。依存を変えたら実行して結果をコミットする（Dockerfile が
+# この生成物を COPY する）。
+requirements-pod = { cmd = "uv export --no-default-groups --extra voicevox --no-hashes --no-emit-project -o requirements-pod.txt", help = "Regenerate requirements-pod.txt for the Docker image (voicevox extra)" }
+# 生成物の掃除（旧 Makefile の clean）。POSIX shell (Git Bash 等) が要る。
+clean = { shell = "rm -f requirements-pod.txt", help = "Remove generated artifacts (requirements-pod.txt)" }
+
+# 一度きりのオフライン工程。依存 (fairseq / transformers / onnx / onnxscript) は
+# pyproject にも uv.lock にも載せず、`uv run --with` の一時環境で供給する。
+# `poe security` / `poe deadcode` と同じ手口。
+#
+# convert-hubert: hubert_base.pt -> hubert_contentvec/ (transformers 資産)。
+#   `--python 3.11` は必須。省くとプロジェクトの 3.12 に落ち、cp311 の fairseq wheel が
+#   入らない。`--no-project` なので [tool.uv.sources] は読まれず、torch は PyPI 版
+#   (Windows は CPU) になる。変換は CPU で足りるのでこれでよい。
+#   例: uv run poe convert-hubert --input ~/.config/vstreamer/hubert_base.pt \
+#           --output ./hubert_contentvec --golden ./hubert_golden
+convert-hubert = { cmd = "uv run --isolated --no-project --python 3.11 --with 'fairseq @ https://github.com/sondeko143/fairseq-311/releases/download/v0.12.2.post1/fairseq-0.12.2.post1-cp311-cp311-win_amd64.whl' --with 'numpy<1.24' --with torch --with transformers python -m scripts.convert_hubert", help = "hubert_base.pt -> transformers asset (offline, throwaway 3.11 env)" }
+# export-hubert-onnx: hubert_contentvec/ -> hubert_fp32.onnx + hubert_fp16.onnx。
+#   `--no-project` は付けない。fp16 を CUDA 上で export するためプロジェクト環境の
+#   cu128 torch が要る。
+#   例: uv run poe export-hubert-onnx --asset ./hubert_contentvec --golden ./hubert_golden
+export-hubert-onnx = { cmd = "uv run --with transformers --with onnx --with onnxscript python -m scripts.export_hubert_onnx", help = "transformers asset -> ONNX (offline, project env + overlay)" }
+
+# Complexity insight (advisory; separate from the health gates above) — driven by the
+# `code-metrics` skill. Shells out to `uvx lizard` + `uvx complexipy`, plus an in-process
+# beniget DepDegree (def-use coupling) lens that catches entangled mutable state:
+#   uv run poe metrics          → ranked refactor candidates (cyclomatic + cognitive + dep)
+#   uv run poe metrics --json   → machine-readable
+metrics = { cmd = "python scripts/metrics.py", help = "Rank refactor candidates: lizard CCN + complexipy cognitive + beniget DepDegree (advisory)" }
+
+# Startup profiling (advisory) — driven by the `startup-profile` skill. Shells out to
+# `uvx py-spy`; the analyzer is pure stdlib. Capture auto-analyzes inline:
+#   uv run poe startup-profile                    → profile the baseline (all workers off) + rank buckets
+#   uv run poe startup-profile --config <file>    → profile a real config instead
+#   uv run poe startup-sweep                      → baseline + one config per worker, with a comparison table
+#   uv run poe startup-analyze -- --input <file>  → re-rank an existing speedscope profile (by bucket)
+startup-profile = { cmd = "python scripts/startup_capture.py", help = "Capture+analyze a py-spy startup profile of vspeech (advisory)" }
+startup-sweep = { cmd = "python scripts/startup_capture.py --sweep", help = "Profile baseline + each worker and compare startup cost (advisory)" }
+startup-analyze = { cmd = "python scripts/startup_analyze.py", help = "Rank startup time by bucket from a speedscope profile (advisory)" }
+
+# VOICEVOX の実行時資産 (ONNX Runtime / OpenJTalk 辞書 / .vvm) を tests/assets/voicevox へ
+# 取得する（旧 Makefile の voicevox-assets）。多行なので shell タスク (POSIX shell が要る)。
+# --devices は cpu/cuda/directml から選ぶ。出力先は gitignore 済。
+[tool.poe.tasks.voicevox-assets]
+help = "Download VOICEVOX runtime assets into tests/assets/voicevox (offline)"
+shell = """
+curl -sSfL https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/download-windows-x64.exe -o download-voicevox.exe
+./download-voicevox.exe -o tests/assets/voicevox --exclude c-api --devices cuda
+echo "デバイスを変える場合は --devices (cpu/cuda/directml) を指定。フラグは ./download-voicevox.exe --help を参照。"
+"""
+
+[tool.poe.tasks.fix]
+help = "Auto-apply mechanical fixes (ruff format + safe lint fixes)"
+sequence = ["fmt", "lint-fix"]
+default_item_type = "ref"
+
+[tool.poe.tasks.check]
+help = "Run every health gate report-only; keeps going if one fails, exits non-zero if any did"
+sequence = [
+    "fmt-check",
+    "lint",
+    "type",
+    "test",
+    "lock-check",
+    "audit",
+    "security",
+    "deadcode",
+]
+default_item_type = "ref"
+ignore_fail = "return_non_zero"

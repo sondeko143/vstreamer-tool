@@ -58,7 +58,7 @@ curl -sSfL https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/do
 ./download-voicevox.exe -o ./voicevox --exclude c-api --devices cuda
 ```
 
-(テストスイート用の資産は `make voicevox-assets` が `tests/assets/voicevox` へ取得します。)
+(テストスイート用の資産は `uv run poe voicevox-assets` が `tests/assets/voicevox` へ取得します。)
 
 VOICEVOX は whisper / RVC が使う `onnxruntime-gpu` とは**別ビルド**の
 `voicevox_onnxruntime` を読みます。正しい方が読まれるよう `onnxruntime_path` は明示してください。

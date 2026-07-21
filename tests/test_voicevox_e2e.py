@@ -49,7 +49,7 @@ pytestmark = [
     pytest.mark.voicevox_e2e,
     pytest.mark.skipif(
         not _ASSETS_READY,
-        reason="VOICEVOX 実資産が見つかりません (make voicevox-assets で取得)",
+        reason="VOICEVOX 実資産が見つかりません (uv run poe voicevox-assets で取得)",
     ),
 ]
 
