@@ -244,7 +244,23 @@ def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # ty: ignore[unresolved-attribute]
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # ty: ignore[unresolved-attribute]
 
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="transformers HubertModel 資産 (hubert_contentvec/) を ONNX へ export する (offline, 2/2 段目)。",
+        epilog=(
+            "これは HuBERT 資産づくりの 2 段目。先に `uv run poe convert-hubert` で\n"
+            "hubert_base.pt を資産ディレクトリへ変換しておくこと (詳細は convert-hubert --help)。\n"
+            "\n"
+            "手順:\n"
+            "  uv run poe export-hubert-onnx --asset ./hubert_contentvec --golden ./hubert_golden\n"
+            "  -> <asset>/hubert_fp32.onnx + hubert_fp16.onnx + mapping.json を書き出す\n"
+            "\n"
+            "config の [rvc] は資産ディレクトリを指す:\n"
+            '  hubert_model_file = "./hubert_contentvec"\n'
+            "\n"
+            "ライセンスは THIRD_PARTY_NOTICES.md を参照。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--asset", required=True, type=Path, help="hubert_contentvec/")
     parser.add_argument("--golden", required=True, type=Path, help="hubert_golden/")
     parser.add_argument(

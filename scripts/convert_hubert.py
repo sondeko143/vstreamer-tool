@@ -217,7 +217,25 @@ def verify(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="fairseq ContentVec (hubert_base.pt) を transformers HubertModel 資産へ変換する (offline, 1/2 段目)。",
+        epilog=(
+            "HuBERT (ContentVec) 資産は 2 段のオフライン変換で用意する。\n"
+            "入力 hubert_base.pt は RVC が配布する ContentVec (MIT, origin auspicious3000/contentvec)。\n"
+            "\n"
+            "手順:\n"
+            "  1. uv run poe convert-hubert \\\n"
+            "         --input  ~/.config/vstreamer/hubert_base.pt \\\n"
+            "         --output ./hubert_contentvec \\\n"
+            "         --golden ./hubert_golden\n"
+            "  2. uv run poe export-hubert-onnx --asset ./hubert_contentvec --golden ./hubert_golden\n"
+            "  3. config の [rvc] に設定:\n"
+            '       hubert_model_file = "./hubert_contentvec"   # 資産ディレクトリ (ファイルではない)\n'
+            "\n"
+            "ライセンスは THIRD_PARTY_NOTICES.md を参照。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--input", required=True, type=Path, help="hubert_base.pt")
     parser.add_argument(
         "--output", required=True, type=Path, help="変換済み資産ディレクトリ"
