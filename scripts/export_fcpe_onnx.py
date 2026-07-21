@@ -28,6 +28,7 @@ onnxscript) は poe task の `uv run --with` が供給する (pyproject/uv.lock 
 import argparse
 import io
 import math
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -62,6 +63,11 @@ def _patched_mel_call(
     win_size = self.win_size
     hop = self.hop_length
     clip_val = self.clip_val
+    # cos/sin カーネルは長さ n_fft。torch.stft は win_length<n_fft を中央ゼロ埋めするが
+    # ここでは等長を前提にする (bundled 既定 1024==1024)。違えば loud に失敗させる。
+    assert win_size == n_fft, (
+        f"conv-STFT replacement assumes win_size==n_fft (got {win_size} != {n_fft})"
+    )
     y = y.squeeze(-1)  # (B, N)
     window = torch.hann_window(win_size, device=y.device, dtype=y.dtype)
     pad_left = (win_size - hop) // 2
@@ -99,13 +105,35 @@ class FcpeWave(torch.nn.Module):
         self.bundled = bundled
 
     def forward(self, waveform):
-        return self.bundled(waveform, SR, DECODER, THRESHOLD)
+        # FCPE の forward は完全無声フレームで threshold マスク由来の NaN (0/0) を返す。
+        # rmvpe.onnx は無声を 0 にするので、契約を揃え NaN が RVC の NSF に漏れないよう
+        # graph 内で 0 に潰す。
+        f0 = self.bundled(waveform, SR, DECODER, THRESHOLD)
+        return torch.nan_to_num(f0, nan=0.0)
 
 
-def _test_wave() -> np.ndarray:
-    t = np.arange(SR, dtype=np.float32) / SR
+# 検証する波形長。非 hop 倍数 (12345) と、焼き込み reflect-pad が要求する最小長 (FLOOR) を
+# 含める。グラフは N=16000 でトレースするが dynamic_axes で N は可変。ここで実際に複数長を
+# 通し、トレースが N を焼き込んでいない (= 一般化する) ことを毎回確認する。
+FLOOR = 433  # reflect-pad(432) が要求する最小サンプル数 (これ未満は onnx が落ちる)
+VERIFY_LENGTHS = (16000, 24000, 12345, 8000, FLOOR)
+ABS_TOL_HZ = 1.0  # 無声フレームを含む全フレームの絶対差 (Hz)
+
+
+def _tone(n: int) -> np.ndarray:
+    t = np.arange(n, dtype=np.float32) / SR
     x = 0.6 * np.sin(2 * np.pi * 220.0 * t)  # 220Hz -> voiced
-    x += 0.02 * np.random.default_rng(0).standard_normal(SR).astype(np.float32)
+    x += 0.02 * np.random.default_rng(0).standard_normal(n).astype(np.float32)
+    return x[None, :]
+
+
+def _voicing_signal() -> np.ndarray:
+    # 前半 220Hz / 後半 無音。threshold voicing 分岐 (無声フレーム=0) を通し、
+    # onnx が無声区間に pitch を捏造しないことを非マスク比較で検証するため。
+    n = 16000
+    t = np.arange(n, dtype=np.float32) / SR
+    x = (0.6 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)
+    x[n // 2 :] = 0.0
     return x[None, :]
 
 
@@ -114,7 +142,17 @@ def _f0(t: torch.Tensor) -> np.ndarray:
 
 
 def _max_rel(a: np.ndarray, b: np.ndarray, voiced: np.ndarray) -> float:
+    if int(voiced.sum()) == 0:
+        return 0.0
     return float(np.max(np.abs(a[voiced] - b[voiced]) / np.maximum(b[voiced], 1e-6)))
+
+
+def _max_abs(a: np.ndarray, b: np.ndarray) -> float:
+    m = min(len(a), len(b))
+    # NaN を 0 に潰してから比較する。NaN のまま max を取ると NaN>tol が False になり
+    # 差分を見逃す (無声フレームの NaN で self-verify が素通りしていたバグの対策)。
+    diff = np.abs(np.nan_to_num(a[:m]) - np.nan_to_num(b[:m]))
+    return float(np.max(diff)) if diff.size else 0.0
 
 
 def main() -> None:
@@ -137,11 +175,13 @@ def main() -> None:
 
     bundled = torchfcpe.spawn_bundled_infer_model(torch.device("cpu")).eval()
     wrap = FcpeWave(bundled).eval()
-    wav = torch.from_numpy(_test_wave())
 
-    # (1) 元 torch.stft 経路の f0 を保存
+    waves: dict[object, np.ndarray] = {n: _tone(n) for n in VERIFY_LENGTHS}
+    waves["voicing"] = _voicing_signal()
+
+    # (1) 元 torch.stft 経路の f0 を各長で保存
     with torch.no_grad():
-        ref_orig = _f0(wrap(wav))
+        ref_orig = {k: _f0(wrap(torch.from_numpy(w))) for k, w in waves.items()}
 
     # weight_norm パラメトリゼーションを剥がす (export で不安定)
     import torch.nn.utils.parametrize as P
@@ -151,28 +191,36 @@ def main() -> None:
             for pname in list(mod.parametrizations.keys()):
                 P.remove_parametrizations(mod, pname, leave_parametrized=True)
 
-    # (2) STFT を conv1d-DFT に差し替え
+    # (2) STFT を conv1d-DFT に差し替え、各長で元 torch.stft と一致することを確認
     ME.MelModule.__call__ = _patched_mel_call
     with torch.no_grad():
-        ref_conv = _f0(wrap(wav))
+        ref_conv = {k: _f0(wrap(torch.from_numpy(w))) for k, w in waves.items()}
 
-    m = min(len(ref_orig), len(ref_conv))
-    voiced = ref_orig[:m] > 1.0
-    rel_conv = _max_rel(ref_conv[:m], ref_orig[:m], voiced)
-    print(
-        f"[conv-STFT vs torch.stft] voiced={int(voiced.sum())} max_rel={rel_conv:.3g}"
-    )
-    if rel_conv > REL_TOL:
-        raise SystemExit(
-            f"conv-STFT が元 torch.stft と一致しません (max_rel={rel_conv:.3g} > {REL_TOL})"
-        )
+    for k in waves:
+        m = min(len(ref_orig[k]), len(ref_conv[k]))
+        voiced = ref_orig[k][:m] > 1.0
+        rc = _max_rel(ref_conv[k][:m], ref_orig[k][:m], voiced)
+        ac = _max_abs(ref_conv[k], ref_orig[k])
+        if rc > REL_TOL or ac > ABS_TOL_HZ:
+            raise SystemExit(
+                f"conv-STFT != torch.stft (N={k}, max_rel={rc:.3g}, max_abs={ac:.3g})"
+            )
+    print(f"[conv-STFT vs torch.stft] OK over {list(waves)}")
 
-    # export -> 一時ファイル -> 検証 -> 成功時のみ --output へ移動
-    with tempfile.TemporaryDirectory() as td:
-        tmp = Path(td) / "fcpe.onnx"
+    # export は N=16000 でトレース -> 全長を検証 -> 成功時のみ --output へ move。
+    # tmp は --output と同じ親ディレクトリに作る (別ドライブ/mount への move は
+    # WinError 17 になるため tempfile の TEMP ではなく out.parent に置く)。
+    import onnxruntime as ort
+
+    out = args.output.expanduser()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(suffix=".onnx", dir=str(out.parent))
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
         torch.onnx.export(
             wrap,
-            (wav,),
+            (torch.from_numpy(waves[16000]),),
             str(tmp),
             input_names=["waveform"],
             output_names=["f0"],
@@ -180,31 +228,32 @@ def main() -> None:
             opset_version=OPSET,
             dynamo=False,
         )
-
-        import onnxruntime as ort
-
         sess = ort.InferenceSession(str(tmp), providers=["CPUExecutionProvider"])
-        got_raw = cast(np.ndarray, sess.run(None, {"waveform": _test_wave()})[0])
-        got = got_raw.squeeze(-1).squeeze(0)
-        m2 = min(len(got), len(ref_conv))
-        v2 = ref_conv[:m2] > 1.0
-        rel_onnx = _max_rel(got[:m2], ref_conv[:m2], v2)
-        print(
-            f"[onnx vs conv-torch] max_rel={rel_onnx:.3g} median_f0={np.median(ref_conv[:m2][v2]):.1f}Hz"
-        )
-        if rel_onnx > REL_TOL:
-            raise SystemExit(
-                f"onnx が torch と一致しません (max_rel={rel_onnx:.3g} > {REL_TOL})"
-            )
+        for k, w in waves.items():
+            got_raw = cast(np.ndarray, sess.run(None, {"waveform": w})[0])
+            got = np.atleast_1d(got_raw.squeeze(-1).squeeze(0))
+            m = min(len(got), len(ref_conv[k]))
+            voiced = ref_conv[k][:m] > 1.0
+            rel = _max_rel(got[:m], ref_conv[k][:m], voiced)
+            # 非マスク: onnx が無声フレームに pitch を捏造しないことも見る
+            ab = _max_abs(got, ref_conv[k])
+            if rel > REL_TOL or ab > ABS_TOL_HZ:
+                raise SystemExit(
+                    f"onnx != torch (N={k}, max_rel={rel:.3g}, max_abs={ab:.3g})"
+                )
+        tone = ref_conv[16000]
+        med = float(np.median(tone[tone > 1.0]))
+        print(f"[onnx vs conv-torch] OK over {list(waves)} median_f0={med:.1f}Hz")
+        tmp.replace(out)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
-        args.output.expanduser().parent.mkdir(parents=True, exist_ok=True)
-        Path(tmp).replace(args.output.expanduser())
-
-    print(f"OK -> {args.output}")
+    print(f"OK -> {out}")
 
     if args.golden is not None:
         args.golden.expanduser().mkdir(parents=True, exist_ok=True)
-        np.savez(args.golden.expanduser() / "fcpe_golden.npz", f0=ref_conv)
+        np.savez(args.golden.expanduser() / "fcpe_golden.npz", f0=ref_conv[16000])
         print(f"golden f0 saved -> {args.golden}/fcpe_golden.npz")
 
 

@@ -49,3 +49,71 @@ def test_fcpe_onnx_matches_torch():
     # 220Hz トーンなので有声フレームは ~220Hz を返すはず
     np.testing.assert_allclose(np.median(ref[:m][voiced]), 220.0, rtol=0.05)
     np.testing.assert_allclose(got[:m][voiced], ref[:m][voiced], rtol=0.02, atol=1.0)
+
+
+@pytest.mark.skipif(
+    not _ASSET,
+    reason="fcpe.onnx が無い (uv run poe export-fcpe-onnx で生成し VSPEECH_FCPE_ONNX で指す)",
+)
+def test_fcpe_onnx_generalizes_over_length_and_zeros_unvoiced():
+    """トレースは N=16000 固定だが、複数長で torch と一致し (N 一般化)、無声区間で
+    pitch を捏造しないこと (全フレーム = torch) を確認する。"""
+    import torch
+    import torchfcpe  # ty: ignore[unresolved-import]  # overlay 専用 (--with torchfcpe)
+
+    from vspeech.lib.onnx_session import create_session
+
+    assert _ASSET is not None
+    sr = 16000
+    bundled = torchfcpe.spawn_bundled_infer_model(torch.device("cpu")).eval()
+    sess = create_session(Path(_ASSET), torch.device("cpu"))
+
+    # 複数長 (非 hop 倍数と最小長付近を含む) で有声トーンを一致確認
+    for n in (8000, 12345, 24000, 433):
+        t = np.arange(n, dtype=np.float32) / sr
+        wav = (0.6 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)
+        with torch.no_grad():
+            ref = (
+                bundled(torch.from_numpy(wav).unsqueeze(0), sr, "local_argmax", 0.006)
+                .squeeze(-1)
+                .squeeze(0)
+                .cpu()
+                .numpy()
+            )
+        got_raw = cast(np.ndarray, sess.run(None, {"waveform": wav[None, :]})[0])
+        got = got_raw.squeeze(-1).squeeze(0)
+        m = min(len(got), len(ref))
+        voiced = ref[:m] > 1.0
+        if voiced.sum() > 0:
+            np.testing.assert_allclose(
+                got[:m][voiced], ref[:m][voiced], rtol=0.02, atol=1.0
+            )
+
+    # 無声 (後半無音) 区間: FCPE の forward は無声フレームで NaN (0/0) を出す。onnx は
+    # graph 内で 0 に潰す (rmvpe と同契約) ので、torch (NaN->0) と全フレーム一致し、無声に
+    # pitch を捏造しない。
+    from vspeech.lib.pitch_extract import pitch_extract_fcpe
+
+    t = np.arange(sr, dtype=np.float32) / sr
+    wav = (0.6 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)
+    wav[sr // 2 :] = 0.0
+    with torch.no_grad():
+        ref = (
+            bundled(torch.from_numpy(wav).unsqueeze(0), sr, "local_argmax", 0.006)
+            .squeeze(-1)
+            .squeeze(0)
+            .cpu()
+            .numpy()
+        )
+    ref = np.nan_to_num(ref, nan=0.0)  # torch forward は無声で NaN を出す
+    got_raw = cast(np.ndarray, sess.run(None, {"waveform": wav[None, :]})[0])
+    got = got_raw.squeeze(-1).squeeze(0)
+    assert not np.isnan(got).any()  # 焼き込んだ nan_to_num で onnx は NaN を残さない
+    m = min(len(got), len(ref))
+    np.testing.assert_allclose(got[:m], ref[:m], atol=1.0)
+
+    # runtime helper も NaN を残さず、無音区間を ~0 にする
+    f0 = pitch_extract_fcpe(torch.from_numpy(wav), sess)
+    assert not np.isnan(f0).any()
+    silent = f0[len(f0) * 6 // 10 :]
+    assert float(np.max(np.abs(silent))) < 5.0

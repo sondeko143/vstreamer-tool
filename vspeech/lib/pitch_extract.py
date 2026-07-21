@@ -100,7 +100,14 @@ def pitch_extract_rmvpe(
             },
         )[0],
     )
-    return cast(NDArray[np.double], onnx_f0.squeeze())
+    # 単一フレーム (T=1) では squeeze が 0-d に潰れ、呼び出し側の f0[:p_len] が
+    # IndexError になる。atleast_1d で 1-D を保証する。
+    return cast(NDArray[np.double], np.atleast_1d(onnx_f0.squeeze()))
+
+
+# 焼き込んだ reflect-pad (432) は N>=433 (約27ms @16kHz) を要求する。短い入力での
+# ONNXRuntime クラッシュを避けるためこの最小長まで左ゼロパッドで底上げする。
+FCPE_MIN_SAMPLES = 433
 
 
 def pitch_extract_fcpe(
@@ -110,16 +117,30 @@ def pitch_extract_fcpe(
     """FCPE onnx から f0 を取る。
 
     export 時に threshold / sample_rate / decoder_mode を焼き込んであるので、runtime の
-    入力は 16kHz mono 波形 (batched ``(1, N)``) のみ。出力は f0 (Hz)、無声フレームは 0。
-    rmvpe.onnx と同じ「波形 -> f0」契約なので pitch_extract_rmvpe と入出力は同型。
+    入力は 16kHz mono 波形 (batched ``(1, N)``) のみ。出力は f0 (Hz)。FCPE の閾値デコード
+    (threshold=0.006) が無声フレームを 0 にする。
+
+    `.infer()` の f0_min/f0_max 後処理は焼き込まない = rmvpe.onnx と同じ「mel -> net ->
+    閾値 voicing -> f0」契約に揃える (rmvpe も pitch_extract_rmvpe で生の f0 を返す)。この
+    対称性が forward-only を安全とみなす根拠。閾値や後処理を変えたいときは export し直す。
+
+    N < FCPE_MIN_SAMPLES は焼き込んだ reflect-pad が要求する最小長に満たず onnx が落ちる
+    ので左ゼロパッドで底上げする (実際の vc 経路は _quality_padding で十分長いので通常は
+    発生しない防御)。
     """
-    audio_num = audio.detach().cpu().numpy().astype(np.float32)
-    audio_num = np.expand_dims(audio_num, axis=0)
+    audio_np = audio.detach().cpu().numpy().astype(np.float32)
+    if audio_np.shape[-1] < FCPE_MIN_SAMPLES:
+        audio_np = np.pad(audio_np, (FCPE_MIN_SAMPLES - audio_np.shape[-1], 0))
+    audio_num = np.expand_dims(audio_np, axis=0)
     onnx_f0 = cast(
         NDArray[np.float32],
         session.run(None, {"waveform": audio_num})[0],
     )
-    return cast(NDArray[np.double], onnx_f0.squeeze())
+    # FCPE の decode は完全無声フレームで NaN (0/0) を出しうる。新しい export はグラフ内で
+    # 0 に潰すが、古い/別の fcpe.onnx から NaN が来ても RVC の NSF (pitchf) に漏らさない
+    # よう runtime でも 0 に潰す (無声=0 で rmvpe と同契約)。
+    f0 = np.nan_to_num(np.atleast_1d(onnx_f0.squeeze()), nan=0.0)
+    return cast(NDArray[np.double], f0)
 
 
 def pitch_extract(
