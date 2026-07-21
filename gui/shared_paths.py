@@ -15,6 +15,7 @@ SHARED_ASSET_FIELDS: tuple[str, ...] = (
     "rvc.model_file",
     "rvc.hubert_model_file",
     "rvc.rmvpe_model_file",
+    "rvc.fcpe_model_file",
     "voicevox.openjtalk_dir",
     "voicevox.model_dir",
     "voicevox.onnxruntime_path",

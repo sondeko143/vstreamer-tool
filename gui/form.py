@@ -390,5 +390,6 @@ class PipelineForm(Frame):
         self._entry(content, "rvc.rmvpe_model_file", "rvc rmvpe_model_file").pack(
             fill=X
         )
+        self._entry(content, "rvc.fcpe_model_file", "rvc fcpe_model_file").pack(fill=X)
         self._spin(content, "rvc.f0_up_key", "f0_up_key", -64, 64, 1).pack(fill=X)
         self._spin(content, "rvc.gpu_id", "gpu_id", 0, 16, 1).pack(fill=X)

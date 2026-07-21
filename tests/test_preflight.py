@@ -233,6 +233,30 @@ def test_vc_fcpe_missing_model_file_reported():
     assert not any(p.field == "rvc.rmvpe_model_file" for p in problems)
 
 
+def test_vc_fcpe_present_model_file_passes(tmp_path):
+    from vspeech.config import F0ExtractorType
+    from vspeech.config import RvcConfig
+    from vspeech.config import VcConfig
+
+    model = tmp_path / "m.onnx"
+    hub = tmp_path / "hub"
+    fcpe = tmp_path / "fcpe.onnx"
+    model.write_bytes(b"x")
+    hub.mkdir()
+    fcpe.write_bytes(b"x")
+    cfg = Config(
+        vc=VcConfig(enable=True, vad_gate=False),
+        rvc=RvcConfig(
+            model_file=model,
+            hubert_model_file=hub,
+            f0_extractor_type=F0ExtractorType.fcpe,
+            fcpe_model_file=fcpe,
+        ),
+    )
+    # 全アセット存在 -> ConfigError を上げない
+    preflight(cfg)
+
+
 def test_vc_all_present_passes(tmp_path):
     from vspeech.config import RvcConfig
     from vspeech.config import VcConfig
