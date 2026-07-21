@@ -361,6 +361,7 @@ class F0ExtractorType(Enum):
     dio = "dio"
     harvest = "harvest"
     rmvpe = "rmvpe"
+    fcpe = "fcpe"
 
 
 class RvcConfig(BaseModel):
@@ -378,6 +379,7 @@ class RvcConfig(BaseModel):
     f0_extractor_type: F0ExtractorType = Field(default=F0ExtractorType.rmvpe)
     input_boost: float = Field(default=1.0)
     rmvpe_model_file: Path = Field(default=Path())
+    fcpe_model_file: Path = Field(default=Path())
 
 
 class TelemetryConfig(BaseModel):
