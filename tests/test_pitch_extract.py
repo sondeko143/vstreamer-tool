@@ -44,7 +44,7 @@ def test_pitch_extract_rmvpe_routes_to_session_and_returns_aligned_pitch():
         sr=sr,
         window=window,
         f0_extractor=F0ExtractorType.rmvpe,
-        rmvpe_session=cast(InferenceSession, session),
+        f0_session=cast(InferenceSession, session),
         silence_front=0,
     )
 
@@ -77,6 +77,70 @@ def test_pitch_extract_rmvpe_requires_session():
             sr=16000,
             window=160,
             f0_extractor=F0ExtractorType.rmvpe,
-            rmvpe_session=None,
+            f0_session=None,
+            silence_front=0,
+        )
+
+
+class FakeFcpeSession:
+    """Stands in for a waveform-only fcpe.onnx.
+
+    The FCPE export bakes threshold/sample_rate/decoder_mode into the graph, so
+    the only runtime input is ``waveform``. Records calls so the test can pin
+    that contract and that we read output index 0.
+    """
+
+    def __init__(self, f0: np.ndarray):
+        self._f0 = f0
+        self.calls: list[tuple[object, dict]] = []
+
+    def run(self, output_names, input_feed):
+        self.calls.append((output_names, dict(input_feed)))
+        return [self._f0]
+
+
+def test_pitch_extract_fcpe_routes_to_session_waveform_only():
+    sr = 16000
+    window = 160
+    audio = torch.zeros(sr, dtype=torch.float32)
+    p_len = sr // window
+    fake_f0 = np.full((1, p_len), 220.0, dtype=np.float32)
+    session = FakeFcpeSession(fake_f0)
+
+    f0_coarse, f0bak = pitch_extract(
+        audio,
+        f0_up_key=0,
+        sr=sr,
+        window=window,
+        f0_extractor=F0ExtractorType.fcpe,
+        f0_session=cast(InferenceSession, session),
+        silence_front=0,
+    )
+
+    assert len(session.calls) == 1
+    output_names, input_feed = session.calls[0]
+    assert output_names is None
+    # fcpe.onnx takes ONLY waveform (threshold/sr/decoder baked at export).
+    assert set(input_feed) == {"waveform"}
+    assert input_feed["waveform"].dtype == np.float32
+    assert input_feed["waveform"].ndim == 2
+    assert input_feed["waveform"].shape[0] == 1
+
+    assert f0bak.shape == (p_len,)
+    np.testing.assert_allclose(f0bak, 220.0, rtol=1e-5)
+    assert f0_coarse.shape == (p_len,)
+    assert f0_coarse.min() >= 1
+    assert f0_coarse.max() <= 255
+
+
+def test_pitch_extract_fcpe_requires_session():
+    with pytest.raises(ValueError):
+        pitch_extract(
+            torch.zeros(16000, dtype=torch.float32),
+            f0_up_key=0,
+            sr=16000,
+            window=160,
+            f0_extractor=F0ExtractorType.fcpe,
+            f0_session=None,
             silence_front=0,
         )

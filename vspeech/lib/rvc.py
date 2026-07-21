@@ -373,7 +373,7 @@ def _select_pitch(
     f0_enabled: bool,
     p_len: int,
     device: torch.device,
-    rmvpe_session: InferenceSession | None,
+    f0_session: InferenceSession | None,
 ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
     if not f0_enabled:
         return None, None
@@ -383,7 +383,7 @@ def _select_pitch(
         16000,
         rvc_config.window,
         f0_extractor=rvc_config.f0_extractor_type,
-        rmvpe_session=rmvpe_session,
+        f0_session=f0_session,
         silence_front=0,
     )
     pitch = pitch[:p_len]
@@ -435,7 +435,7 @@ def change_voice(
     hubert_model: HubertSession,
     session: InferenceSession,
     f0_enabled: bool,
-    rmvpe_session: InferenceSession | None,
+    f0_session: InferenceSession | None,
 ) -> NDArray[np.int16]:
     vc_start_time = time.time()
     audio_np = _pad_input_to_block(voice_frames)
@@ -464,7 +464,7 @@ def change_voice(
         f0_enabled=f0_enabled,
         p_len=p_len,
         device=device,
-        rmvpe_session=rmvpe_session,
+        f0_session=f0_session,
     )
 
     vc_end_time = time.time()

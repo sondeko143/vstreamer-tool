@@ -103,13 +103,32 @@ def pitch_extract_rmvpe(
     return cast(NDArray[np.double], onnx_f0.squeeze())
 
 
+def pitch_extract_fcpe(
+    audio: Tensor,
+    session: InferenceSession,
+) -> NDArray[np.double]:
+    """FCPE onnx から f0 を取る。
+
+    export 時に threshold / sample_rate / decoder_mode を焼き込んであるので、runtime の
+    入力は 16kHz mono 波形 (batched ``(1, N)``) のみ。出力は f0 (Hz)、無声フレームは 0。
+    rmvpe.onnx と同じ「波形 -> f0」契約なので pitch_extract_rmvpe と入出力は同型。
+    """
+    audio_num = audio.detach().cpu().numpy().astype(np.float32)
+    audio_num = np.expand_dims(audio_num, axis=0)
+    onnx_f0 = cast(
+        NDArray[np.float32],
+        session.run(None, {"waveform": audio_num})[0],
+    )
+    return cast(NDArray[np.double], onnx_f0.squeeze())
+
+
 def pitch_extract(
     audio: Tensor,
     f0_up_key: int,
     sr: int,
     window: int,
     f0_extractor: F0ExtractorType,
-    rmvpe_session: InferenceSession | None,
+    f0_session: InferenceSession | None,
     silence_front: int = 0,
 ) -> tuple[NDArray[Any], NDArray[np.floating[Any]]]:
     start_frame = int(silence_front * sr / window)
@@ -132,10 +151,13 @@ def pitch_extract(
             audio=audio.detach().cpu().numpy(), f0_max=f0_max, sr=sr
         )
     elif f0_extractor == F0ExtractorType.rmvpe:
-        if not rmvpe_session:
+        if not f0_session:
             raise ValueError("RMVPE onnx session is not provided.")
-        f0 = pitch_extract_rmvpe(audio, session=rmvpe_session)
-
+        f0 = pitch_extract_rmvpe(audio, session=f0_session)
+    elif f0_extractor == F0ExtractorType.fcpe:
+        if not f0_session:
+            raise ValueError("FCPE onnx session is not provided.")
+        f0 = pitch_extract_fcpe(audio, session=f0_session)
     else:
         raise ValueError("unknown f0 extractor type")
 

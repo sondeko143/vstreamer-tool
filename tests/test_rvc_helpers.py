@@ -139,7 +139,7 @@ def test_select_pitch_disabled_returns_none():
         f0_enabled=False,
         p_len=10,
         device=torch.device("cpu"),
-        rmvpe_session=None,
+        f0_session=None,
     )
     assert result == (None, None)
 

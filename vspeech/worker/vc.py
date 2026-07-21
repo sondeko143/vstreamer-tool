@@ -185,9 +185,9 @@ async def rvc_worker(
         session = create_session(rvc_config.model_file, device)
         check_cuda_provider(session.get_providers())
         if rvc_config.f0_extractor_type == F0ExtractorType.rmvpe:
-            rmvpe_session = create_session(rvc_config.rmvpe_model_file, device)
+            f0_session = create_session(rvc_config.rmvpe_model_file, device)
         else:
-            rmvpe_session = None
+            f0_session = None
         if vc_config.vad_gate:
             vad_session = create_vad_session(vc_config.vad_model_file)
             logger.info("vad gate enabled: %s", vc_config.vad_model_file)
@@ -213,7 +213,7 @@ async def rvc_worker(
             hubert_model=hubert_model,
             session=session,
             f0_enabled=f0_enabled,
-            rmvpe_session=rmvpe_session,
+            f0_session=f0_session,
         )
         logger.info("vc worker warmed up")
     except Exception as e:
@@ -272,7 +272,7 @@ async def rvc_worker(
                 hubert_model=hubert_model,
                 session=session,
                 f0_enabled=f0_enabled,
-                rmvpe_session=rmvpe_session,
+                f0_session=f0_session,
             )
             if vc_config.adjust_output_vol_to_input_voice:
                 audio = apply_input_envelope(

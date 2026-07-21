@@ -79,9 +79,9 @@ def build_rvc_runtime(config_path: Path) -> dict[str, Any]:
     )
     session = create_session(rvc_config.model_file, device)
     if rvc_config.f0_extractor_type == F0ExtractorType.rmvpe:
-        rmvpe_session = create_session(rvc_config.rmvpe_model_file, device)
+        f0_session = create_session(rvc_config.rmvpe_model_file, device)
     else:
-        rmvpe_session = None
+        f0_session = None
     modelmeta: Any = session.get_modelmeta()
     metadata: dict[str, Any] = json.loads(modelmeta.custom_metadata_map["metadata"])
     return {
@@ -89,7 +89,7 @@ def build_rvc_runtime(config_path: Path) -> dict[str, Any]:
         "device": device,
         "hubert_model": hubert_model,
         "session": session,
-        "rmvpe_session": rmvpe_session,
+        "f0_session": f0_session,
         "target_sample_rate": metadata["samplingRate"],
         "f0_enabled": metadata["f0"],
         "emb_output_layer": metadata.get("embOutputLayer", 9),
@@ -113,7 +113,7 @@ def run_change_voice(
         hubert_model=rt["hubert_model"],
         session=rt["session"],
         f0_enabled=rt["f0_enabled"],
-        rmvpe_session=rt["rmvpe_session"],
+        f0_session=rt["f0_session"],
     )
 
 
