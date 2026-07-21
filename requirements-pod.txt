@@ -138,3 +138,5 @@ voicevox-core @ https://github.com/VOICEVOX/voicevox_core/releases/download/0.16
     # via voicerecog
 vstreamer-protos @ https://github.com/sondeko143/vstreamer-protos/releases/download/v0.1.1/vstreamer_protos-0.1.1-py3-none-any.whl ; sys_platform == 'linux' or sys_platform == 'win32'
     # via voicerecog
+websockets==16.1 ; sys_platform == 'linux' or sys_platform == 'win32'
+    # via voicerecog
