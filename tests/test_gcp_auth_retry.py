@@ -194,9 +194,8 @@ def test_auth_session_caps_each_attempt_timeout():
 
     google.auth はトークン更新の POST に timeout を渡さず、`Request.__call__` の
     既定 120 秒が効く。そこへ retry を足すと最悪時間が試行回数ぶん伸び、応答を
-    返さないエンドポイント相手では gRPC の認証スレッドが積み上がる。この上限は
-    「retry を足してもなお修正前より短い」を成立させている当の仕掛けなのに、
-    まったくテストされていなかった (上限を 100000 秒にしても全部 GREEN だった)。
+    返さないエンドポイント相手では gRPC の認証スレッドが積み上がる。この上限が、
+    retry を足しても最悪時間を有界に保つ当の仕掛けなので、ここで固定する。
     """
     from unittest.mock import patch
 
@@ -474,16 +473,13 @@ async def test_sender_secure_channel_authenticates_with_the_retrying_session(
 ):
     """sender の ID トークン経路を、**本物の** チャネル組み立てごと検証する。
 
-    以前ここにあったテストは `async_secure_authorized_channel` 自体を差し替えて
-    いたため、修正の継ぎ目 (`AuthMetadataPlugin(credentials, request)`) が
-    assertion の下を一度も通っていなかった。その結果、その行を
-    `AuthMetadataPlugin(credentials, Request())` に戻して本番のバグを丸ごと
-    復活させても 557 件全部 GREEN のままだった (実測)。差し替えるのは grpc の
-    `secure_channel` だけに留め、認証の組み立ては本物を走らせる。
+    差し替えるのは grpc の `secure_channel` だけに留め、認証プラグインの組み立て
+    (`AuthMetadataPlugin(credentials, request)`) は本物を走らせる。こうしないと
+    その組み立てが assertion の下を通らず、`AuthMetadataPlugin(credentials,
+    Request())` のような本番のバグを取りこぼす。
 
     同時に「認証がチャネルに載っていること」も見る: `composite_credentials` を
-    `ssl_credentials` だけにする (= 資格情報を一切送らなくなる) 変異も、
-    以前は全テスト GREEN のまま通っていた。
+    `ssl_credentials` だけにする (= 資格情報を一切送らなくなる) 変異を捕まえる。
     """
     from typing import Any
 

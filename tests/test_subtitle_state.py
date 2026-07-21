@@ -101,9 +101,8 @@ def test_next_expiry_sec_ignores_non_head_entries():
         ("ne", "right"),
         ("w", "left"),
         # "center" contains "e" as a substring, so an unguarded `"e" in
-        # anchor` test would mis-fire as "right" -- this is the case that
-        # regressed silently until this function existed as the one shared
-        # copy the TK and OBS backends both call.
+        # anchor` test would mis-fire as "right" -- the tricky case, guarded
+        # once in this shared function the TK and OBS backends both call.
         ("center", "center"),
         ("e", "right"),
         ("sw", "left"),

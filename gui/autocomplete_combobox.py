@@ -5,10 +5,9 @@ Unlike a native ttk combobox (whose dropdown grabs keyboard focus, so you can't
 keep typing to narrow an open list), the popup here never takes focus — the
 entry keeps it — so the list filters as you type while staying open.
 
-Drop-in replacement for the old prefix-autocomplete combobox: same public
-interface (`set_completion_list` / `get_value` / `get_label_for_item_value` /
-`set` / `get`) and it fires a `<<ComboboxSelected>>` virtual event on a pick,
-so `gui/form.py` needs no changes.
+Exposes `set_completion_list` / `get_value` / `get_label_for_item_value` /
+`set` / `get` and fires a `<<ComboboxSelected>>` virtual event on a pick, so
+`gui/form.py` drives it like a native combobox.
 """
 
 import tkinter
@@ -37,7 +36,7 @@ class AutocompleteCombobox[T](ttk.Entry):
         self._reposition_job: str | None = None
         self._last_pos: tuple[int, int] | None = None
 
-    # --- public interface (drop-in for the old combobox) ----------------
+    # --- public interface ----------------
 
     def get_value(self) -> T | None:
         # None when the current text isn't a known label (blank, or a partial

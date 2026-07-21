@@ -171,8 +171,7 @@ def _ort_output_to_torch(ort_output: Any, device: torch.device) -> torch.Tensor:
     except Exception as e:  # noqa: BLE001 - any failure must still return output
         # dlpack zero-copy is the fast path; on any failure fall back to a numpy
         # copy so inference still returns. Warn, so a broad except here can't turn
-        # a real dlpack bug into a silent slow path (as export_graph's twin except
-        # once did with a UnicodeEncodeError).
+        # a real dlpack bug into a silent slow path.
         logger.warning("dlpack transfer failed; using numpy fallback: %s", e)
         return torch.tensor(ort_output.numpy(), device=device)
 

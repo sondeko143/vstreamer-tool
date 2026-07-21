@@ -49,7 +49,7 @@ from vspeech.lib.rvc import FEATS_L12_RAW
 from vspeech.lib.rvc import parse_output_names
 
 # NOTE: transformers / safetensors / scripts.convert_hubert (transformers を引く) は
-# **関数内で遅延 import する**。module 直下に置くと、spec ② でそれらを依存から外した後に
+# **関数内で遅延 import する**。それらは依存に無いので、module 直下に置くと
 # このモジュールをテストから import できなくなり、layer_indices / HubertOnnxWrapper を
 # 単体テストできなくなる。scripts/convert_hubert.py が fairseq に対して取っている手と同じ。
 
@@ -164,10 +164,10 @@ def export_graph(wrapper: torch.nn.Module, source: torch.Tensor, path: Path) -> 
         torch.onnx.export(wrapper, (source,), str(path), dynamo=True, **kwargs)
         return "dynamo"
     except Exception:  # exporter は多様な例外を投げるので広く捕まえる
-        # **大声で報告すること。** 2026-07-10 にこの except が UnicodeEncodeError を飲み込み、
-        # dynamo が成功できるのに黙って legacy へ落ちていた（torch.onnx が進捗の ✅ を
-        # Windows の cp1252 stdout へ書こうとして落ちる）。main() の UTF-8 reconfigure が
-        # その原因を潰すが、フォールバックが起きたときは必ず traceback を出す。
+        # **大声で報告すること。** この except が例外を飲み込むと、dynamo が成功できるのに
+        # 黙って legacy へ落ちうる（torch.onnx が進捗の ✅ を Windows の cp1252 stdout へ
+        # 書こうとして落ちる類）。main() の UTF-8 reconfigure がその原因を潰すが、
+        # フォールバックが起きたときは必ず traceback を出す。
         print("!!! dynamo exporter failed; falling back to the legacy exporter !!!")
         traceback.print_exc()
         torch.onnx.export(wrapper, (source,), str(path), dynamo=False, **kwargs)

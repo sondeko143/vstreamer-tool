@@ -139,11 +139,9 @@ async def _push_panel_style(
 
     呼び出し側は `_push_styles_or_warn` (guarded path) だけにすること --
     壊れた色設定 (Tk 専用色名など) は `build_text_settings` が `ValueError`
-    を投げるので、直接呼ぶ側はそれを自分で処理する責任を負う。かつて存在した
-    無防備な公開ラッパー `push_styles` (両パネルをまとめて呼ぶだけの薄い関数)
-    は削除した -- 誰かがこの分かりやすい公開名に手を伸ばして再導入すれば、
-    bare `ValueError` が `TaskGroup` ごと音声パイプラインを道連れにする
-    不具合がそのまま戻る。
+    を投げるので、直接呼ぶ側はそれを自分で処理する責任を負う。両パネルを
+    まとめて呼ぶだけの無防備な公開ラッパーを足さないこと -- bare `ValueError`
+    が `TaskGroup` ごと音声パイプラインを道連れにする。
     """
     await client.request(
         "SetInputSettings",
@@ -176,11 +174,10 @@ async def _push_styles_or_warn(
     する。
 
     パネルごとに個別の try/except でガードする:
-    以前は `push_styles` をまとめて 1 つの try/except で囲っていたので、
-    先に壊れたパネルより後のパネルは (値が有効でも) 一切 push されずに
-    直前のスタイルのまま取り残されていた。パネルごとに独立させれば、
-    どちらも「壊れていなければ最新の値を反映・壊れていれば直前の値を維持」
-    をそれぞれ独立に満たせる。
+    パネルごとに独立させれば、どちらも「壊れていなければ最新の値を反映・
+    壊れていれば直前の値を維持」をそれぞれ独立に満たせる。まとめて 1 つの
+    try/except で囲うと、先に壊れたパネルより後のパネルは (値が有効でも)
+    一切 push されずに直前のスタイルのまま取り残される。
 
     `style_warned` はパネルキーごとの warn-once フラグ: 同じ壊れた値が
     push に成功する (= config が直る) まで、
@@ -374,7 +371,7 @@ async def _run_session(
         now = monotonic()
         # Ingest before either push: ingest_text is
         # a pure state update and cannot raise, unlike push_text below. The
-        # old order (aging push, then ingest) meant a message already
+        # alternative order (aging push, then ingest) would mean a message already
         # dequeued could vanish without ever reaching OBS in any session and
         # without being re-queued, if the *aging* push raised (killing the
         # session) before the ingest ever ran -- narrow (needs a message and

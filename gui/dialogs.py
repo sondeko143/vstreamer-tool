@@ -16,8 +16,6 @@ class RecipeDialog(Toplevel):
 
     After the constructor returns (it blocks via `wait_window`), `result` holds
     the chosen recipe key, or None if the user cancelled or closed the dialog.
-    Replaces the old free-text `Querybox.get_string` where a typo silently fell
-    through to the "blank" recipe.
     """
 
     def __init__(self, master: Any):

@@ -13,11 +13,8 @@ immediately before the call makes the int16 output bit-exact-reproducible
 (verified self-noise 0). Everything the refactor touches (the orchestration
 producing infer's inputs, and postprocessing) is deterministic on its own; only
 the untouched `infer` synthesizer is stochastic. So this captures a *seeded*
-output as the golden. The golden test re-seeds identically; it asserted exact
-equality while HuBERT ran under fairseq, and now asserts a tight tolerance
-(correlation + waveform SNR) because the content encoder moved to transformers.
-This npz must be captured while `vspeech/lib/rvc.py` still uses fairseq -- it is the
-fairseq-side reference the migration is validated against. Rebuilds the
+output as the golden. The golden test re-seeds identically and asserts a tight
+tolerance (correlation + waveform SNR). Rebuilds the
 device/hubert/RVC-session/f0-session (rmvpe or fcpe) exactly as rvc_worker does
 and writes
 tests/assets/rvc_golden/change_voice_golden.npz (gitignored): the input, the

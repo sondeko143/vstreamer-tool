@@ -150,7 +150,7 @@ def _max_rel(a: np.ndarray, b: np.ndarray, voiced: np.ndarray) -> float:
 def _max_abs(a: np.ndarray, b: np.ndarray) -> float:
     m = min(len(a), len(b))
     # NaN を 0 に潰してから比較する。NaN のまま max を取ると NaN>tol が False になり
-    # 差分を見逃す (無声フレームの NaN で self-verify が素通りしていたバグの対策)。
+    # 差分を見逃す (無声フレームは NaN になりうる)。
     diff = np.abs(np.nan_to_num(a[:m]) - np.nan_to_num(b[:m]))
     return float(np.max(diff)) if diff.size else 0.0
 

@@ -92,12 +92,12 @@ def test_waveform_snr_silent_reference_with_corrupted_test_is_minus_inf():
 def test_waveform_snr_catches_corruption_at_any_offset():
     """フレーム分割しないので、末尾端数だろうと破損は必ず検出される。
 
-    旧セグメンタル版は長さが frame_len の倍数でないとき末尾を捨て、そこだけが
-    壊れていると inf（完璧）を返していた。全体 SNR にはその穴が無い。
+    全体 SNR は末尾を捨てないので、長さが frame_len の倍数でなくても、末尾端数
+    だけが壊れているケースを inf（完璧）と誤らず検出する。
     """
     ref = np.sin(np.linspace(0.0, 40.0, 2548))
     test = ref.copy()
-    test[2048:] += 5.0  # 旧実装なら捨てられていた末尾端数だけを壊す
+    test[2048:] += 5.0  # frame_len の倍数を超えた末尾端数だけを壊す
     result = waveform_snr(ref, test)
     assert np.isfinite(result), f"tail corruption was hidden: {result}"
     assert result < 40.0  # ゲートを通してはならない

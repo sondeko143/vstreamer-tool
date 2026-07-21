@@ -58,9 +58,9 @@ def check_cuda_provider(providers: Sequence[str]) -> None:
 def _dtype_for_width(width: int) -> np.dtype[Any]:
     """Signed-integer numpy dtype for a PCM byte-width.
 
-    Matches the integer-PCM assumption of the old audioop path; vc input is
-    INT16 in practice. Note: width==1 is treated as signed int8; unsigned
-    8-bit WAV (bias 128) is not handled (never exercised here).
+    Assumes integer PCM; vc input is INT16 in practice. Note: width==1 is
+    treated as signed int8; unsigned 8-bit WAV (bias 128) is not handled
+    (never exercised here).
     """
     if width == 1:
         return np.dtype(np.int8)

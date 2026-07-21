@@ -2,8 +2,7 @@
 
 必要なのは Hello(0)/Identify(1)/Identified(2) のハンドシェイクと
 Request(6)/RequestResponse(7) の往復だけで、イベント購読・バッチ・msgpack は
-使わない。websockets の API 変更 (過去に websockets.client.connect ->
-websockets.asyncio.client.connect の移行があった) の影響をこのファイルに
+使わない。websockets の API 変更の影響をこのファイルに
 閉じ込めるため、呼び出し側は ObsTransport 越しにしか触らない。
 """
 

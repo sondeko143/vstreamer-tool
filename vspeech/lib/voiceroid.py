@@ -21,8 +21,8 @@ class VR2:
         if self.vc_roid2.param:
             # pydantic v2: iterate model_fields, NOT get_type_hints(vr2_params).
             # get_type_hints() on a *model instance* returns {} (an instance's
-            # __annotations__ is empty in v2), so the old code silently applied
-            # zero parameters after the v1->v2 migration.
+            # __annotations__ is empty in v2), which would silently apply zero
+            # parameters.
             for name in type(vr2_params).model_fields:
                 value = getattr(vr2_params, name)
                 logger.info("vr2 %s: %s", name, value)

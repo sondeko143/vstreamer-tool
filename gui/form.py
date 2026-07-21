@@ -138,8 +138,8 @@ class PipelineForm(Frame):
     def read_into(self, config: Config) -> list[str]:
         # Returns the dotted paths of any fields whose widget value could not be
         # coerced/applied (e.g. a non-numeric spinbox, or a garbled combo). The
-        # caller surfaces these instead of the old silent `continue`, so a
-        # dropped edit is visible rather than vanishing.
+        # caller surfaces these, so a dropped edit is visible rather than
+        # vanishing silently.
         failed: list[str] = []
         for widget, (path, coerce) in self.bindings.items():
             if not widget.winfo_exists():

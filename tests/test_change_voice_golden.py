@@ -1,11 +1,10 @@
-"""change_voice の音声回帰テスト（fairseq -> transformers 移行の end-to-end 検証）。
+"""change_voice の音声回帰テスト。
 
-golden は **fairseq 版で捕獲したまま** 据え置く。HuBERT は eval + inference_mode 下で
-RNG を一切消費しないため、seed_all() 後の RNG ストリームは実装差し替えの影響を受けない
-(RNG を引くのは RVC synthesizer の infer だけ)。したがって golden との差は特徴量の値の
-差だけに由来し、この照合は移行の等価性をそのまま証明する。
+HuBERT は eval + inference_mode 下で RNG を一切消費しないため、seed_all() 後の
+RNG ストリームは RVC synthesizer の infer だけで決まる。したがって golden との差は
+特徴量の値の差だけに由来する。
 
-実装が変わった以上 bit-exact にはならないので、判定は許容誤差（相関 + セグメンタル SNR）。
+出力は golden と bit-exact にはならないので、判定は許容誤差（相関 + セグメンタル SNR）。
 
 golden npz / CUDA / RVC worker config ($VSPEECH_RVC_GOLDEN_CONFIG) が揃わなければ skip。
 """
@@ -56,7 +55,7 @@ def test_change_voice_matches_seeded_golden():
     out = cap.run_change_voice(rt, voice_frames, voice_sample_rate)
 
     assert out.shape == golden.shape, f"length changed: {out.shape} vs {golden.shape}"
-    # 実装が fairseq -> transformers に変わったので bit-exact ではない。
+    # out は golden と bit-exact にはならないので、許容誤差で照合する。
     # 緩めるときは実測値をこのコメントに残すこと（実測の 10 倍まで）。
     correlation = waveform_correlation(out, golden)
     snr_db = waveform_snr(golden, out)

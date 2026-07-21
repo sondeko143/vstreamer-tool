@@ -703,12 +703,9 @@ async def test_push_styles_or_warn_swallows_a_tk_only_color_and_warns(monkeypatc
 async def test_a_bad_first_panel_color_does_not_block_the_second_panels_good_style(
     monkeypatch,
 ):
-    # `_push_styles_or_warn` used to wrap the *whole* panel loop in one
-    # try/except, so a bad "n" (text) colour -- the panel iterated *first* --
-    # aborted the loop before the "s" (translated) panel, even though its
-    # colour was fine. Each panel is now guarded independently: breaking the
-    # first panel must not stop the second, still-valid panel from getting
-    # its update.
+    # Each panel's style push is guarded independently: a bad "n" (text)
+    # colour -- the panel iterated *first* -- must not stop the second,
+    # still-valid "s" (translated) panel from getting its update.
     fake_logger = RecordingLogger()
     monkeypatch.setattr(subtitle_obs_mod, "logger", fake_logger)
     config = make_config()
@@ -721,8 +718,6 @@ async def test_a_bad_first_panel_color_does_not_block_the_second_panels_good_sty
     )
 
     assert any("white" in w for w in fake_logger.warnings)
-    # unfixed, this would be empty: the loop would have aborted at "n"
-    # before ever reaching "s".
     assert client.settings_for("vspeech-translated")
 
 
@@ -732,8 +727,8 @@ async def test_subtitle_obs_worker_does_not_let_a_bad_color_escape_at_first_conn
     # The other trigger site for a bad colour: push_styles at the very
     # first connect, reached whenever a reload changed the colour while OBS
     # was still down and it then comes up -- preflight never re-runs, so
-    # this is the only remaining guard. A bare ValueError here used to take
-    # the whole TaskGroup (and the live voice pipeline) down with it.
+    # this is the only remaining guard. A bare ValueError here would otherwise
+    # take the whole TaskGroup (and the live voice pipeline) down with it.
     fake_logger = RecordingLogger()
     monkeypatch.setattr(subtitle_obs_mod, "connect", make_fake_connect())
     monkeypatch.setattr(subtitle_obs_mod, "ObsWsClient", SucceedingClient)
@@ -807,12 +802,10 @@ async def test_reload_with_a_tk_only_color_warns_and_keeps_the_session_running(
 async def test_backoff_and_warn_once_survive_a_recurring_post_identify_failure(
     monkeypatch,
 ):
-    # The old code reset
-    # backoff/warned as soon as identify+validate_sources succeeded, so a
-    # failure that recurs *after* that point (SetInputSettings rejected
-    # every single session) never actually backed off, and warned on every
-    # attempt instead of once. Measured pre-fix: sleeps == [0.5] * 8,
-    # warnings == 8.
+    # A failure that recurs *after* identify+validate_sources succeed
+    # (SetInputSettings rejected every single session) must still back off and
+    # warn only once -- backoff/warn state must not reset on every attempt just
+    # because identify succeeded.
     sleeps: list[float] = []
 
     async def fake_sleep(sec: float) -> None:
@@ -841,11 +834,10 @@ async def test_backoff_and_warn_once_survive_a_recurring_post_identify_failure(
 async def test_display_clock_advances_across_an_outage_so_stale_text_is_not_re_pushed(
     monkeypatch,
 ):
-    # `last_tick` used to be a
-    # `_run_session` local, re-initialised on every reconnect, so the
-    # elapsed outage time never reached `age_panels` and a minute-old
-    # subtitle got re-pushed verbatim on recovery. Measured pre-fix with a
-    # 60s outage: the reconnect's push still carried the stale text.
+    # The display clock must keep advancing across an outage: the elapsed
+    # time has to reach `age_panels` so a minute-old subtitle is aged out and
+    # not re-pushed verbatim when the session reconnects. `last_tick` persists
+    # across reconnects to make that elapsed time visible.
     pushed: list[tuple[int, str, str]] = []
     stale_text = "これは古い字幕です"
     clock = FakeClock(0.0)
@@ -934,20 +926,18 @@ async def test_a_healthy_session_dying_resets_backoff_and_warns_again(monkeypatc
     ]
     reach_warnings = [w for w in fake_logger.warnings if "cannot reach" in w]
     # one warning for session 0's quick death, a second *distinct* one after
-    # session 1's healthy-then-dead cycle -- unfixed, warn-once never gets
-    # released and this would be 1 (later outages silently hidden).
+    # session 1's healthy-then-dead cycle: warn-once must be released between
+    # outages so the later one is not silently hidden.
     assert len(reach_warnings) == 2
 
 
 async def test_push_styles_or_warn_only_warns_once_for_a_persisting_bad_value(
     monkeypatch,
 ):
-    # A bad colour plus a flapping
-    # OBS used to log this warning on every single reconnect (measured: 20
-    # attempts -> 20 style warnings, against 1 correctly-gated "cannot reach"
-    # warning) even though the colour never changed. `style_warned` gates it
-    # per panel, the same warn-once shape as the connection `warned` flag --
-    # but only while the *same* bad value persists.
+    # A bad colour plus a flapping OBS must log this warning only once, not on
+    # every reconnect, as long as the colour never changes. `style_warned`
+    # gates it per panel, the same warn-once shape as the connection `warned`
+    # flag -- but only while the *same* bad value persists.
     fake_logger = RecordingLogger()
     monkeypatch.setattr(subtitle_obs_mod, "logger", fake_logger)
     config = make_config()
@@ -1218,7 +1208,7 @@ def make_recurring_crash_after_marker_client(
     inputName, text)`, same shape as `make_tick_hoist_client`. Raises the
     instant `crash_text` itself is pushed, for the first
     `num_crashing_sessions` sessions only -- forces exactly that many
-    reconnects on demand (used to prove a warn-once survives them), then
+    reconnects on demand (to prove a warn-once survives them), then
     lets the worker settle instead of crash-looping forever.
     """
     session_counter = {"n": -1}
@@ -2189,19 +2179,16 @@ async def test_a_real_obs_auth_rejection_close_becomes_a_worker_startup_error(
     # in this file): it drives the real identify() via a fake connect()
     # whose connection raises ConnectionClosedError(4009) from recv(), the
     # same shape a real obs-websocket connection produces on a wrong
-    # password. Proves the fix end to end -- both identify()'s
+    # password. Exercises this end to end -- both identify()'s
     # close-code-to-ObsIdentifyError conversion (lib/obs_ws.py) and the
-    # worker's unchanged inner fail-loud catch (subtitle_obs.py) -- not just
-    # the worker's catch in isolation.
+    # worker's inner fail-loud catch (subtitle_obs.py) -- not just the
+    # worker's catch in isolation.
     #
     # sleep is patched to bail out after a couple of iterations via
-    # CancelledError (same shape as the other backoff tests in this file):
-    # unpatched, the pre-fix bug this test targets makes the worker retry
-    # with a real asyncio.sleep() backoff forever (measured on real
-    # hardware as `timeout 124` -- the process staying alive, retrying) --
-    # exactly the defect this test exists to catch. Without this patch,
-    # a RED run of this test against the unfixed identify() hangs for real
-    # wall-clock time instead of failing fast.
+    # CancelledError (same shape as the other backoff tests in this file): if
+    # identify() ever stops converting the close code and the worker retries
+    # the backoff instead of failing loud, an unpatched real asyncio.sleep()
+    # would hang this test on wall-clock time forever instead of failing fast.
     sleeps: list[float] = []
 
     async def fake_sleep(sec: float) -> None:
@@ -2219,9 +2206,9 @@ async def test_a_real_obs_auth_rejection_close_becomes_a_worker_startup_error(
     with pytest.raises(WorkerStartupError) as e:
         await subtitle_obs_mod.subtitle_obs_worker(context, in_queue)
 
-    # fatal on the very first attempt -- never retried (unfixed, this stays
-    # unreached: the pre-fix bug raises WorkerShutdown instead, once
-    # fake_sleep's CancelledError fires after 2 fruitless retries).
+    # fatal on the very first attempt -- never retried: a retrying worker would
+    # instead raise WorkerShutdown once fake_sleep's CancelledError fires after
+    # 2 fruitless retries.
     assert sleeps == []
     # names the code/reason the user actually needs to act on the typo --
     # not just "some WorkerStartupError happened".

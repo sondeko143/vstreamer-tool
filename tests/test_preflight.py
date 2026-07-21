@@ -345,7 +345,7 @@ def test_obs_backend_requires_text_source_but_not_translated_source():
     # doing nothing -- still fatal. translated_source has no such default
     # fallback (a routed p=s message just gets dropped with a warn-once,
     # see worker/subtitle_obs.py) so an empty one just means this pipeline
-    # has no translation step -- no longer required (ADR-0041/0042).
+    # has no translation step -- not required (ADR-0041/0042).
     config = Config()
     config.subtitle.enable = True
     config.subtitle.worker_type = SubtitleWorkerType.OBS
