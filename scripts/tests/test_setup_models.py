@@ -1,3 +1,7 @@
+# scripts/tests は既定の `poe test` / `poe check` スイープ外（pyproject の testpaths=["tests"]）。
+# 他の scripts/tests（test_metrics.py 等）と同じく明示実行する:
+#   uv run --no-sync pytest scripts/tests/test_setup_models.py
+
 from scripts import setup_models
 
 
@@ -21,3 +25,5 @@ def test_guide_points_derived_models_to_their_own_poe_tasks():
     assert "poe convert-hubert" in guide
     assert "poe export-hubert-onnx" in guide
     assert "hubert_model_file" in guide
+    assert "hubert_base.pt" in guide
+    assert "auspicious3000/contentvec" in guide
