@@ -13,6 +13,9 @@ import sys
 if isinstance(sys.stdout, io.TextIOWrapper):
     sys.stdout.reconfigure(encoding="utf-8")
 
+# この案内はモデルの入手元・版を config.toml.example / THIRD_PARTY_NOTICES.md と意図的に重複
+# して持つ (どの入口からでも導入方法へ辿れることが目的)。版 (silero VAD v6.2.1 等) を上げる
+# ときは3箇所を揃えること。ライセンス詳細は THIRD_PARTY_NOTICES.md が単一情報源。
 GUIDE = """\
 外部モデルの導入ガイド (このリポジトリはモデルを同梱しません)
 ==============================================================

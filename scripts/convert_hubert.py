@@ -218,10 +218,12 @@ def verify(
 
 
 def main() -> None:
-    # 日本語の --help epilog を Windows の cp1252 stdout でも壊さない（プロジェクト頻出の
-    # encoding 対策。sibling の export_hubert_onnx.py と同型）。typeshed は sys.stdout を
+    # 日本語の --help epilog (stdout) と検証失敗時の SystemExit 診断 (stderr) を Windows の
+    # cp1252 console でも壊さない（プロジェクト頻出の encoding 対策。sibling の
+    # export_hubert_onnx.py と同型で stdout/stderr 両方）。typeshed は sys.stdout/stderr を
     # .reconfigure を持たない TextIO とするが、runtime は TextIOWrapper。
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # ty: ignore[unresolved-attribute]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # ty: ignore[unresolved-attribute]
     parser = argparse.ArgumentParser(
         description="fairseq ContentVec (hubert_base.pt) を transformers HubertModel 資産へ変換する (offline, 1/2 段目)。",
         epilog=(
