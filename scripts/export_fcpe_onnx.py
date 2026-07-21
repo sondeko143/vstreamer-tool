@@ -157,7 +157,20 @@ def _max_abs(a: np.ndarray, b: np.ndarray) -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Export bundled FCPE to a waveform-input ONNX."
+        description="Export bundled FCPE to a waveform-input ONNX.",
+        epilog=(
+            "FCPE モデルは手動ダウンロード不要。このタスクは uv run --with で torchfcpe を\n"
+            "入れ、bundled の FCPE 重みを自動取得して onnx を生成する。\n"
+            "\n"
+            "手順:\n"
+            "  1. uv run poe export-fcpe-onnx --output ~/.config/vstreamer/fcpe.onnx\n"
+            "  2. config の [rvc] に設定:\n"
+            '       f0_extractor_type = "fcpe"\n'
+            '       fcpe_model_file   = "~/.config/vstreamer/fcpe.onnx"\n'
+            "\n"
+            "FCPE は rmvpe より高速だが精度は落ちる (ADR-0049)。既定は rmvpe のまま。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--output", required=True, type=Path, help="出力 fcpe.onnx のパス"
