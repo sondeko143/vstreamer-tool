@@ -186,6 +186,8 @@ async def rvc_worker(
         check_cuda_provider(session.get_providers())
         if rvc_config.f0_extractor_type == F0ExtractorType.rmvpe:
             f0_session = create_session(rvc_config.rmvpe_model_file, device)
+        elif rvc_config.f0_extractor_type == F0ExtractorType.fcpe:
+            f0_session = create_session(rvc_config.fcpe_model_file, device)
         else:
             f0_session = None
         if vc_config.vad_gate:
