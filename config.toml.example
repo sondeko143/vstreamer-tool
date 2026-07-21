@@ -120,6 +120,7 @@ volume_adjust_window_ms = 25.0
 # 発話内の非音声区間 (ブレス・環境音) は出力をダックする。
 vad_gate = false
 # snakers4/silero-vad リポジトリの silero_vad.onnx (v6.2.1) を取得してパスを指定する。
+# 入手方法の一覧: uv run poe models
 # vad_model_file = "./silero_vad.onnx"
 # speech 確率の閾値。窓 (32ms) ごとにこれ以上で speech 扱い。
 vad_threshold = 0.5
@@ -178,6 +179,7 @@ gpu_id = 0
 #   uv run poe export-fcpe-onnx --output ./fcpe.onnx
 f0_extractor_type = "rmvpe"
 # rmvpe の重みファイル（f0_extractor_type = "rmvpe" のとき必要）
+# 入手方法: uv run poe models（wok000/weights_gpl, GPL-3.0）
 rmvpe_model_file = "./rmvpe.onnx"
 # fcpe の onnx（f0_extractor_type = "fcpe" のとき必要。uv run poe export-fcpe-onnx で生成）
 fcpe_model_file = "./fcpe.onnx"
