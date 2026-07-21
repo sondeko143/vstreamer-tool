@@ -51,11 +51,6 @@ export-hubert-onnx = { cmd = "uv run --with transformers --with onnx --with onnx
 #   例: uv run poe export-fcpe-onnx --output ~/.config/vstreamer/fcpe.onnx
 export-fcpe-onnx = { cmd = "uv run --extra rvc --with torchfcpe --with onnx --with onnxscript python -m scripts.export_fcpe_onnx", help = "FCPE -> waveform-input ONNX (offline, project env + overlay)" }
 
-# 外部モデル (Silero VAD / rmvpe / FCPE / HuBERT) の入手方法と設定キーを表示するだけの案内
-# タスク。ダウンロードはしない (rmvpe は GPL、URL 陳腐化、保留中の GUI 自動取得フィーチャを
-# 侵さないため案内に留める)。ライセンス詳細は THIRD_PARTY_NOTICES.md。
-models = { cmd = "python scripts/setup_models.py", help = "Show how to obtain the external models (Silero VAD / rmvpe / FCPE / HuBERT) and which config keys to set" }
-
 # Complexity insight (advisory; separate from the health gates above) — driven by the
 # `code-metrics` skill. Shells out to `uvx lizard` + `uvx complexipy`, plus an in-process
 # beniget DepDegree (def-use coupling) lens that catches entangled mutable state:

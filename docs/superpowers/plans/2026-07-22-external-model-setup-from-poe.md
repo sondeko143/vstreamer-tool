@@ -10,6 +10,11 @@
 
 **ADR: none** — 可逆な doc/DX プラミングで契約変更なし。却下した代替 (自動 fetch タスク) は保留中の GUI 自動取得フィーチャの領域で、そちらが独自の ADR を持つ。
 
+> **※ 実装後の変更 (2026-07-22, ユーザー指示):** `poe models` タスクと `scripts/setup_models.py` は廃止し、
+> 入手情報は `config.toml.example` の各設定箇所へインラインで集約した。以下 Task 1 と Task 2 の「`poe models`」
+> 記述は初版の履歴で、現行は config.toml.example が Silero VAD / rmvpe の入手情報の home。HuBERT の
+> `--help` epilog (Task 3) は現行も有効。
+
 ## Global Constraints
 
 - 自動ダウンロード/取得機構は作らない (curl/fetch を行うタスクを増やさない)。案内のみ。

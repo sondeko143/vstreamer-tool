@@ -119,8 +119,8 @@ volume_adjust_window_ms = 25.0
 # Silero VAD ノイズゲート (opt-in)。非音声チャンクは RVC 推論ごとスキップし、
 # 発話内の非音声区間 (ブレス・環境音) は出力をダックする。
 vad_gate = false
-# snakers4/silero-vad リポジトリの silero_vad.onnx (v6.2.1) を取得してパスを指定する。
-# 入手方法の一覧: uv run poe models
+# 入手: snakers4/silero-vad の silero_vad.onnx (v6.2.1, MIT)。取得してパスを指定する。
+#   https://github.com/snakers4/silero-vad （ライセンス詳細は THIRD_PARTY_NOTICES.md）
 # vad_model_file = "./silero_vad.onnx"
 # speech 確率の閾値。窓 (32ms) ごとにこれ以上で speech 扱い。
 vad_threshold = 0.5
@@ -165,8 +165,10 @@ model_dir = "./voicevox/models/vvms"
 onnxruntime_path = "./voicevox/onnxruntime/lib/voicevox_onnxruntime.dll"
 
 [rvc]
+# RVC 声モデル (自作 or 第三者モデル。第三者は各配布元の規約に従う)。利用者が用意する。
 model_file = "./dummy_simple.onnx"
-# scripts/convert_hubert.py が出力した変換済み ContentVec 資産ディレクトリ（旧: hubert_base.pt）
+# 入手: hubert_base.pt (RVC 配布の ContentVec; origin auspicious3000/contentvec, MIT) を 2 段変換した
+#   ONNX 資産ディレクトリを指す。手順は `uv run poe convert-hubert --help` / `uv run poe export-hubert-onnx --help`。
 hubert_model_file = "./hubert_contentvec"
 f0_up_key = 12
 window = 160
@@ -175,11 +177,12 @@ gpu_id = 0
 # f0 抽出器: "rmvpe"（既定）/ "fcpe" / "dio" / "harvest"
 # dio/harvest は pyworld が必要（cp314 wheel が無いため runtime 依存から外した）。
 # 使う場合のみ手動導入: uv pip install pyworld
-# fcpe は rmvpe より高速だが精度は落ちる (ADR-0049)。使う前に onnx を生成:
-#   uv run poe export-fcpe-onnx --output ./fcpe.onnx
+# fcpe は rmvpe より高速だが精度は落ちる (ADR-0049)。手動DL不要 — 使う前に onnx を生成:
+#   uv run poe export-fcpe-onnx --output ./fcpe.onnx  （詳細は同 --help）
 f0_extractor_type = "rmvpe"
 # rmvpe の重みファイル（f0_extractor_type = "rmvpe" のとき必要）
-# 入手方法: uv run poe models（wok000/weights_gpl, GPL-3.0）
+# 入手: wok000/weights_gpl の rmvpe_20231006.onnx (GPL-3.0 — 詳細は THIRD_PARTY_NOTICES.md 第3節)
+#   https://huggingface.co/wok000/weights_gpl
 rmvpe_model_file = "./rmvpe.onnx"
 # fcpe の onnx（f0_extractor_type = "fcpe" のとき必要。uv run poe export-fcpe-onnx で生成）
 fcpe_model_file = "./fcpe.onnx"
