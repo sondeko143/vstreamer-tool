@@ -211,6 +211,28 @@ def test_vc_missing_model_files_reported():
     assert any("rvc.rmvpe_model_file" in d for d in details)
 
 
+def test_vc_fcpe_missing_model_file_reported():
+    from vspeech.config import F0ExtractorType
+    from vspeech.config import RvcConfig
+    from vspeech.config import VcConfig
+
+    cfg = Config(
+        vc=VcConfig(enable=True),
+        rvc=RvcConfig(
+            model_file=Path("/no/model.onnx"),
+            hubert_model_file=Path("/no/hubert"),
+            f0_extractor_type=F0ExtractorType.fcpe,
+            fcpe_model_file=Path("/no/fcpe.onnx"),
+        ),
+    )
+    with pytest.raises(ConfigError) as ei:
+        preflight(cfg)
+    problems = ei.value.problems
+    assert any(p.field == "rvc.fcpe_model_file" for p in problems)
+    # fcpe 選択時は rmvpe_model_file 不在を咎めない
+    assert not any(p.field == "rvc.rmvpe_model_file" for p in problems)
+
+
 def test_vc_all_present_passes(tmp_path):
     from vspeech.config import RvcConfig
     from vspeech.config import VcConfig

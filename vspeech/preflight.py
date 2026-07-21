@@ -203,6 +203,15 @@ def _check_vc(config: Config) -> list[ConfigProblem]:
                     field="rvc.rmvpe_model_file",
                 )
             )
+    if rvc.f0_extractor_type == F0ExtractorType.fcpe:
+        if not rvc.fcpe_model_file.expanduser().is_file():
+            problems.append(
+                ConfigProblem(
+                    w,
+                    f"rvc.fcpe_model_file '{rvc.fcpe_model_file}' が存在しません",
+                    field="rvc.fcpe_model_file",
+                )
+            )
     problems.extend(_check_vad_gate(config.vc, w))
     return problems
 
