@@ -171,12 +171,16 @@ f0_up_key = 12
 window = 160
 quality = 0
 gpu_id = 0
-# f0 抽出器: "rmvpe"（既定）/ "dio" / "harvest"
+# f0 抽出器: "rmvpe"（既定）/ "fcpe" / "dio" / "harvest"
 # dio/harvest は pyworld が必要（cp314 wheel が無いため runtime 依存から外した）。
 # 使う場合のみ手動導入: uv pip install pyworld
+# fcpe は rmvpe より高速だが精度は落ちる (ADR-0049)。使う前に onnx を生成:
+#   uv run poe export-fcpe-onnx --output ./fcpe.onnx
 f0_extractor_type = "rmvpe"
-# rmvpe の重みファイル（既定の rmvpe 抽出器に必要）
+# rmvpe の重みファイル（f0_extractor_type = "rmvpe" のとき必要）
 rmvpe_model_file = "./rmvpe.onnx"
+# fcpe の onnx（f0_extractor_type = "fcpe" のとき必要。uv run poe export-fcpe-onnx で生成）
+fcpe_model_file = "./fcpe.onnx"
 
 [subtitle.text]
 display_sec_per_letter = 0.4

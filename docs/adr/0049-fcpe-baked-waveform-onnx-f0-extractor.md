@@ -1,8 +1,8 @@
 # 0049. FCPE を波形入力 ONNX f0 抽出器としてスパイク先行で追加する
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-21
-- Related: spec [`../superpowers/specs/2026-07-21-fcpe-f0-extractor-design.md`](../superpowers/specs/2026-07-21-fcpe-f0-extractor-design.md); [ADR-0030](0030-pyworld-lazy-default-rmvpe.md)（f0 既定 rmvpe）, [ADR-0022](0022-hubert-onnx-runtime.md)（hubert オフライン ONNX 化）, [ADR-0024](0024-onnx-session-single-factory.md)（create_session 一元化）, [ADR-0045](0045-gui-readiness-reuses-preflight.md)（preflight 再利用）
+- Related: spec [`../superpowers/specs/2026-07-21-fcpe-f0-extractor-design.md`](../superpowers/specs/2026-07-21-fcpe-f0-extractor-design.md), plan [`../superpowers/plans/2026-07-21-fcpe-f0-extractor.md`](../superpowers/plans/2026-07-21-fcpe-f0-extractor.md); [ADR-0030](0030-pyworld-lazy-default-rmvpe.md)（f0 既定 rmvpe）, [ADR-0022](0022-hubert-onnx-runtime.md)（hubert オフライン ONNX 化）, [ADR-0024](0024-onnx-session-single-factory.md)（create_session 一元化）, [ADR-0045](0045-gui-readiness-reuses-preflight.md)（preflight 再利用）
 
 ## Context
 
@@ -26,4 +26,4 @@ FCPE を rmvpe と同じ契約（16k 波形 + threshold → f0(Hz)、mel・LynxN
 - オフライン生成ツールが hubert（convert/export-hubert）に続く2本目になり、`uv run --with` overlay 方式の踏襲で torchfcpe を runtime/uv.lock から隔離できる。
 - スパイクが no-go（export 不可 or 速くない）なら本実装に進まず、この ADR は Accepted に昇格させず Deprecated とし、否定結果を残す。
 - ≥30% バーは初期値。スパイク結果次第で見直す（妥当な有意差があれば緩める判断もあり得る）。
-- 実装がスパイクで裏づけられたら Status を Accepted に昇格する。
+- **スパイク検証済 (2026-07-21)**: export は wav2mel の `torch.stft` を conv1d-DFT に差し替えて legacy tracer (dynamo=False, opset17) で成立（torch と f0 max_rel ~1e-6）。GPU レイテンシは rmvpe.onnx 比で median +76〜88% 高速（1s チャンクで fcpe 3.6ms vs rmvpe 21ms、絶対差 ~18ms/チャンク）。バーを大幅に超過したため本実装を完了し Accepted に昇格した。実装は spec/plan の各タスク（config / pitch_extract / vc worker / preflight / `poe export-fcpe-onnx` / golden）として `feat/fcpe-f0-extractor` に landing 済み。

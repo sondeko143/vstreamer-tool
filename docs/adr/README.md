@@ -66,4 +66,4 @@
 | [0046](0046-gui-shared-asset-paths-explicit-propagate.md) | マシン共通の素材パスは default.toml で編集し明示 propagate する（pipeline config の自己完結を保つ、0032 を維持） | Accepted | 2026-07-17 |
 | [0047](0047-obs-identify-unsubscribes-from-events.md) | Identify で eventSubscriptions=0 を明示し、読まないイベントを OBS に送らせない（0043 を refine） | Accepted (refines 0043) | 2026-07-18 |
 | [0048](0048-gcp-auth-channel-with-retrying-session.md) | GCP のトークン更新を retry 付き session に載せるため認証チャネルを自前で組む | Accepted | 2026-07-18 |
-| [0049](0049-fcpe-baked-waveform-onnx-f0-extractor.md) | FCPE を波形入力 ONNX f0 抽出器としてスパイク先行で追加する | Proposed | 2026-07-21 |
+| [0049](0049-fcpe-baked-waveform-onnx-f0-extractor.md) | FCPE を波形入力 ONNX f0 抽出器としてスパイク先行で追加する | Accepted | 2026-07-21 |

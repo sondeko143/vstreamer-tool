@@ -50,7 +50,9 @@ OPSET = 17
 REL_TOL = 1e-3
 
 
-def _patched_mel_call(self, y, key_shift=0, speed=1, center=False, no_cache_window=False):
+def _patched_mel_call(
+    self, y, key_shift=0, speed=1, center=False, no_cache_window=False
+):
     """MelModule.__call__ の inference 経路 (center=False, key_shift=0) を conv1d-DFT で置換。
 
     torch.stft(return_complex=True) は ONNX に載らないので、hann 窓込みの cos/sin カーネルで
@@ -116,9 +118,18 @@ def _max_rel(a: np.ndarray, b: np.ndarray, voiced: np.ndarray) -> float:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Export bundled FCPE to a waveform-input ONNX.")
-    parser.add_argument("--output", required=True, type=Path, help="出力 fcpe.onnx のパス")
-    parser.add_argument("--golden", type=Path, default=None, help="torch 参照 f0 を保存するディレクトリ (任意)")
+    parser = argparse.ArgumentParser(
+        description="Export bundled FCPE to a waveform-input ONNX."
+    )
+    parser.add_argument(
+        "--output", required=True, type=Path, help="出力 fcpe.onnx のパス"
+    )
+    parser.add_argument(
+        "--golden",
+        type=Path,
+        default=None,
+        help="torch 参照 f0 を保存するディレクトリ (任意)",
+    )
     args = parser.parse_args()
 
     import torchfcpe  # overlay 専用の遅延 import (pyproject の ty override で未解決 import を許容)
@@ -148,18 +159,26 @@ def main() -> None:
     m = min(len(ref_orig), len(ref_conv))
     voiced = ref_orig[:m] > 1.0
     rel_conv = _max_rel(ref_conv[:m], ref_orig[:m], voiced)
-    print(f"[conv-STFT vs torch.stft] voiced={int(voiced.sum())} max_rel={rel_conv:.3g}")
+    print(
+        f"[conv-STFT vs torch.stft] voiced={int(voiced.sum())} max_rel={rel_conv:.3g}"
+    )
     if rel_conv > REL_TOL:
-        raise SystemExit(f"conv-STFT が元 torch.stft と一致しません (max_rel={rel_conv:.3g} > {REL_TOL})")
+        raise SystemExit(
+            f"conv-STFT が元 torch.stft と一致しません (max_rel={rel_conv:.3g} > {REL_TOL})"
+        )
 
     # export -> 一時ファイル -> 検証 -> 成功時のみ --output へ移動
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td) / "fcpe.onnx"
         torch.onnx.export(
-            wrap, (wav,), str(tmp),
-            input_names=["waveform"], output_names=["f0"],
+            wrap,
+            (wav,),
+            str(tmp),
+            input_names=["waveform"],
+            output_names=["f0"],
             dynamic_axes={"waveform": {1: "N"}, "f0": {1: "T"}},
-            opset_version=OPSET, dynamo=False,
+            opset_version=OPSET,
+            dynamo=False,
         )
 
         import onnxruntime as ort
@@ -170,9 +189,13 @@ def main() -> None:
         m2 = min(len(got), len(ref_conv))
         v2 = ref_conv[:m2] > 1.0
         rel_onnx = _max_rel(got[:m2], ref_conv[:m2], v2)
-        print(f"[onnx vs conv-torch] max_rel={rel_onnx:.3g} median_f0={np.median(ref_conv[:m2][v2]):.1f}Hz")
+        print(
+            f"[onnx vs conv-torch] max_rel={rel_onnx:.3g} median_f0={np.median(ref_conv[:m2][v2]):.1f}Hz"
+        )
         if rel_onnx > REL_TOL:
-            raise SystemExit(f"onnx が torch と一致しません (max_rel={rel_onnx:.3g} > {REL_TOL})")
+            raise SystemExit(
+                f"onnx が torch と一致しません (max_rel={rel_onnx:.3g} > {REL_TOL})"
+            )
 
         args.output.expanduser().parent.mkdir(parents=True, exist_ok=True)
         Path(tmp).replace(args.output.expanduser())
