@@ -2,7 +2,7 @@
 
 Run on the pre-refactor code with the real RVC model + GPU, passing your RVC
 worker's TOML config (the `[rvc]` section: model_file / hubert_model_file /
-rmvpe_model_file / gpu):
+rmvpe_model_file or fcpe_model_file / gpu):
     uv run --extra rvc python scripts/capture_change_voice_golden.py \
         --config path/to/your-rvc-config.toml
 
@@ -18,7 +18,8 @@ equality while HuBERT ran under fairseq, and now asserts a tight tolerance
 (correlation + waveform SNR) because the content encoder moved to transformers.
 This npz must be captured while `vspeech/lib/rvc.py` still uses fairseq -- it is the
 fairseq-side reference the migration is validated against. Rebuilds the
-device/hubert/RVC-session/rmvpe-session exactly as rvc_worker does and writes
+device/hubert/RVC-session/f0-session (rmvpe or fcpe) exactly as rvc_worker does
+and writes
 tests/assets/rvc_golden/change_voice_golden.npz (gitignored): the input, the
 seed, and the seeded output.
 """

@@ -107,6 +107,8 @@ def pitch_extract_rmvpe(
 
 # 焼き込んだ reflect-pad (432) は N>=433 (約27ms @16kHz) を要求する。短い入力での
 # ONNXRuntime クラッシュを避けるためこの最小長まで左ゼロパッドで底上げする。
+# scripts/export_fcpe_onnx.py の FLOOR と同値 (どちらも win_size-hop の pad から導かれる)。
+# mel config を変えて再 export するときは両方を見直すこと。
 FCPE_MIN_SAMPLES = 433
 
 
@@ -139,7 +141,9 @@ def pitch_extract_fcpe(
     # FCPE の decode は完全無声フレームで NaN (0/0) を出しうる。新しい export はグラフ内で
     # 0 に潰すが、古い/別の fcpe.onnx から NaN が来ても RVC の NSF (pitchf) に漏らさない
     # よう runtime でも 0 に潰す (無声=0 で rmvpe と同契約)。
-    f0 = np.nan_to_num(np.atleast_1d(onnx_f0.squeeze()), nan=0.0)
+    f0 = np.nan_to_num(
+        np.atleast_1d(onnx_f0.squeeze()), nan=0.0, posinf=0.0, neginf=0.0
+    )
     return cast(NDArray[np.double], f0)
 
 

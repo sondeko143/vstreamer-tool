@@ -109,13 +109,13 @@ class FcpeWave(torch.nn.Module):
         # rmvpe.onnx は無声を 0 にするので、契約を揃え NaN が RVC の NSF に漏れないよう
         # graph 内で 0 に潰す。
         f0 = self.bundled(waveform, SR, DECODER, THRESHOLD)
-        return torch.nan_to_num(f0, nan=0.0)
+        return torch.nan_to_num(f0, nan=0.0, posinf=0.0, neginf=0.0)
 
 
 # 検証する波形長。非 hop 倍数 (12345) と、焼き込み reflect-pad が要求する最小長 (FLOOR) を
 # 含める。グラフは N=16000 でトレースするが dynamic_axes で N は可変。ここで実際に複数長を
 # 通し、トレースが N を焼き込んでいない (= 一般化する) ことを毎回確認する。
-FLOOR = 433  # reflect-pad(432) が要求する最小サンプル数 (これ未満は onnx が落ちる)
+FLOOR = 433  # reflect-pad(432) が要求する最小サンプル数 (runtime の FCPE_MIN_SAMPLES と同値)
 VERIFY_LENGTHS = (16000, 24000, 12345, 8000, FLOOR)
 ABS_TOL_HZ = 1.0  # 無声フレームを含む全フレームの絶対差 (Hz)
 
@@ -232,6 +232,14 @@ def main() -> None:
         for k, w in waves.items():
             got_raw = cast(np.ndarray, sess.run(None, {"waveform": w})[0])
             got = np.atleast_1d(got_raw.squeeze(-1).squeeze(0))
+            # graph 内の nan_to_num が効いていることを export 自身が保証する
+            # (_max_abs は両辺 nan_to_num するので NaN 差分を見逃す。ここで直接弾く)。
+            if bool(np.isnan(got).any()):
+                raise SystemExit(f"onnx が NaN を出力しました (N={k})")
+            if len(got) != len(ref_conv[k]):
+                raise SystemExit(
+                    f"onnx frame 数が torch と不一致 (N={k}: {len(got)} != {len(ref_conv[k])})"
+                )
             m = min(len(got), len(ref_conv[k]))
             voiced = ref_conv[k][:m] > 1.0
             rel = _max_rel(got[:m], ref_conv[k][:m], voiced)
