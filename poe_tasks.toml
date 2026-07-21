@@ -45,6 +45,11 @@ convert-hubert = { cmd = "uv run --isolated --no-project --python 3.11 --with 'f
 #   cu128 torch が要る。
 #   例: uv run poe export-hubert-onnx --asset ./hubert_contentvec --golden ./hubert_golden
 export-hubert-onnx = { cmd = "uv run --with transformers --with onnx --with onnxscript python -m scripts.export_hubert_onnx", help = "transformers asset -> ONNX (offline, project env + overlay)" }
+# export-fcpe-onnx: torchfcpe の bundled FCPE -> fcpe.onnx (波形入力)。--extra rvc は
+#   検証で onnxruntime を使うため。STFT を conv1d-DFT に差し替えて legacy tracer で
+#   export する詳細は ADR-0049 と scripts/export_fcpe_onnx.py の docstring。
+#   例: uv run poe export-fcpe-onnx --output ~/.config/vstreamer/fcpe.onnx
+export-fcpe-onnx = { cmd = "uv run --extra rvc --with torchfcpe --with onnx --with onnxscript python -m scripts.export_fcpe_onnx", help = "FCPE -> waveform-input ONNX (offline, project env + overlay)" }
 
 # Complexity insight (advisory; separate from the health gates above) — driven by the
 # `code-metrics` skill. Shells out to `uvx lizard` + `uvx complexipy`, plus an in-process

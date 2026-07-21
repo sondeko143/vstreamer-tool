@@ -152,7 +152,11 @@ python-version = "3.14"
 # が一時環境で供給するので、プロジェクト依存ではない。未解決 import はここでは正常な
 # 状態であって、`python-health` が禁じる「extras 未同期による偽陽性の抑制」ではない。
 [[tool.ty.overrides]]
-include = ["scripts/convert_hubert.py", "scripts/export_hubert_onnx.py"]
+include = [
+    "scripts/convert_hubert.py",
+    "scripts/export_hubert_onnx.py",
+    "scripts/export_fcpe_onnx.py",
+]
 
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"

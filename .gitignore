@@ -29,6 +29,7 @@ key.json
 # HuBERT 変換済み資産と golden 捕獲（派生物・大容量）
 hubert_contentvec/
 hubert_golden/
+fcpe_golden/
 tests/assets/hubert_golden/
 
 # モデル/重み実体はコミットしない（THIRD_PARTY_NOTICES.md: GPL の rmvpe など第三者重みを
