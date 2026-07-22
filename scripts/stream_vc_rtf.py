@@ -116,9 +116,10 @@ def format_table(results: list[BlockResult]) -> str:
     lines = [header, "-" * len(header)]
     for r in results:
         mark = "[FEASIBLE]" if r.feasible else ""
-        lines.append(
+        row = (
             f"{r.block_ms:>6.0f} {r.context_ms:>6.0f} {r.f0:>6} "
             f"{r.p50_ms:>7.2f} {r.p95_ms:>7.2f} {r.max_ms:>7.2f} "
             f"{r.rtf_p95:>6.2f} {r.latency_ms:>7.1f}  {mark}"
         )
+        lines.append(row.rstrip())
     return "\n".join(lines)

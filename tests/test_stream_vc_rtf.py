@@ -15,6 +15,10 @@ def test_make_voiced_signal_shape_and_range():
     assert sig.shape == (8000,)
     assert np.max(np.abs(sig)) <= 1.0
     assert np.any(sig != 0.0)  # not silent -> f0 extractor won't early-out
+    # stronger non-silence guarantee: a genuinely voiced signal has real RMS
+    # energy, not just a stray nonzero sample (near-silent input would trip an
+    # f0 extractor's unvoiced early-out).
+    assert np.sqrt(np.mean(sig.astype(np.float64) ** 2)) > 0.01
 
 
 def test_make_voiced_signal_is_deterministic():
@@ -78,6 +82,11 @@ def test_go_no_go():
 
 
 def test_format_table_marks_feasible():
-    out = format_table([_mk(True, 45), _mk(False, 30)])
-    assert "[FEASIBLE]" in out
-    assert "rmvpe" in out
+    lines = format_table([_mk(True, 45), _mk(False, 30)]).splitlines()
+    data = [ln for ln in lines if "rmvpe" in ln]  # data rows only (skip header/rule)
+    assert len(data) == 2
+    marked = [ln for ln in data if "[FEASIBLE]" in ln]
+    assert len(marked) == 1
+    assert "45.0" in marked[0]  # the feasible row (latency 45) carries the marker
+    unmarked = [ln for ln in data if "[FEASIBLE]" not in ln]
+    assert "30.0" in unmarked[0]  # the infeasible row (latency 30) does not
