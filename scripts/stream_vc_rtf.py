@@ -3,7 +3,10 @@
 `--config` の [rvc] セクションを流用してモデルを 1 回ロードし、合成有声信号を
 固定ブロックで StreamingVc に流して per-block 遅延と context 込み RTF を
 掃引計測する。feasible をマークした表を出し、最低遅延の feasible config を推奨
-する。最終の block/context/遅延予算と go/no-go は人が判定する。
+する。最終の block/context/遅延予算と go/no-go は人が判定する。計測区間は
+意図的に入力の H2D / 出力の D2H コピーを含む(実運用の per-block ストリーミング
+コストをそのまま反映するため)。margin(既定 0.5)は transport/jitter/crossfade
+用の 2x ヘッドルーム。
 
   uv run poe stream-vc-rtf --config ./config.toml
 
@@ -234,6 +237,9 @@ def run_sweep(
         f0_list = ["none"]
 
     for f0 in f0_list:
+        if f0 == "none" and rt["f0_enabled"]:
+            print("skip f0=none: model is f0-enabled (needs an f0 extractor)")
+            continue
         f0_session = make_f0_session(rt["rvc_config"], f0, device)
         if f0 != "none" and f0_session is None:
             if f0 not in ("rmvpe", "fcpe"):
@@ -251,43 +257,49 @@ def run_sweep(
             block_len = round(block_ms * rate / 1000.0)
             for context_ms in context_ms_list:
                 context_len = round(context_ms * rate / 1000.0)
-                sv = StreamingVc(
-                    rvc_config=cfg_f0,
-                    device=device,
-                    hubert_model=rt["hubert_model"],
-                    session=rt["session"],
-                    f0_session=f0_session,
-                    target_sample_rate=rt["target_sample_rate"],
-                    f0_enabled=rt["f0_enabled"],
-                    emb_output_layer=rt["emb_output_layer"],
-                    use_final_proj=rt["use_final_proj"],
-                    block_len=block_len,
-                    context_len=context_len,
-                )
-                sv.warmup()
-                latencies: list[float] = []
-                for i in range(iters + warmup_iters):
-                    block = next_block(signal, block_len, i)
-                    if is_cuda:
-                        torch.cuda.synchronize(device)
-                    t0 = time.perf_counter()
-                    sv.process_block(block)
-                    if is_cuda:
-                        torch.cuda.synchronize(device)
-                    t1 = time.perf_counter()
-                    if i >= warmup_iters:
-                        latencies.append(t1 - t0)
-                results.append(
-                    summarize(
-                        latencies,
-                        block_seconds=block_len / rate,
-                        margin=margin,
-                        block_ms=block_ms,
-                        context_ms=context_ms,
-                        f0=f0,
+                try:
+                    sv = StreamingVc(
+                        rvc_config=cfg_f0,
+                        device=device,
+                        hubert_model=rt["hubert_model"],
+                        session=rt["session"],
+                        f0_session=f0_session,
+                        target_sample_rate=rt["target_sample_rate"],
+                        f0_enabled=rt["f0_enabled"],
+                        emb_output_layer=rt["emb_output_layer"],
+                        use_final_proj=rt["use_final_proj"],
+                        block_len=block_len,
+                        context_len=context_len,
                     )
-                )
-                print(f"  done block={block_ms}ms ctx={context_ms}ms f0={f0}")
+                    sv.warmup()
+                    latencies: list[float] = []
+                    for i in range(iters + warmup_iters):
+                        block = next_block(signal, block_len, i)
+                        if is_cuda:
+                            torch.cuda.synchronize(device)
+                        t0 = time.perf_counter()
+                        sv.process_block(block)
+                        if is_cuda:
+                            torch.cuda.synchronize(device)
+                        t1 = time.perf_counter()
+                        if i >= warmup_iters:
+                            latencies.append(t1 - t0)
+                    results.append(
+                        summarize(
+                            latencies,
+                            block_seconds=block_len / rate,
+                            margin=margin,
+                            block_ms=block_ms,
+                            context_ms=context_ms,
+                            f0=f0,
+                        )
+                    )
+                    print(f"  done block={block_ms}ms ctx={context_ms}ms f0={f0}")
+                except Exception as e:
+                    print(
+                        f"  FAILED block={block_ms}ms ctx={context_ms}ms f0={f0}: {e}"
+                    )
+                    continue
     return results
 
 
@@ -311,37 +323,55 @@ def main() -> None:
     parser.add_argument("--json", type=Path, default=None)
     args = parser.parse_args()
 
+    block_ms_list = parse_grid(args.block_ms)
+    context_ms_list = parse_grid(args.context_ms)
+    f0_list = [x.strip() for x in args.f0.split(",") if x.strip()]
+
     rt = load_shared_runtime(args.config, args.gpu_id)
     if args.wav is not None:
         signal = _load_wav_16k(args.wav)
     else:
         signal = make_voiced_signal(16000, args.seconds, seed=0)
 
+    # Ensure the signal covers the largest block, so every cell gets a full
+    # fixed-shape block (a short --wav would otherwise yield variable-length
+    # tail blocks and break the one-warmup assumption).
+    max_block_len = round(max(block_ms_list) * 16000 / 1000.0)
+    if signal.shape[0] < max_block_len + 1:
+        reps = -(-(max_block_len + 1) // signal.shape[0])  # ceil division
+        signal = np.tile(signal, reps)
+
     results = run_sweep(
         rt,
         signal,
-        block_ms_list=parse_grid(args.block_ms),
-        context_ms_list=parse_grid(args.context_ms),
-        f0_list=[x.strip() for x in args.f0.split(",") if x.strip()],
+        block_ms_list=block_ms_list,
+        context_ms_list=context_ms_list,
+        f0_list=f0_list,
         iters=args.iters,
         warmup_iters=args.warmup_iters,
         margin=args.margin,
     )
 
     print()
-    print(format_table(results))
-    print()
-    if go_no_go(results):
-        best = recommend(results)
-        assert best is not None  # go_no_go(...) => a feasible config exists
+    if not results:
         print(
-            f"go/no-go: GO. recommend block={best.block_ms:.0f}ms "
-            f"ctx={best.context_ms:.0f}ms f0={best.f0} "
-            f"(latency ~{best.latency_ms:.1f}ms, RTF {best.rtf_p95:.2f}). "
-            "-> 最終の block/context/遅延予算は人が確定する。"
+            "no cells measured -- every cell was skipped or failed "
+            "(check f0 model files / the grid / the warnings above)"
         )
     else:
-        print(f"go/no-go: NO-GO (no config with RTF_p95 < {args.margin})")
+        print(format_table(results))
+        print()
+        if go_no_go(results):
+            best = recommend(results)
+            assert best is not None  # go_no_go(...) => a feasible config exists
+            print(
+                f"go/no-go: GO. recommend block={best.block_ms:.0f}ms "
+                f"ctx={best.context_ms:.0f}ms f0={best.f0} "
+                f"(latency ~{best.latency_ms:.1f}ms, RTF {best.rtf_p95:.2f}). "
+                "-> 最終の block/context/遅延予算は人が確定する。"
+            )
+        else:
+            print(f"go/no-go: NO-GO (no config with RTF_p95 < {args.margin})")
     if args.json is not None:
         args.json.write_text(
             json.dumps([asdict(r) for r in results], indent=2), encoding="utf-8"

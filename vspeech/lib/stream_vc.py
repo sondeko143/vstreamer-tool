@@ -150,12 +150,12 @@ class StreamingVc:
         if feats.shape[1] < p_len:
             p_len = feats.shape[1]
         pitch, pitchf = _select_pitch(
-            seq,
-            self.rvc_config,
-            self.f0_enabled,
-            p_len,
-            self.device,
-            self.f0_session,
+            audio_pad=seq,
+            rvc_config=self.rvc_config,
+            f0_enabled=self.f0_enabled,
+            p_len=p_len,
+            device=self.device,
+            f0_session=self.f0_session,
         )
 
         feats_len = feats.shape[1]
