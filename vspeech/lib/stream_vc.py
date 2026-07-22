@@ -30,10 +30,12 @@ def next_context(seq, context_len: int):
 
     `context_len == 0` のとき `seq[-0:]` は全体を返してしまうので、明示的に
     空スライスにする。`len(seq)` ベースなので numpy/torch 双方で同じ挙動。
+    `context_len >= len(seq)` のときは全体を返す(clamp — 使える分だけ左文脈を
+    渡す防御的ガード。StreamingVc の呼び出し側は文脈を全長まで事前充填する)。
     """
     if context_len <= 0:
         return seq[:0]
-    return seq[len(seq) - context_len :]
+    return seq[max(0, len(seq) - context_len) :]
 
 
 def slice_block_output(out, block_len: int, seq_len: int):
@@ -42,10 +44,11 @@ def slice_block_output(out, block_len: int, seq_len: int):
     infer は `[context|block]` 全体の波形を返すので、ブロック相当の末尾だけ
     採用する。正確なシーム整列(等電力クロスフェード)は M2 の担当で、ここは
     比率で切り出す近似(RTF 計測には出力長は影響しない)。
+    `block_out >= len(out)` のときは `out` 全体を返す(clamp)。
     """
     if block_len <= 0:
         return out
     block_out = round(len(out) * block_len / seq_len)
     if block_out <= 0:
         return out
-    return out[len(out) - block_out :]
+    return out[max(0, len(out) - block_out) :]
