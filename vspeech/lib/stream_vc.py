@@ -15,14 +15,17 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    # Not used by the pure helpers below; reserved for the StreamingVc class
-    # that a later task adds to this module (M1 Task 2/3).
-    import torch  # noqa: F401
-    from numpy.typing import NDArray  # noqa: F401
-    from onnxruntime import InferenceSession  # noqa: F401
+    # Type-only: used by StreamingVc's annotations below. The pure helpers
+    # (next_context / slice_block_output) don't need these, so keeping the
+    # imports under TYPE_CHECKING (rather than module-level) still lets this
+    # module import on a CPU machine without torch/onnxruntime/the rvc extra.
+    import numpy as np
+    import torch
+    from numpy.typing import NDArray
+    from onnxruntime import InferenceSession
 
-    from vspeech.config import RvcConfig  # noqa: F401
-    from vspeech.lib.rvc import HubertSession  # noqa: F401
+    from vspeech.config import RvcConfig
+    from vspeech.lib.rvc import HubertSession
 
 
 def next_context(seq, context_len: int):
@@ -52,3 +55,126 @@ def slice_block_output(out, block_len: int, seq_len: int):
     if block_out <= 0:
         return out
     return out[max(0, len(out) - block_out) :]
+
+
+class StreamingVc:
+    """固定ブロック + rolling 左文脈のステートフル VC(ADR-0053)。
+
+    毎 tick `[context | block]`(16kHz)を組み立て、既存 `change_voice` の内部
+    部品で HuBERT 特徴量 -> f0 -> infer -> int16 を通し、ブロック相当の出力だけ
+    採用して context を更新する。block_len / context_len を固定するので入力
+    shape が固定になり、warmup は 1 回で済む(以後 re-autotune なし)。
+
+    重い依存(torch / rvc の内部部品)はここで初めて import する。`rvc_config`
+    の f0_extractor_type は渡す `f0_session` と一致していること。
+    """
+
+    def __init__(
+        self,
+        rvc_config: RvcConfig,
+        device: torch.device,
+        hubert_model: HubertSession,
+        session: InferenceSession,
+        f0_session: InferenceSession | None,
+        target_sample_rate: int,
+        f0_enabled: bool,
+        emb_output_layer: int,
+        use_final_proj: bool,
+        block_len: int,
+        context_len: int,
+    ) -> None:
+        import torch
+
+        from vspeech.lib.rvc import _is_model_half
+
+        self.rvc_config = rvc_config
+        self.device = device
+        self.hubert_model = hubert_model
+        self.session = session
+        self.f0_session = f0_session
+        self.target_sample_rate = target_sample_rate
+        self.f0_enabled = f0_enabled
+        self.emb_output_layer = emb_output_layer
+        self.use_final_proj = use_final_proj
+        self.block_len = block_len
+        self.context_len = context_len
+        self._is_half = _is_model_half(session)
+        self._sid = torch.tensor(0, device=device).unsqueeze(0).long()
+        self._context = torch.zeros(context_len, device=device, dtype=torch.float32)
+
+    def warmup(self, n: int = 3) -> None:
+        """zeros ブロックで ONNX グラフ / CUDA カーネルを先に構築する。
+
+        block_len は固定なので、実値でなく shape さえ通れば以後 stall しない。
+        warmup 後は context を zeros に戻す。
+        """
+        import numpy as np
+
+        zeros = np.zeros(self.block_len, dtype=np.float32)
+        for _ in range(n):
+            self.process_block(zeros)
+        self._reset_context()
+
+    def _reset_context(self) -> None:
+        import torch
+
+        self._context = torch.zeros(
+            self.context_len, device=self.device, dtype=torch.float32
+        )
+
+    def process_block(self, block: NDArray[np.float32]) -> NDArray[np.int16]:
+        """長さ block_len の 16kHz float32 [-1,1] を変換し int16 ブロックを返す。"""
+        import numpy as np
+        import torch
+
+        from vspeech.lib.rvc import _align_pitch_to_feats
+        from vspeech.lib.rvc import _extract_hubert_feats
+        from vspeech.lib.rvc import _select_pitch
+        from vspeech.lib.rvc import _to_int16
+        from vspeech.lib.rvc import infer
+
+        block_t = torch.from_numpy(np.ascontiguousarray(block)).to(
+            device=self.device, dtype=torch.float32
+        )
+        seq = torch.cat([self._context, block_t])  # 固定長 L = context_len + block_len
+
+        feats = _extract_hubert_feats(
+            hubert_model=self.hubert_model,
+            audio_pad=seq,
+            device=self.device,
+            emb_output_layer=self.emb_output_layer,
+            use_final_proj=self.use_final_proj,
+        )
+
+        p_len = seq.shape[0] // self.rvc_config.window
+        if feats.shape[1] < p_len:
+            p_len = feats.shape[1]
+        pitch, pitchf = _select_pitch(
+            seq,
+            self.rvc_config,
+            self.f0_enabled,
+            p_len,
+            self.device,
+            self.f0_session,
+        )
+
+        feats_len = feats.shape[1]
+        pitch, pitchf = _align_pitch_to_feats(pitch, pitchf, feats_len)
+        p_len_tensor = torch.tensor([feats_len], device=self.device).long()
+
+        with torch.inference_mode():
+            audio_i16 = _to_int16(
+                infer(
+                    is_half=self._is_half,
+                    session=self.session,
+                    feats=feats,
+                    pitch_length=p_len_tensor,
+                    pitch=pitch,
+                    pitchf=pitchf,
+                    sid=self._sid,
+                )[0]
+            )
+
+        out = audio_i16.detach().cpu().numpy()
+        self._context = next_context(seq, self.context_len).detach()
+        return slice_block_output(out, self.block_len, seq.shape[0])

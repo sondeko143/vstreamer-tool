@@ -1,4 +1,8 @@
+import os
+from pathlib import Path
+
 import numpy as np
+import pytest
 
 from vspeech.lib.stream_vc import next_context
 from vspeech.lib.stream_vc import slice_block_output
@@ -53,3 +57,60 @@ def test_helpers_work_on_torch_tensors():
     assert next_context(seq, 0).numel() == 0
     out = torch.arange(10)
     assert slice_block_output(out, block_len=2, seq_len=10).tolist() == [8, 9]
+
+
+_CONFIG_ENV = "VSPEECH_RVC_GOLDEN_CONFIG"
+_config_path = os.environ.get(_CONFIG_ENV)
+_GOLDEN_CONFIG = Path(_config_path) if _config_path else None
+
+
+def _cuda_available() -> bool:
+    try:
+        import torch
+    except Exception:
+        return False
+    return torch.cuda.is_available()
+
+
+_gpu_gate = pytest.mark.skipif(
+    not _cuda_available() or _GOLDEN_CONFIG is None or not _GOLDEN_CONFIG.exists(),
+    reason=f"CUDA / ${_CONFIG_ENV} config not available",
+)
+
+
+@_gpu_gate
+def test_streaming_vc_process_block_shape_and_finite():
+    from scripts import capture_change_voice_golden as cap
+    from vspeech.lib.stream_vc import StreamingVc
+
+    assert _GOLDEN_CONFIG is not None  # gate guarantees; narrows for ty
+    rt = cap.build_rvc_runtime(_GOLDEN_CONFIG)
+
+    block_len = 640  # 40ms @ 16k
+    context_len = 3200  # 200ms @ 16k
+    sv = StreamingVc(
+        rvc_config=rt["rvc_config"],
+        device=rt["device"],
+        hubert_model=rt["hubert_model"],
+        session=rt["session"],
+        f0_session=rt["f0_session"],
+        target_sample_rate=rt["target_sample_rate"],
+        f0_enabled=rt["f0_enabled"],
+        emb_output_layer=rt["emb_output_layer"],
+        use_final_proj=rt["use_final_proj"],
+        block_len=block_len,
+        context_len=context_len,
+    )
+    sv.warmup()
+
+    import numpy as np
+
+    from scripts.stream_vc_rtf import make_voiced_signal
+
+    signal = make_voiced_signal(16000, 1.0, seed=0)
+    out1 = sv.process_block(signal[:block_len])
+    out2 = sv.process_block(signal[block_len : 2 * block_len])
+
+    assert out1.dtype == np.int16 and out2.dtype == np.int16
+    assert out1.shape[0] > 0 and out2.shape[0] > 0
+    assert np.all(np.isfinite(out1)) and np.all(np.isfinite(out2))
