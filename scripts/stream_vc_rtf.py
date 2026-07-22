@@ -15,9 +15,19 @@ recommend / go_no_go)は numpy のみに依存し、GPU 無し CPU から import
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import NDArray
+
+if TYPE_CHECKING:
+    from pathlib import Path
+    from typing import Any
+
+    import torch
+    from onnxruntime import InferenceSession
+
+    from vspeech.config import RvcConfig
 
 
 def make_voiced_signal(
@@ -125,10 +135,11 @@ def format_table(results: list[BlockResult]) -> str:
     return "\n".join(lines)
 
 
-def load_shared_runtime(config_path, gpu_id_override):
+def load_shared_runtime(
+    config_path: Path, gpu_id_override: int | None
+) -> dict[str, Any]:
     """[rvc] からモデルを 1 回ロード(f0_session は掃引で抽出器ごとに作る)。"""
     import json
-    from typing import Any
 
     from vspeech.config import Config
     from vspeech.lib.cuda_util import get_device
@@ -162,7 +173,9 @@ def load_shared_runtime(config_path, gpu_id_override):
     }
 
 
-def make_f0_session(rvc_config, f0: str, device):
+def make_f0_session(
+    rvc_config: RvcConfig, f0: str, device: torch.device
+) -> InferenceSession | None:
     """ "rmvpe"/"fcpe" の f0 session を作る。ファイル未設定/不在なら None。"""
     from pathlib import Path
 
@@ -194,7 +207,14 @@ def next_block(
 
 
 def run_sweep(
-    rt, signal, block_ms_list, context_ms_list, f0_list, iters, warmup_iters, margin
+    rt: dict[str, Any],
+    signal: NDArray[np.float32],
+    block_ms_list: list[float],
+    context_ms_list: list[float],
+    f0_list: list[str],
+    iters: int,
+    warmup_iters: int,
+    margin: float,
 ) -> list[BlockResult]:
     """掃引して各 (block, context, f0) の per-block 遅延を計測する。"""
     import time
@@ -216,7 +236,10 @@ def run_sweep(
     for f0 in f0_list:
         f0_session = make_f0_session(rt["rvc_config"], f0, device)
         if f0 != "none" and f0_session is None:
-            print(f"skip f0={f0}: model file not configured/found")
+            if f0 not in ("rmvpe", "fcpe"):
+                print(f"skip f0={f0}: unsupported extractor (use rmvpe/fcpe/none)")
+            else:
+                print(f"skip f0={f0}: model file not configured/found")
             continue
         if f0 == "none":
             cfg_f0 = rt["rvc_config"]
@@ -308,16 +331,17 @@ def main() -> None:
     print()
     print(format_table(results))
     print()
-    best = recommend(results)
-    if best is None:
-        print(f"go/no-go: NO-GO (no config with RTF_p95 < {args.margin})")
-    else:
+    if go_no_go(results):
+        best = recommend(results)
+        assert best is not None  # go_no_go(...) => a feasible config exists
         print(
             f"go/no-go: GO. recommend block={best.block_ms:.0f}ms "
             f"ctx={best.context_ms:.0f}ms f0={best.f0} "
             f"(latency ~{best.latency_ms:.1f}ms, RTF {best.rtf_p95:.2f}). "
             "-> 最終の block/context/遅延予算は人が確定する。"
         )
+    else:
+        print(f"go/no-go: NO-GO (no config with RTF_p95 < {args.margin})")
     if args.json is not None:
         args.json.write_text(
             json.dumps([asdict(r) for r in results], indent=2), encoding="utf-8"
@@ -325,7 +349,7 @@ def main() -> None:
         print(f"wrote {args.json}")
 
 
-def _load_wav_16k(path) -> NDArray[np.float32]:
+def _load_wav_16k(path: Path) -> NDArray[np.float32]:
     """wav を 16kHz mono float32 [-1,1] にして返す。"""
     import torch
     import torchaudio
