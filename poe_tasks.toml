@@ -51,6 +51,13 @@ export-hubert-onnx = { cmd = "uv run --with transformers --with onnx --with onnx
 #   例: uv run poe export-fcpe-onnx --output ~/.config/vstreamer/fcpe.onnx
 export-fcpe-onnx = { cmd = "uv run --extra rvc --with torchfcpe --with onnx --with onnxscript python -m scripts.export_fcpe_onnx", help = "FCPE -> waveform-input ONNX (offline, project env + overlay)" }
 
+# RVC ストリーミング VC の RTF 実測ハーネス(M1)。--all-extras で sync 済みの
+# プロジェクト環境で走らせる(rvc extra の torch/onnxruntime-gpu が要る)。
+#   uv sync --all-extras
+#   uv run poe stream-vc-rtf --config ./config.toml
+# 掃引軸は --block-ms / --context-ms / --f0 / --iters / --margin で上書き可。
+stream-vc-rtf = { cmd = "python scripts/stream_vc_rtf.py", help = "Measure per-block latency/RTF of streaming VC across block/context/f0 (M1 go/no-go)" }
+
 # Complexity insight (advisory; separate from the health gates above) — driven by the
 # `code-metrics` skill. Shells out to `uvx lizard` + `uvx complexipy`, plus an in-process
 # beniget DepDegree (def-use coupling) lens that catches entangled mutable state:

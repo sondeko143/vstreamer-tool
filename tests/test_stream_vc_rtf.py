@@ -1,4 +1,10 @@
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import numpy as np
+import pytest
 
 from scripts.stream_vc_rtf import BlockResult
 from scripts.stream_vc_rtf import format_table
@@ -90,3 +96,52 @@ def test_format_table_marks_feasible():
     assert "45.0" in marked[0]  # the feasible row (latency 45) carries the marker
     unmarked = [ln for ln in data if "[FEASIBLE]" not in ln]
     assert "30.0" in unmarked[0]  # the infeasible row (latency 30) does not
+
+
+_CONFIG_ENV = "VSPEECH_RVC_GOLDEN_CONFIG"
+_config_path = os.environ.get(_CONFIG_ENV)
+_GOLDEN_CONFIG = Path(_config_path) if _config_path else None
+
+
+def _cuda_available() -> bool:
+    try:
+        import torch
+    except Exception:
+        return False
+    return torch.cuda.is_available()
+
+
+@pytest.mark.skipif(
+    not _cuda_available() or _GOLDEN_CONFIG is None or not _GOLDEN_CONFIG.exists(),
+    reason=f"CUDA / ${_CONFIG_ENV} config not available",
+)
+def test_harness_entrypoint_runs_one_iter():
+    # エントリポイントを実際に起動する(「テストだけでなくエントリポイントを走らせる」)。
+    repo_root = Path(__file__).resolve().parents[1]
+    assert _GOLDEN_CONFIG is not None
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.stream_vc_rtf",
+            "--config",
+            str(_GOLDEN_CONFIG),
+            "--block-ms",
+            "40",
+            "--context-ms",
+            "200",
+            "--f0",
+            "rmvpe",
+            "--iters",
+            "1",
+            "--warmup-iters",
+            "1",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=600,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "RTF" in proc.stdout

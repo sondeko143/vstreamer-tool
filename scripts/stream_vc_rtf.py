@@ -123,3 +123,221 @@ def format_table(results: list[BlockResult]) -> str:
         )
         lines.append(row.rstrip())
     return "\n".join(lines)
+
+
+def load_shared_runtime(config_path, gpu_id_override):
+    """[rvc] からモデルを 1 回ロード(f0_session は掃引で抽出器ごとに作る)。"""
+    import json
+    from typing import Any
+
+    from vspeech.config import Config
+    from vspeech.lib.cuda_util import get_device
+    from vspeech.lib.onnx_session import create_session
+    from vspeech.lib.rvc import half_precision_available
+    from vspeech.lib.rvc import load_hubert_model
+
+    with open(config_path, "rb") as f:
+        config = Config.read_config_from_file(f)
+    rvc_config = config.rvc
+    gpu_id = gpu_id_override if gpu_id_override is not None else rvc_config.gpu_id
+
+    device, device_name = get_device(gpu_id, rvc_config.gpu_name)
+    print(f"device: {device} ({device_name})")
+    half_available = half_precision_available(id=device.index)
+    hubert_model = load_hubert_model(
+        file_name=rvc_config.hubert_model_file, device=device, is_half=half_available
+    )
+    session = create_session(rvc_config.model_file, device)
+    modelmeta: Any = session.get_modelmeta()
+    metadata: dict[str, Any] = json.loads(modelmeta.custom_metadata_map["metadata"])
+    return {
+        "rvc_config": rvc_config,
+        "device": device,
+        "hubert_model": hubert_model,
+        "session": session,
+        "target_sample_rate": metadata["samplingRate"],
+        "f0_enabled": metadata["f0"],
+        "emb_output_layer": metadata.get("embOutputLayer", 9),
+        "use_final_proj": metadata.get("useFinalProj", True),
+    }
+
+
+def make_f0_session(rvc_config, f0: str, device):
+    """ "rmvpe"/"fcpe" の f0 session を作る。ファイル未設定/不在なら None。"""
+    from pathlib import Path
+
+    from vspeech.lib.onnx_session import create_session
+
+    if f0 == "none":
+        return None
+    file_map = {
+        "rmvpe": rvc_config.rmvpe_model_file,
+        "fcpe": rvc_config.fcpe_model_file,
+    }
+    model_file = file_map.get(f0)
+    if (
+        model_file is None
+        or model_file == Path()
+        or not model_file.expanduser().exists()
+    ):
+        return None
+    return create_session(model_file, device)
+
+
+def next_block(
+    signal: NDArray[np.float32], block_len: int, i: int
+) -> NDArray[np.float32]:
+    """信号から i 番目の block を巡回で取り出す(長さ block_len)。"""
+    span = max(1, signal.shape[0] - block_len)
+    start = (i * block_len) % span
+    return signal[start : start + block_len]
+
+
+def run_sweep(
+    rt, signal, block_ms_list, context_ms_list, f0_list, iters, warmup_iters, margin
+) -> list[BlockResult]:
+    """掃引して各 (block, context, f0) の per-block 遅延を計測する。"""
+    import time
+
+    import torch
+
+    from vspeech.config import F0ExtractorType
+    from vspeech.lib.stream_vc import StreamingVc
+
+    rate = 16000
+    device = rt["device"]
+    is_cuda = device.type == "cuda"
+    results: list[BlockResult] = []
+
+    if not rt["f0_enabled"]:
+        print("model is f0-less; collapsing f0 axis to ['none']")
+        f0_list = ["none"]
+
+    for f0 in f0_list:
+        f0_session = make_f0_session(rt["rvc_config"], f0, device)
+        if f0 != "none" and f0_session is None:
+            print(f"skip f0={f0}: model file not configured/found")
+            continue
+        if f0 == "none":
+            cfg_f0 = rt["rvc_config"]
+        else:
+            cfg_f0 = rt["rvc_config"].model_copy(
+                update={"f0_extractor_type": F0ExtractorType(f0)}
+            )
+        for block_ms in block_ms_list:
+            block_len = round(block_ms * rate / 1000.0)
+            for context_ms in context_ms_list:
+                context_len = round(context_ms * rate / 1000.0)
+                sv = StreamingVc(
+                    rvc_config=cfg_f0,
+                    device=device,
+                    hubert_model=rt["hubert_model"],
+                    session=rt["session"],
+                    f0_session=f0_session,
+                    target_sample_rate=rt["target_sample_rate"],
+                    f0_enabled=rt["f0_enabled"],
+                    emb_output_layer=rt["emb_output_layer"],
+                    use_final_proj=rt["use_final_proj"],
+                    block_len=block_len,
+                    context_len=context_len,
+                )
+                sv.warmup()
+                latencies: list[float] = []
+                for i in range(iters + warmup_iters):
+                    block = next_block(signal, block_len, i)
+                    if is_cuda:
+                        torch.cuda.synchronize(device)
+                    t0 = time.perf_counter()
+                    sv.process_block(block)
+                    if is_cuda:
+                        torch.cuda.synchronize(device)
+                    t1 = time.perf_counter()
+                    if i >= warmup_iters:
+                        latencies.append(t1 - t0)
+                results.append(
+                    summarize(
+                        latencies,
+                        block_seconds=block_len / rate,
+                        margin=margin,
+                        block_ms=block_ms,
+                        context_ms=context_ms,
+                        f0=f0,
+                    )
+                )
+                print(f"  done block={block_ms}ms ctx={context_ms}ms f0={f0}")
+    return results
+
+
+def main() -> None:
+    import argparse
+    import json
+    from dataclasses import asdict
+    from pathlib import Path
+
+    parser = argparse.ArgumentParser(description="RVC streaming VC RTF harness (M1)")
+    parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--block-ms", default="20,40,80,160")
+    parser.add_argument("--context-ms", default="0,100,200,400,800")
+    parser.add_argument("--f0", default="rmvpe,fcpe")
+    parser.add_argument("--iters", type=int, default=200)
+    parser.add_argument("--warmup-iters", type=int, default=10)
+    parser.add_argument("--margin", type=float, default=0.5)
+    parser.add_argument("--gpu-id", type=int, default=None)
+    parser.add_argument("--seconds", type=float, default=12.0)
+    parser.add_argument("--wav", type=Path, default=None)
+    parser.add_argument("--json", type=Path, default=None)
+    args = parser.parse_args()
+
+    rt = load_shared_runtime(args.config, args.gpu_id)
+    if args.wav is not None:
+        signal = _load_wav_16k(args.wav)
+    else:
+        signal = make_voiced_signal(16000, args.seconds, seed=0)
+
+    results = run_sweep(
+        rt,
+        signal,
+        block_ms_list=parse_grid(args.block_ms),
+        context_ms_list=parse_grid(args.context_ms),
+        f0_list=[x.strip() for x in args.f0.split(",") if x.strip()],
+        iters=args.iters,
+        warmup_iters=args.warmup_iters,
+        margin=args.margin,
+    )
+
+    print()
+    print(format_table(results))
+    print()
+    best = recommend(results)
+    if best is None:
+        print(f"go/no-go: NO-GO (no config with RTF_p95 < {args.margin})")
+    else:
+        print(
+            f"go/no-go: GO. recommend block={best.block_ms:.0f}ms "
+            f"ctx={best.context_ms:.0f}ms f0={best.f0} "
+            f"(latency ~{best.latency_ms:.1f}ms, RTF {best.rtf_p95:.2f}). "
+            "-> 最終の block/context/遅延予算は人が確定する。"
+        )
+    if args.json is not None:
+        args.json.write_text(
+            json.dumps([asdict(r) for r in results], indent=2), encoding="utf-8"
+        )
+        print(f"wrote {args.json}")
+
+
+def _load_wav_16k(path) -> NDArray[np.float32]:
+    """wav を 16kHz mono float32 [-1,1] にして返す。"""
+    import torch
+    import torchaudio
+
+    wav, sr = torchaudio.load(str(path))
+    wav = wav.mean(dim=0)  # mono
+    if sr != 16000:
+        from vspeech.lib.rvc import get_resampler
+
+        wav = get_resampler(sr, 16000, torch.device("cpu"))(wav)
+    return wav.numpy().astype(np.float32)
+
+
+if __name__ == "__main__":
+    main()
