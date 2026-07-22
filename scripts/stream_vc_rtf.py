@@ -304,6 +304,16 @@ def run_sweep(
 
 
 def main() -> None:
+    # go/no-go 判定行は日本語を含む。stdout/stderr が pipe/redirect 先だと Windows は
+    # 既定で cp1252 を選び、`--json` 書き出し前に main() が UnicodeEncodeError で落ちる
+    # (プロジェクト頻出の encoding 対策。convert_hubert.py / export_hubert_onnx.py と同型)。
+    # typeshed は sys.stdout/stderr を .reconfigure を持たない TextIO とするが、
+    # runtime は TextIOWrapper。
+    import sys
+
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # ty: ignore[unresolved-attribute]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # ty: ignore[unresolved-attribute]
+
     import argparse
     import json
     from dataclasses import asdict
