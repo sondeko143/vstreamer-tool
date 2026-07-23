@@ -13,6 +13,7 @@ from pathlib import Path
 from vspeech.config import Config
 from vspeech.config import F0ExtractorType
 from vspeech.config import GcpConfig
+from vspeech.config import RvcConfig
 from vspeech.config import SubtitleWorkerType
 from vspeech.config import TranscriptionConfig
 from vspeech.config import TranscriptionWorkerType
@@ -171,47 +172,54 @@ def _check_tts(config: Config) -> list[ConfigProblem]:
     return problems
 
 
-def _check_vc(config: Config) -> list[ConfigProblem]:
-    if not config.vc.enable:
-        return []
-    w = "vc"
-    rvc = config.rvc
+def _check_rvc_assets(
+    rvc: RvcConfig, worker: str, field_prefix: str
+) -> list[ConfigProblem]:
+    """RVC モデル資産(本体/HuBERT/f0)の存在検査。[vc] と [stream_vc] が共有。"""
     problems: list[ConfigProblem] = []
     if not rvc.model_file.expanduser().is_file():
         problems.append(
             ConfigProblem(
-                w,
-                f"rvc.model_file '{rvc.model_file}' が存在しません",
-                field="rvc.model_file",
+                worker,
+                f"{field_prefix}.model_file '{rvc.model_file}' が存在しません",
+                field=f"{field_prefix}.model_file",
             )
         )
     hubert = rvc.hubert_model_file
     if hubert == Path() or not hubert.expanduser().is_dir():
         problems.append(
             ConfigProblem(
-                w,
-                f"rvc.hubert_model_file '{hubert}' (資産ディレクトリ) が存在しません",
-                field="rvc.hubert_model_file",
+                worker,
+                f"{field_prefix}.hubert_model_file '{hubert}' (資産ディレクトリ) が存在しません",
+                field=f"{field_prefix}.hubert_model_file",
             )
         )
     if rvc.f0_extractor_type == F0ExtractorType.rmvpe:
         if not rvc.rmvpe_model_file.expanduser().is_file():
             problems.append(
                 ConfigProblem(
-                    w,
-                    f"rvc.rmvpe_model_file '{rvc.rmvpe_model_file}' が存在しません",
-                    field="rvc.rmvpe_model_file",
+                    worker,
+                    f"{field_prefix}.rmvpe_model_file '{rvc.rmvpe_model_file}' が存在しません",
+                    field=f"{field_prefix}.rmvpe_model_file",
                 )
             )
     if rvc.f0_extractor_type == F0ExtractorType.fcpe:
         if not rvc.fcpe_model_file.expanduser().is_file():
             problems.append(
                 ConfigProblem(
-                    w,
-                    f"rvc.fcpe_model_file '{rvc.fcpe_model_file}' が存在しません",
-                    field="rvc.fcpe_model_file",
+                    worker,
+                    f"{field_prefix}.fcpe_model_file '{rvc.fcpe_model_file}' が存在しません",
+                    field=f"{field_prefix}.fcpe_model_file",
                 )
             )
+    return problems
+
+
+def _check_vc(config: Config) -> list[ConfigProblem]:
+    if not config.vc.enable:
+        return []
+    w = "vc"
+    problems = _check_rvc_assets(config.rvc, w, "rvc")
     problems.extend(_check_vad_gate(config.vc, w))
     return problems
 
@@ -287,6 +295,43 @@ def _check_subtitle(config: Config) -> list[ConfigProblem]:
     return problems
 
 
+def _check_stream_vc(config: Config) -> list[ConfigProblem]:
+    if not config.stream_vc.enable:
+        return []
+    from vspeech.exceptions import DeviceNotFoundError
+    from vspeech.lib.audio import resolve_stream_vc_input_device
+    from vspeech.lib.audio import resolve_stream_vc_output_device
+
+    w = "stream_vc"
+    sv = config.stream_vc
+    problems = _check_rvc_assets(sv.rvc, w, "stream_vc.rvc")
+    if sv.crossfade_ms >= sv.block_ms:
+        problems.append(
+            ConfigProblem(
+                w,
+                f"crossfade_ms ({sv.crossfade_ms}) は block_ms ({sv.block_ms}) 未満が必須です",
+                field="stream_vc.crossfade_ms",
+            )
+        )
+    if sv.crossfade_ms > sv.context_ms:
+        problems.append(
+            ConfigProblem(
+                w,
+                f"crossfade_ms ({sv.crossfade_ms}) は context_ms ({sv.context_ms}) 以下が必須です",
+                field="stream_vc.crossfade_ms",
+            )
+        )
+    try:
+        resolve_stream_vc_input_device(sv)
+    except DeviceNotFoundError as e:
+        problems.append(ConfigProblem(w, str(e), field="stream_vc.input_device_index"))
+    try:
+        resolve_stream_vc_output_device(sv)
+    except DeviceNotFoundError as e:
+        problems.append(ConfigProblem(w, str(e), field="stream_vc.output_device_index"))
+    return problems
+
+
 _CHECKERS: list[Checker] = [
     _check_transcription,
     _check_translation,
@@ -295,6 +340,7 @@ _CHECKERS: list[Checker] = [
     _check_recording,
     _check_playback,
     _check_subtitle,
+    _check_stream_vc,
 ]
 
 

@@ -7,6 +7,7 @@ from pydantic import Field
 from vspeech.config import PlaybackConfig
 from vspeech.config import RecordingConfig
 from vspeech.config import SampleFormat
+from vspeech.config import StreamVcConfig
 from vspeech.exceptions import DeviceNotFoundError
 
 
@@ -153,6 +154,32 @@ def resolve_output_device(config: PlaybackConfig) -> DeviceInfo:
         host_api_key="playback.output_host_api_name",
         name=config.output_device_name,
         name_key="playback.output_device_name",
+        output=True,
+    )
+
+
+def resolve_stream_vc_input_device(config: StreamVcConfig) -> DeviceInfo:
+    """streaming VC の独立入力デバイスを解決する (preflight と capture が同経路)。"""
+    return _resolve_device(
+        index=config.input_device_index,
+        index_key="stream_vc.input_device_index",
+        host_api_type=config.input_host_api_name,
+        host_api_key="stream_vc.input_host_api_name",
+        name=config.input_device_name,
+        name_key="stream_vc.input_device_name",
+        input=True,
+    )
+
+
+def resolve_stream_vc_output_device(config: StreamVcConfig) -> DeviceInfo:
+    """streaming VC の出力デバイスを解決する (preflight と playback が同経路)。"""
+    return _resolve_device(
+        index=config.output_device_index,
+        index_key="stream_vc.output_device_index",
+        host_api_type=config.output_host_api_name,
+        host_api_key="stream_vc.output_host_api_name",
+        name=config.output_device_name,
+        name_key="stream_vc.output_device_name",
         output=True,
     )
 
