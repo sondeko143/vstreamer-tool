@@ -6,10 +6,13 @@ capture の float32 ブロックを StreamingVc(固定ブロック+左文脈+等
 (発話系は無改変)。重い import は関数内。
 """
 
+from __future__ import annotations
+
 from asyncio import CancelledError
 from asyncio import Queue
 from asyncio import to_thread
 from time import perf_counter
+from typing import TYPE_CHECKING
 from typing import Any
 
 from vspeech.config import StreamVcConfig
@@ -20,6 +23,12 @@ from vspeech.logger import logger
 from vspeech.stream_vc.capture import ms_to_samples
 from vspeech.stream_vc.packet import StreamPacket
 from vspeech.stream_vc.transport import Transport
+
+if TYPE_CHECKING:
+    import numpy as np
+    from numpy.typing import NDArray
+
+    from vspeech.lib.stream_vc import StreamingVc
 
 
 def make_stream_packet(
@@ -74,7 +83,7 @@ def build_stream_vc_runtime(sv_config: StreamVcConfig) -> dict[str, Any]:
     }
 
 
-def make_streaming_vc(rt: dict[str, Any], sv_config: StreamVcConfig):
+def make_streaming_vc(rt: dict[str, Any], sv_config: StreamVcConfig) -> StreamingVc:
     from vspeech.lib.stream_vc import StreamingVc
 
     return StreamingVc(
@@ -95,7 +104,7 @@ def make_streaming_vc(rt: dict[str, Any], sv_config: StreamVcConfig):
 
 async def vc_loop(
     sv_config: StreamVcConfig,
-    in_queue: Queue,
+    in_queue: Queue[NDArray[np.float32]],
     transport: Transport,
     session_id: str,
 ) -> None:
@@ -106,7 +115,10 @@ async def vc_loop(
         rt = build_stream_vc_runtime(sv_config)
         check_cuda_provider(rt["session"].get_providers())
         sv = make_streaming_vc(rt, sv_config)
-    await to_thread(sv.warmup)
+        # warmup 失敗(固定 shape グラフ構築の失敗)は起動時失敗として fail-loud に
+        # する(ADR-0038)。loop 内 process_block は guard していないので、ここで
+        # 落として WorkerStartupError にするのが正しい。
+        await to_thread(sv.warmup)
     logger.info("stream vc worker started")
     hop_seconds = sv_config.block_ms / 1000.0
     sample_rate = rt["target_sample_rate"]
