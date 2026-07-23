@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
     from vspeech.lib.stream_vc import StreamingVc
+    from vspeech.stream_vc.gate import StreamingVadGate
 
 # ORT のログ閾値: 0=VERBOSE / 1=INFO / 2=WARNING(既定) / 3=ERROR / 4=FATAL
 _ORT_LOG_ERROR = 3
@@ -58,6 +59,31 @@ def apply_input_boost(block, boost):
     if boost == 1.0:
         return block
     return np.clip(block * boost, -1.0, 1.0).astype(np.float32)
+
+
+async def gate_target_gain(
+    gate: StreamingVadGate, vad_session: Any, block: NDArray[np.float32]
+) -> float:
+    """**入力**ブロックの VAD 判定からこのブロックの目標ゲインを返す。
+
+    判定は入力側(素のマイクレベル。input_boost をかける前 = 実際の S/N で
+    判定する)、適用は出力側。推論そのものはスキップしない: `StreamingVc` は
+    rolling 左文脈とクロスフェード tail を持つので、ブロックを飛ばすと文脈に
+    穴が開き発話再開時の seam が壊れる(GPU 余力は実測 RTF 0.24 で十分)。
+
+    ONNX 推論はブロッキングなので、発話系 worker/vc.py と同じく `to_thread`
+    へ逃がす。失敗しても音は素通し(fail-open)で、警告は最初の 1 回だけ。
+    """
+    from vspeech.lib.vad import speech_probs
+
+    try:
+        probs = await to_thread(speech_probs, vad_session, block)
+        return gate.update(gate.speech_from_probs(probs))
+    except Exception as e:
+        if not gate.warned:
+            gate.warned = True
+            logger.warning("stream_vc vad gate failed; passing audio ungated: %s", e)
+        return 1.0
 
 
 def build_stream_vc_runtime(sv_config: StreamVcConfig) -> dict[str, Any]:
@@ -99,6 +125,16 @@ def build_stream_vc_runtime(sv_config: StreamVcConfig) -> dict[str, Any]:
         )
     else:
         f0_session = None
+    # VAD ノイズゲート(既定 off)。発話系 [vc] と同じ silero_vad.onnx を CPU で開く
+    # (vspeech/lib/vad.py を読み取り専用で再利用)。worker_startup スコープ内で
+    # 呼ばれるので、モデルが無い/壊れているときは起動時に fail-loud (ADR-0038)。
+    if sv_config.vad_gate:
+        from vspeech.lib.vad import create_vad_session
+
+        vad_session = create_vad_session(sv_config.vad_model_file)
+        logger.info("stream_vc vad gate enabled: %s", sv_config.vad_model_file)
+    else:
+        vad_session = None
     modelmeta: Any = session.get_modelmeta()
     metadata: dict[str, Any] = json.loads(modelmeta.custom_metadata_map["metadata"])
     return {
@@ -107,6 +143,7 @@ def build_stream_vc_runtime(sv_config: StreamVcConfig) -> dict[str, Any]:
         "hubert_model": hubert_model,
         "session": session,
         "f0_session": f0_session,
+        "vad_session": vad_session,
         "target_sample_rate": metadata["samplingRate"],
         "f0_enabled": metadata["f0"],
         "emb_output_layer": metadata.get("embOutputLayer", 9),
@@ -169,14 +206,34 @@ async def vc_loop(
     ready.set()  # ここで初めて capture がマイクを開く(起動時の drop 嵐を防ぐ)
     hop_seconds = sv_config.block_ms / 1000.0
     sample_rate = rt["target_sample_rate"]
+    vad_session = rt["vad_session"]
+    gate: StreamingVadGate | None = None
+    if vad_session is not None:
+        from vspeech.stream_vc.gate import StreamingVadGate
+
+        gate = StreamingVadGate(
+            threshold=sv_config.vad_threshold,
+            hangover_ms=sv_config.vad_hangover_ms,
+            min_gain=sv_config.vad_min_gain,
+            block_ms=sv_config.block_ms,
+        )
     seq = 0
     try:
         while True:
             block = await in_queue.get()
+            # ゲート判定は input_boost **前**の素のブロックで行う(ブースト後の
+            # 見かけのレベルではなく実際のマイクレベルで判定する)。
+            target_gain = 1.0
+            if gate is not None:
+                target_gain = await gate_target_gain(gate, vad_session, block)
             block = apply_input_boost(block, sv_config.rvc.input_boost)
             t0 = perf_counter()
             out_i16 = await to_thread(sv.process_block, block)
             telemetry.record("stream_vc", perf_counter() - t0)
+            if gate is not None:
+                out_i16 = gate.ramp(out_i16, target_gain)
+                if target_gain != 1.0:
+                    telemetry.record("stream_vc_vad_gated", 1.0)
             packet = make_stream_packet(
                 session_id, seq, hop_seconds, out_i16.tobytes(), sample_rate
             )

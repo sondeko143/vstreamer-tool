@@ -14,6 +14,7 @@ from vspeech.config import Config
 from vspeech.config import F0ExtractorType
 from vspeech.config import GcpConfig
 from vspeech.config import RvcConfig
+from vspeech.config import StreamVcConfig
 from vspeech.config import SubtitleWorkerType
 from vspeech.config import TranscriptionConfig
 from vspeech.config import TranscriptionWorkerType
@@ -43,8 +44,13 @@ def _check_gcp_credentials(gcp: GcpConfig, worker: str) -> list[ConfigProblem]:
 
 
 def _check_vad_gate(
-    cfg: TranscriptionConfig | VcConfig, worker: str
+    cfg: TranscriptionConfig | VcConfig | StreamVcConfig, worker: str
 ) -> list[ConfigProblem]:
+    """vad_gate=true なら vad_model_file の実在を要求する。
+
+    触るのは `.vad_gate` / `.vad_model_file` だけなので、同じ二つを持つ設定
+    ならそのまま使える([transcription] / [vc] / [stream_vc] が共有)。
+    """
     if not cfg.vad_gate:
         return []
     path = cfg.vad_model_file.expanduser()
@@ -329,6 +335,8 @@ def _check_stream_vc(config: Config) -> list[ConfigProblem]:
                 field="stream_vc.crossfade_ms",
             )
         )
+    # field は "stream_vc.vad_model_file" になる (worker 名がそのまま prefix)。
+    problems.extend(_check_vad_gate(sv, w))
     try:
         resolve_stream_vc_input_device(sv)
     except DeviceNotFoundError as e:

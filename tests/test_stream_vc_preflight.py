@@ -24,6 +24,21 @@ def test_stream_vc_enabled_missing_model_reported():
     assert "stream_vc.rvc.hubert_model_file" in fields
 
 
+def test_stream_vc_vad_gate_missing_model_reported():
+    c = Config()
+    c.stream_vc.enable = True
+    c.stream_vc.vad_gate = True
+    c.stream_vc.vad_model_file = Path("/nonexistent/silero_vad.onnx")
+    assert "stream_vc.vad_model_file" in _fields(collect_problems(c))
+
+
+def test_stream_vc_vad_gate_off_not_reported():
+    c = Config()
+    c.stream_vc.enable = True
+    c.stream_vc.vad_model_file = Path("/nonexistent/silero_vad.onnx")
+    assert "stream_vc.vad_model_file" not in _fields(collect_problems(c))
+
+
 def test_stream_vc_enabled_crossfade_gt_block_reported():
     c = Config()
     c.stream_vc.enable = True

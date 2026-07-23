@@ -421,6 +421,36 @@ class StreamVcConfig(BaseModel):
         ge=0,
         description="SOLA 位相合わせの探索半幅 ms (0 で無効)。実測 ±5ms で十分",
     )
+    # Silero VAD ノイズゲート (opt-in)。発話系 vc.vad_* とは独立 (ADR-0053)。
+    # 判定は入力ブロック、適用は出力ブロック(推論はスキップしない = 文脈と
+    # クロスフェードの連続性を保つ)。
+    vad_gate: bool = Field(
+        default=False,
+        description="ストリーミング経路の VAD ノイズゲート。off だと無音中も"
+        "部屋のノイズフロアが変換されて鳴り続ける",
+    )
+    vad_model_file: Path = Field(
+        default=Path(),
+        description="silero_vad.onnx (v6.2.1)。[vc] と同じファイルで良い",
+    )
+    vad_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="speech と判定する窓確率の閾値。ブロック内の最大値と比較する",
+    )
+    vad_hangover_ms: float = Field(
+        default=300.0,
+        ge=0,
+        description="最後の speech からゲートを開けたまま保つ時間 ms。"
+        "語間の短い無音でゲートがバタつくのを防ぐ",
+    )
+    vad_min_gain: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="ゲートが閉じたときの出力ゲイン (0.0 = 完全ミュート)",
+    )
     input_host_api_name: str | None = Field(default=None)
     input_device_name: str | None = Field(default=None)
     input_device_index: int | None = Field(default=None)

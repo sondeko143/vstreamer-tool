@@ -30,16 +30,26 @@
 
 実機(RTX 4060 Laptop / f0 抽出器 fcpe / 実声)での耳確認により、`block_ms = 160` / `context_ms = 500` / `crossfade_ms = 25` + SOLA(`sola_search_ms = 5.0`)の構成が clean であることを確認した。context を 500ms 未満にすると seam のガタつきが常時聞こえ(100ms は「ガタゴト」が乗って使い物にならない)、逆に 500ms を超えて 2000ms にしても改善しなかった。block を 80ms に縮めると片道遅延は ~199ms → ~119ms に下がるが、seam のプチプチ(クリック)が可聴になる。SOLA は上で測定した位相ずれ(lag 0 の相関 -0.02、最適 lag で 0.89)を解消するためのもので、耳確認した構成にはこれが含まれている — ただし SOLA 単独の可聴寄与は A/B で分離測定していないため、「SOLA on の構成で clean だった」という以上のことは主張しない。
 
+### VAD ノイズゲート(実装済み)
+
+ゲート無しの streaming 経路は無音でも回り続け、**部屋のノイズフロアをそのまま変換したうえで増幅して**鳴らしていた(実測: 入力 RMS 0.000298 に対し出力 0.0204 = **+10〜+37dB**、context 100ms 時)。[0019](0019-vc-silero-vad-gate.md) の VAD ゲートは発話系 `[vc]` の chunk 単位ゲートで streaming には効かないため、streaming 専用のゲートを入れた(`vspeech/stream_vc/gate.py`、設定は `[stream_vc]` の `vad_gate` / `vad_model_file` / `vad_threshold` / `vad_hangover_ms` / `vad_min_gain`)。
+
+- **判定は入力ブロック、適用は出力ブロック**。Silero VAD 本体は `vspeech/lib/vad.py`(発話系と同じ `silero_vad.onnx`)を読み取り専用で再利用する。streaming のキャプチャは 16kHz なので `VAD_SAMPLE_RATE` と一致し、リサンプルは要らない。判定は `input_boost` を**かける前**の素のブロックで行う(見かけのレベルではなく実際のマイクレベルで判定する)。
+- **ゲートが閉じていても推論はスキップしない**。`StreamingVc` は rolling 左文脈とクロスフェード tail を持つステートフル変換なので、ブロックを飛ばすと文脈に穴が開き、発話が再開したときの seam が壊れる。減衰するのは emit する音だけ(GPU 余力は実測 RTF 0.24 で足りる)。
+- **hangover 付きのステートフル判定**。ブロック粒度(160ms なら 6.25Hz)の素の判定をそのまま使うと語間の短い無音でゲートがバタつく。ブロック内は窓確率の **max** で判定して発話頭(onset)を落とさず、閉じる側を hangover が受け持つ。
+- **ゲインはブロック内で線形に ramp する**。ブロック境界でゲインを階段状に変えること自体がクリックを生む(この ADR がずっと消してきたアーティファクトと同種)ので、前ブロック終端のゲインから今ブロックの目標ゲインへ繋ぐ。`1.0 -> 1.0` は恒等の高速路なので、**既定 off / 常時 speech のときの出力はゲート導入前とビット単位で同一**。
+- **既定 off、fail-open**。実行時に VAD が失敗したら音は素通しし、警告は 1 回だけ出す(6.25Hz でログを埋めない)。`vad_gate=true` のときのモデル実在は preflight(層A)で fail-loud に検査する。
+
 ### 未実装(この ADR の決定に含まれないもの)
 
-envelope 整合(rolling/EMA 基準への置換)と hangover 付き VAD ゲートは、当初この Decision に書いていたが**実装していない**ので決定から外した。`StreamVcConfig` に vad/envelope のフィールドは無く、`StreamingVc` / `stream_vc/runner.py` のどちらにもゲートは無い。すなわち **streaming 経路にはノイズゲートが一切無く、部屋の環境音もそのまま変換されて鳴り続ける**([0019](0019-vc-silero-vad-gate.md) の VAD ゲートは発話系 `[vc]` 専用で、streaming には効かない)。導入するならブロック粒度のバタつき/pumping をどう抑えるかを含めて別の ADR で決めること。
+envelope 整合(rolling/EMA 基準への置換)は、当初この Decision に書いていたが**実装していない**ので決定から外した。`StreamVcConfig` に envelope のフィールドは無く、`StreamingVc` / `stream_vc/runner.py` のどちらにも入力エンベロープ転写は無い(発話系 `[vc]` の [0017](0017-rvc-input-envelope-shape-transfer.md) は発話全体を基準にするので streaming にはそのまま持ち込めない)。導入するならブロック粒度で基準が飛ぶことによる pumping をどう抑えるかを含めて別の ADR で決めること。
 
 ## Alternatives rejected
 
 - **固定位置(lag 0)のまま等電力クロスフェードする** — 上の実測どおり lag 0 の相関は -0.02(ほぼ無相関〜逆相関)で、混ぜると comb になる。クロスフェード長を伸ばしても位相不整合は消えないので解決しない。
 - **クロスフェード則を sum-to-1(線形)に変える** — 実測 RMS 比 0.873(-1.16dB のディップ)。等電力(1.0007)より悪く、位相ずれの本質的な対策にもならない。
 - **発話全体 reflect-pad の `change_voice` をブロックにそのまま呼ぶ(ステートレス流用)** — 短ブロックの reflect-pad 文脈がゴミで境界破綻、クロスフェード無しでクリック、f0 端不安定、可変長で毎回グラフ再構築。streaming では成立しない。
-- **発話単位の envelope/VAD をそのままブロックへ適用** — 発話全体平均 RMS 正規化やブロック粒度 VAD は、基準/ゲートがブロックごとに飛んで pumping/choppy になる。
+- **発話単位の envelope/VAD をそのままブロックへ適用** — 発話全体平均 RMS 正規化や、hangover もゲイン ramp も無い素のブロック粒度 VAD は、基準/ゲートがブロックごとに飛んで pumping/choppy になる(境界でのゲイン階段はクリックそのもの)。上のゲートが hangover とブロック内 ramp を持つのはこれを避けるため。
 
 ## Consequences
 
