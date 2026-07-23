@@ -10,31 +10,28 @@ from __future__ import annotations
 from abc import ABC
 from abc import abstractmethod
 from asyncio import Queue
-from asyncio import QueueEmpty
 from asyncio import QueueFull
 
 from vspeech.stream_vc.packet import StreamPacket
 
 
-def drop_oldest_put(q: Queue, item) -> bool:
+def drop_oldest_put[T](q: Queue[T], item: T) -> bool:
     """満杯なら最古を捨てて `item` を入れる。捨てたら False。
 
     capture/transport のバックプレッシャ共通処理。VC/GPU が実時間に追いつかない
     ときにキューが伸び続けるのを防ぎ、落としたことを呼び出し側が観測できるよう
     bool を返す(受入基準:遅延が単調増加せず落としたことが記録可能)。
+
+    単一イベントループ前提: この関数は await を挟まないので put_nowait と
+    get_nowait の間で他コルーチンが割り込まない。満杯確定直後の get_nowait は
+    必ず成功し、直後の put_nowait も解放済みスロットへ必ず入る(防御的 try は不要)。
     """
     try:
         q.put_nowait(item)
         return True
     except QueueFull:
-        try:
-            q.get_nowait()
-        except QueueEmpty:
-            pass
-        try:
-            q.put_nowait(item)
-        except QueueFull:
-            pass
+        q.get_nowait()  # 最古を捨てる(満杯確定直後なので必ず成功)
+        q.put_nowait(item)  # 解放済みスロットへ(await 無しなので必ず成功)
         return False
 
 
