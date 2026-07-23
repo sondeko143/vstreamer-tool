@@ -253,12 +253,36 @@ output_host_api_name = ""
 output_device_name = ""
 output_device_index = 1
 
-# トランスポート種別。現状は同一プロセス内直結の "in_process" のみ(単一マシン内で完結)。
-# マシン分離用の段階的トランスポート (ADR-0051 の T1 unary gRPC / T3 生ソケット) は未実装。
+# トランスポート種別: "in_process"(既定, 単一マシン内で完結) | "udp"(M3 の2マシン分離,
+# ADR-0051/0055)。role が local のままなら in_process のまま変えない。role を
+# producer/consumer に上げるときは udp が必須(起動時 preflight が role≠local かつ
+# in_process のままの組み合わせを拒否する)。
 transport_type = "in_process"
 # capture -> VC 間の橋渡しキューの上限ブロック数。VC が詰まって溢れたら
 # 最古のブロックを drop する (drop は telemetry に記録される)。
 max_queued_blocks = 8
+
+# --- M3 2マシン分離 (ADR-0055: producer/consumer role split, ADR-0056: consumer
+# 側ジッタバッファ)。role の既定は "local" = 上の M2 単一マシン挙動と完全に同一で、
+# 下記キーは全て無視される。2マシンに分けるときだけ、それぞれのマシンの config で
+# role を切り替えて有効化する。
+# role = "local"          # local(既定) | producer(録音+VC 機) | consumer(再生専任機、GPU/torch 不要)
+# role を producer/consumer にする側は、上の transport_type も "udp" にすること
+# (in_process のままだと起動時 preflight で拒否される)。
+# transport_type = "udp"
+#
+# producer(録音+VC 機)側: 送信先。consumer の bind_host/bind_port と一致させる。
+# peer_host = "<PLAYBACK_HOST>"
+# peer_port = 9999
+#
+# consumer(再生専任機)側: 待受。bind_host は既定 "0.0.0.0"(全 IF)のままで通常十分。
+# bind_host = "0.0.0.0"
+# bind_port = 9999
+#
+# consumer のジッタバッファ深さ ms。深さ=付加遅延なので、まず 0(既定)で実測してから
+# 実測ジッタに合わせて最小に詰める(ADR-0056)。round(jitter_buffer_ms / block_ms) ブロック
+# を prebuffer してから再生を始める。
+# jitter_buffer_ms = 0.0
 
 # ストリーミング専用の RVC モデル設定。[rvc] とは完全に独立したモデルを指せる
 # (ADR-0054)。f0_up_key/window など未記載のフィールドは [rvc] と同じ意味を持ち、
