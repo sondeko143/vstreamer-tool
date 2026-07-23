@@ -31,3 +31,21 @@ async def test_in_process_transport_drops_oldest_when_full():
     assert t.dropped == 1
     assert (await t.recv()).seq == 1  # oldest (0) was dropped
     assert (await t.recv()).seq == 2
+
+
+async def test_drain_to_latest_keeps_newest_and_returns_stale():
+    t = InProcessTransport(max_queued=8)
+    for i in range(4):
+        assert await t.send(StreamPacket("s", i, 0.0, b"", 16000)) is True
+    dropped = t.drain_to_latest(keep=1)
+    assert [p.seq for p in dropped] == [0, 1, 2]  # older ones returned in order
+    assert t._q.qsize() == 1  # exactly the newest is left
+    assert (await t.recv()).seq == 3  # subsequent recv yields the newest
+
+
+async def test_drain_to_latest_noop_on_empty_or_single():
+    t = InProcessTransport(max_queued=8)
+    assert t.drain_to_latest(keep=1) == []  # empty -> no-op
+    await t.send(StreamPacket("s", 7, 0.0, b"", 16000))
+    assert t.drain_to_latest(keep=1) == []  # single element -> no-op
+    assert (await t.recv()).seq == 7  # still there
