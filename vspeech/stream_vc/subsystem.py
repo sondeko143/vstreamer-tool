@@ -143,6 +143,8 @@ async def _stream_vc_subsystem(context: SharedContext) -> None:
                 cause,
             )
         raise
+    finally:
+        transport.close()
 
 
 def create_stream_vc_task(tg: TaskGroup, context: SharedContext) -> Task[None]:

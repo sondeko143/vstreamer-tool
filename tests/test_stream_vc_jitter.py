@@ -82,6 +82,31 @@ def test_reset_clears_state():
     assert buf.pop().pcm == bytes([0, 0])  # next_seq re-primes from scratch
 
 
+def test_duplicate_at_depth0_does_not_desync():
+    buf = JitterBuffer(target_depth=0)
+    for s in range(3):  # play 0,1,2 in order
+        buf.push(_pkt(s, s % 256))
+        assert buf.pop().kind is PopKind.NORMAL
+    # a duplicate of already-played seq 1 arrives during a lull (buffer empty)
+    assert buf.push(_pkt(1, 1)) is False  # rejected as late
+    r = buf.pop()  # empty buffer -> starvation conceal, cursor must NOT advance
+    assert r.kind is PopKind.CONCEAL
+    assert r.gap == 0
+    buf.push(_pkt(3, 3))  # the real in-order packet still lands
+    assert buf.pop().pcm == bytes([3, 3])
+
+
+def test_late_straggler_on_empty_buffer_recovers():
+    buf = JitterBuffer(target_depth=0)
+    buf.push(_pkt(0, 0))
+    assert buf.pop().kind is PopKind.NORMAL  # next_seq=1
+    r = buf.pop()  # expected seq 1 not yet arrived, buffer empty -> starve, no advance
+    assert r.kind is PopKind.CONCEAL
+    assert r.gap == 0
+    buf.push(_pkt(1, 1))  # seq 1 finally arrives -> must play, not be dropped as late
+    assert buf.pop().pcm == bytes([1, 1])
+
+
 def test_two_consecutive_misses_second_is_silence():
     buf = JitterBuffer(target_depth=0)
     buf.push(_pkt(0, 7))

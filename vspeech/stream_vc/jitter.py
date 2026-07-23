@@ -100,6 +100,13 @@ class JitterBuffer:
             self._last_good = pcm
             self._concealed_since_good = 0
             return PopResult(pcm, PopKind.NORMAL, gap=0, dropped=dropped)
-        # 欠落 = 実 loss(reorder は depth が吸収済み)。conceal して advance。
-        self._next_seq += 1
-        return PopResult(self._conceal(), PopKind.CONCEAL, gap=1, dropped=dropped)
+        # 期待 seq が無い。**新しい seq がバッファにある**ときだけ実 loss と確定
+        # (期待 seq を飛び越えた)→ conceal して advance。バッファが空なら starvation
+        # (まだ届いていないだけ)なので **advance しない**: cursor を進めると、まだ配送中の
+        # 期待 packet や重複/遅延 straggler の直後の空 pop が生きた seq を追い越し、以後
+        # 全 in-order packet が late 判定で落ちて永久に無音化する(target_depth=0 の既定で
+        # 発生、final review で実証)。
+        if self._buf:
+            self._next_seq += 1
+            return PopResult(self._conceal(), PopKind.CONCEAL, gap=1, dropped=dropped)
+        return PopResult(self._conceal(), PopKind.CONCEAL, gap=0, dropped=dropped)

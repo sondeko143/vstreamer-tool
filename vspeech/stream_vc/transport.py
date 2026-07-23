@@ -65,6 +65,9 @@ class Transport(ABC):
         """
         return []
 
+    def close(self) -> None:
+        """transport のリソースを解放する。既定は何もしない(InProcessTransport 等)。"""
+
 
 class InProcessTransport(Transport):
     """同一プロセス内の asyncio.Queue 実装(ADR-0051 tier-0)。"""

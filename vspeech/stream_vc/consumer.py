@@ -10,6 +10,7 @@ self-heal(次パケットで lazy 再 open)。
 from __future__ import annotations
 
 from asyncio import CancelledError
+from asyncio import sleep
 from asyncio import to_thread
 from time import perf_counter
 
@@ -26,7 +27,9 @@ from vspeech.stream_vc.packet import StreamPacket
 from vspeech.stream_vc.playback import open_stream_vc_output_stream
 from vspeech.stream_vc.playback import should_log_gap
 from vspeech.stream_vc.playback import should_log_underflow
+from vspeech.stream_vc.retry import BACKOFF_START
 from vspeech.stream_vc.retry import close_quietly
+from vspeech.stream_vc.retry import next_backoff
 from vspeech.stream_vc.transport import Transport
 
 
@@ -49,6 +52,7 @@ async def network_playback_loop(config: StreamVcConfig, transport: Transport) ->
     started = False
     underflow_count = 0
     gap_count = 0
+    backoff = BACKOFF_START
     try:
         while True:
             packet = await transport.recv()
@@ -91,6 +95,7 @@ async def network_playback_loop(config: StreamVcConfig, transport: Transport) ->
                             )
                         started = True
                         logger.info("stream vc consumer playback started")
+                    backoff = BACKOFF_START
                 underflowed = await to_thread(stream.write, result.pcm)
                 if underflowed:
                     telemetry.record("stream_vc_playback_underflow", 1.0)
@@ -106,6 +111,8 @@ async def network_playback_loop(config: StreamVcConfig, transport: Transport) ->
                 if stream is not None:
                     close_quietly(stream)
                 stream = None
+                await sleep(backoff)
+                backoff = next_backoff(backoff)
     except CancelledError as e:
         raise shutdown_worker(e)
     finally:

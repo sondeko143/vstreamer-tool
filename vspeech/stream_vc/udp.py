@@ -64,7 +64,7 @@ class UdpProducerTransport(Transport):
         self._transport.close()
 
 
-class _RecvProtocol:
+class _RecvProtocol(DatagramProtocol):
     """datagram を decode して Queue へ。満杯なら最古を捨てる(遅延の張り付き防止)。"""
 
     def __init__(self, queue: Queue[StreamPacket]) -> None:
@@ -73,7 +73,12 @@ class _RecvProtocol:
     def connection_made(self, transport: Any) -> None:
         self._transport = transport
 
-    def datagram_received(self, data: bytes, _addr: Any) -> None:
+    # 引数名 `_addr` は vulture の unused-arg 規約(既存 fix pass 2)に合わせて維持。
+    # asyncio は位置引数で呼ぶので base の `addr` 命名と食い違っても実害は無いが、
+    # ty の LSP 判定(キーワード呼び出し互換性)は名前一致を求めるため明示 ignore する。
+    def datagram_received(  # ty: ignore[invalid-method-override]
+        self, data: bytes, _addr: Any
+    ) -> None:
         try:
             packet = decode_packet(data)
         except WireError as e:
