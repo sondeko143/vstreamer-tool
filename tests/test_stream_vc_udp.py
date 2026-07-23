@@ -42,3 +42,12 @@ async def test_consumer_poll_drains_all_arrived():
     finally:
         producer.close()
         consumer.close()
+
+
+def test_send_protocol_error_received_counts_and_logs():
+    from vspeech.stream_vc.udp import _SendProtocol
+
+    proto = _SendProtocol()
+    proto.error_received(OSError("route gone"))
+    proto.error_received(OSError("again"))
+    assert proto.error_count == 2

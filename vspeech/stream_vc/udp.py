@@ -10,28 +10,51 @@ from __future__ import annotations
 from asyncio import DatagramProtocol
 from asyncio import Queue
 from asyncio import QueueEmpty
-from asyncio import QueueFull
 from asyncio import get_running_loop
 from typing import Any
 
+from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
 from vspeech.stream_vc.packet import StreamPacket
 from vspeech.stream_vc.transport import Transport
+from vspeech.stream_vc.transport import drop_oldest_put
 from vspeech.stream_vc.wire import WireError
 from vspeech.stream_vc.wire import decode_packet
 from vspeech.stream_vc.wire import encode_packet
 
 
+class _SendProtocol(DatagramProtocol):
+    """producer 送信専用エンドポイントのプロトコル。
+
+    UDP の送信失敗(到達不可・route 消失・ICMP port-unreachable 等)は asyncio では
+    sendto() が同期例外を投げず、後から error_received へ非同期に届く(Windows Proactor /
+    Selector 双方)。ここで捕えてログ+telemetry に通し、送信側の失敗が黙って消えない
+    ようにする(silent な無音穴を作らない)。非同期なので特定 packet には紐付かない。
+    """
+
+    def __init__(self) -> None:
+        self.error_count = 0
+
+    def error_received(self, exc: Exception) -> None:
+        self.error_count += 1
+        telemetry.record("stream_vc_send_error", 1.0)
+        logger.warning("stream_vc udp send error (async): %r", exc)
+
+
 class UdpProducerTransport(Transport):
-    def __init__(self, transport: Any) -> None:
+    def __init__(self, transport: Any, protocol: _SendProtocol) -> None:
         self._transport = transport
+        self._protocol = protocol
 
     async def send(self, packet: StreamPacket) -> bool:
+        # sendto は非同期な送信失敗(到達不可等)を同期例外にしない — それらは
+        # _SendProtocol.error_received でログ+telemetry される。ここで捕える OSError は
+        # 稀な同期失敗(message too long 等)のみで、その場合は send_drop として False。
         try:
             self._transport.sendto(encode_packet(packet))
             return True
-        except OSError as e:  # socket buffer full / route gone: drop, don't crash
-            logger.warning("stream_vc udp send failed; dropping packet: %r", e)
+        except OSError as e:
+            logger.warning("stream_vc udp send failed synchronously; dropping: %r", e)
             return False
 
     async def recv(self) -> StreamPacket:
@@ -56,14 +79,8 @@ class _RecvProtocol:
         except WireError as e:
             logger.warning("stream_vc udp: dropping malformed datagram: %r", e)
             return
-        try:
-            self._queue.put_nowait(packet)
-        except QueueFull:
-            try:
-                self._queue.get_nowait()
-            except QueueEmpty:
-                pass
-            self._queue.put_nowait(packet)
+        if not drop_oldest_put(self._queue, packet):
+            telemetry.record("stream_vc_recv_drop", 1.0)
 
     def error_received(self, exc: Exception) -> None:
         logger.warning("stream_vc udp recv error: %r", exc)
@@ -104,11 +121,10 @@ async def create_udp_producer_transport(
     peer_host: str, peer_port: int
 ) -> UdpProducerTransport:
     loop = get_running_loop()
-    transport, _ = await loop.create_datagram_endpoint(
-        DatagramProtocol,  # producer never receives; base no-op protocol
-        remote_addr=(peer_host, peer_port),
+    transport, protocol = await loop.create_datagram_endpoint(
+        _SendProtocol, remote_addr=(peer_host, peer_port)
     )
-    return UdpProducerTransport(transport)
+    return UdpProducerTransport(transport, protocol)
 
 
 async def create_udp_consumer_transport(
