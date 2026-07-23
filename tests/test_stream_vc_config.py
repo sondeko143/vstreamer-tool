@@ -26,6 +26,46 @@ def test_stream_vc_defaults():
     assert RvcConfig().f0_extractor_type is F0ExtractorType.rmvpe  # 発話系は不変
 
 
+def test_stream_vc_rvc_f0_default_applies_to_explicit_table():
+    """[stream_vc.rvc] table を書いても f0_extractor_type 省略なら fcpe になる。
+
+    default_factory は table が丸ごと無いときにしか発火しない。model_file 等を持つ
+    現実的な設定では pydantic が table を検証し、f0 省略時は RvcConfig 既定 (rmvpe) に
+    落ちてしまう ── before validator がそれを fcpe に補正することを固定する回帰。
+    """
+    # dict で渡す(TOML/JSON も内部的には dict)。nested rvc へ dict を渡す形は
+    # model_validate なら型的にも通り、before validator も通常どおり走る。f0 省略 -> fcpe。
+    absent = StreamVcConfig.model_validate(
+        {"rvc": {"model_file": "/models/voice.onnx"}}
+    )
+    assert absent.rvc.f0_extractor_type is F0ExtractorType.fcpe
+    # 明示した rmvpe は尊重する(補正は「未指定」のときだけ)。
+    explicit_rmvpe = StreamVcConfig.model_validate(
+        {"rvc": {"model_file": "/models/voice.onnx", "f0_extractor_type": "rmvpe"}}
+    )
+    assert explicit_rmvpe.rvc.f0_extractor_type is F0ExtractorType.rmvpe
+    # 明示した fcpe もそのまま。
+    explicit_fcpe = StreamVcConfig.model_validate(
+        {"rvc": {"model_file": "/models/voice.onnx", "f0_extractor_type": "fcpe"}}
+    )
+    assert explicit_fcpe.rvc.f0_extractor_type is F0ExtractorType.fcpe
+
+
+def test_stream_vc_rvc_f0_from_toml_table_without_f0_is_fcpe():
+    """TOML の [stream_vc.rvc] で f0_extractor_type を省略しても fcpe になる。"""
+    toml_text = b"""
+[stream_vc]
+enable = true
+
+[stream_vc.rvc]
+model_file = "/models/voice.onnx"
+"""
+    f = io.BytesIO(toml_text)
+    f.name = "config.toml"
+    c = Config.read_config_from_file(f)
+    assert c.stream_vc.rvc.f0_extractor_type is F0ExtractorType.fcpe
+
+
 def test_config_has_stream_vc_section():
     c = Config()
     assert c.stream_vc.enable is False

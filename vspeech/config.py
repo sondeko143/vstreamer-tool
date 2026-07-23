@@ -14,6 +14,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import SecretStr
 from pydantic import field_serializer
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 from pydantic_settings import SettingsConfigDict
 from toml.encoder import TomlArraySeparatorEncoder
@@ -393,11 +394,39 @@ class StreamVcConfig(BaseModel):
     # 既定 (rmvpe) を上書きして fcpe にする: streaming はブロックごとに毎回 f0 を
     # 引くので 1 推論あたりの軽い fcpe が向き、実機耳確認もその構成で行った
     # (ADR-0053)。[stream_vc] は既定 disable なので既存挙動は変わらない。
+    #
+    # この上書きは default_factory だけでは効かない: default_factory は
+    # [stream_vc.rvc] が**完全に無い**ときにしか発火せず、model_file 等を含む
+    # 現実的な設定では pydantic が RvcConfig の table を検証し、f0_extractor_type を
+    # 省略すると RvcConfig 自身の既定 (rmvpe) に落ちてしまう。そこで下の before
+    # validator が「raw dict に f0_extractor_type が無い」ときだけ fcpe を注入する
+    # (明示された値は rmvpe でも尊重する)。
     rvc: RvcConfig = Field(
         default_factory=lambda: RvcConfig(f0_extractor_type=F0ExtractorType.fcpe),
-        description="ストリーミング専用の RVC 設定。f0_extractor_type だけ "
-        "[rvc] と既定が異なり fcpe(streaming の実機耳確認済み構成)",
+        description="ストリーミング専用の RVC 設定。f0_extractor_type を省略すると "
+        "[rvc] の既定 (rmvpe) ではなく fcpe になる(streaming の実機耳確認済み構成)。"
+        "明示した値は尊重する",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_stream_rvc_f0_to_fcpe(cls, data):
+        """[stream_vc.rvc] table に f0_extractor_type が無ければ fcpe を注入する。
+
+        default_factory は table が丸ごと無いときにしか発火しないので、model_file 等を
+        持つ現実的な table では f0 が RvcConfig 既定の rmvpe に落ちてしまう。raw dict の
+        段階で「未指定」を検出し fcpe を補う(明示された rmvpe/fcpe はそのまま)。rvc が
+        dict でない(未指定 → default_factory / RvcConfig インスタンス直渡し)ときは触らない。
+        """
+        if isinstance(data, dict):
+            rvc = data.get("rvc")
+            if isinstance(rvc, dict) and "f0_extractor_type" not in rvc:
+                data = {
+                    **data,
+                    "rvc": {**rvc, "f0_extractor_type": F0ExtractorType.fcpe.value},
+                }
+        return data
+
     block_ms: float = Field(
         default=160.0,
         gt=0,
@@ -413,8 +442,8 @@ class StreamVcConfig(BaseModel):
     crossfade_ms: float = Field(
         default=25.0,
         ge=0,
-        description="等電力クロスフェード帯 ms (< block, <= context)。"
-        "25ms が実機耳確認済みの値",
+        description="クロスフェード帯 ms (< block, <= context)。フェード則は SOLA の "
+        "有無で変わる(on=振幅保存/off=等電力)。25ms が実機耳確認済みの値",
     )
     sola_search_ms: float = Field(
         default=5.0,

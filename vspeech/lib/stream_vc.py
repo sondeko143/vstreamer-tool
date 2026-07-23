@@ -3,8 +3,8 @@
 固定長ブロックを rolling 左文脈と連結してステートフル変換する。既存の
 `change_voice` の内部部品(HuBERT 特徴量 / f0 / infer / int16化)をそのまま
 再利用し、発話系の `change_voice` 経路は無改変で温存する。ブロック境界は
-振幅保存(和=1)クロスフェードで繋ぎ、混ぜる前に SOLA で位相を合わせる
-(`_emit_with_crossfade`)。
+クロスフェードで繋ぎ(SOLA on なら振幅保存・和=1、SOLA off なら等電力)、
+混ぜる前に SOLA で位相を合わせる(`_emit_with_crossfade`)。
 
 純粋ヘルパ(next_context / crossfade_weights / overlap_add /
 sola_offset)は numpy でも torch tensor でも動くよう `len(seq)` ベースにしてあり(ただし
@@ -45,13 +45,25 @@ def next_context(seq, context_len: int):
     return seq[max(0, len(seq) - context_len) :]
 
 
-def crossfade_weights(n: int) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
-    """長さ n のクロスフェード重み `(fade_in, fade_out)`。`fade_in + fade_out == 1`。
+def crossfade_weights(
+    n: int, *, correlated: bool
+) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+    """長さ n のクロスフェード重み `(fade_in, fade_out)`。フェード則は隣接描画の
+    相関(= SOLA の有無)で切り替える。`correlated` は必須のキーワード専用引数。
 
-    セル中心の sin²/cos²(= `(1-cos)/2` 型)なので和が常に 1。SOLA で位相を
-    合わせた**相関のある**隣接描画を混ぜるため、等電力(²和=1)ではなく振幅保存
-    (和=1)が正しい: 相関信号に等電力を使うと seam が最大 +1.14dB 過剰加算される
-    (SOLA 導入後の再測定, ADR-0053)。w-okada VCClient も SOLA に sum-to-1 を組む。
+    - `correlated=True`(SOLA on): セル中心の sin²/cos²(= `(1-cos)/2` 型)で
+      **振幅保存**(`fade_in + fade_out == 1`)。SOLA が位相を合わせて隣接描画を
+      意図的に相関させる(整列点相関 ρ≈0.82)ので、相関信号どうしは和=1 で
+      混ぜるとユニティ利得になる。ここで等電力(²和=1)を使うと seam が過剰
+      加算される(SOLA on 再測定で +1.14dB, ADR-0053)。w-okada VCClient も
+      SOLA には sum-to-1 を組む。
+    - `correlated=False`(SOLA off, `sola_search_len == 0`): sin/cos で **等電力**
+      (`fade_in² + fade_out² == 1`)。SOLA を切ると隣接描画は無相関(ρ≈0)で、
+      無相関どうしを和=1 で混ぜるとクロスフェード帯に約 -1.25dB のノッチ(=
+      block レートの微小トレモロ)が出る。等電力なら無相関加算でも合成パワーが
+      平坦になり、かつ SOLA 導入前の出力とビット単位で一致する(byte-identity
+      不変量: `sola_search_ms=0` は pre-SOLA と同じ音を出す)。
+
     `n <= 0` は空配列を返す。
     """
     import numpy as np
@@ -59,9 +71,13 @@ def crossfade_weights(n: int) -> tuple[NDArray[np.float32], NDArray[np.float32]]
     if n <= 0:
         empty = np.zeros(0, dtype=np.float32)
         return empty, empty
-    x = (np.arange(n, dtype=np.float32) + 0.5) / n
-    fade_in = (np.sin(0.5 * np.pi * x) ** 2).astype(np.float32)
-    fade_out = (np.cos(0.5 * np.pi * x) ** 2).astype(np.float32)
+    theta = 0.5 * np.pi * ((np.arange(n, dtype=np.float32) + 0.5) / n)
+    if correlated:
+        fade_in = (np.sin(theta) ** 2).astype(np.float32)
+        fade_out = (np.cos(theta) ** 2).astype(np.float32)
+    else:
+        fade_in = np.sin(theta).astype(np.float32)
+        fade_out = np.cos(theta).astype(np.float32)
     return fade_in, fade_out
 
 
@@ -285,7 +301,7 @@ class StreamingVc:
         return out[-out_hop:] if out.shape[0] >= out_hop else out
 
     def _emit_with_crossfade(self, out: NDArray[np.int16]) -> NDArray[np.int16]:
-        """SOLA で位相を合わせてから振幅保存(和=1)overlap-add し、実時間 hop ちょうどを返す。
+        """SOLA で位相を合わせてから overlap-add し、実時間 hop ちょうどを返す。
 
         出力域の長さ(hop / crossfade / SOLA 探索半幅)は**実時間クロック**から導く
         (`block_len * target_sample_rate / 16000` など)。描画長 out.shape[0] からの
@@ -302,10 +318,14 @@ class StreamingVc:
         数 ms の位相ずれが乗る(実測: lag0 の相関 -0.02 に対し最適 lag では 0.89)。
         固定位置で混ぜると comb フィルタになるので、混ぜる前に `sola_offset` で
         `_output_tail` と最も相関する読み出し位置 `start` を ±out_sola の窓で探す
-        (SOLA = Synchronous OverLap-Add)。フェード則は振幅保存(和=1、sin²/cos²)。
-        SOLA は隣接描画を意図的に相関させる(整列点相関 ρ=0.82)ので、無相関前提の
-        等電力(²和=1)は seam を過剰加算する(SOLA on 再測定で +1.14dB、sum-to-1 は
-        -0.76dB でユニティ寄り)。w-okada VCClient も SOLA に sum-to-1 を組む(ADR-0053)。
+        (SOLA = Synchronous OverLap-Add)。フェード則は SOLA の有無で切り替える
+        (`crossfade_weights(..., correlated=self.sola_search_len > 0)`)。SOLA on は
+        隣接描画を意図的に相関させる(整列点相関 ρ=0.82)ので振幅保存(和=1、
+        sin²/cos²)でユニティ利得(等電力だと +1.14dB 過剰加算、sum-to-1 は
+        -0.76dB でユニティ寄り。w-okada VCClient も SOLA に sum-to-1)。SOLA off
+        (`sola_search_len == 0`)は隣接描画が無相関(ρ≈0)なので等電力(²和=1、
+        sin/cos)。無相関に和=1 を使うと帯域に約 -1.25dB のノッチ(block レートの
+        トレモロ)が出る。等電力なら pre-SOLA 出力とビット単位で一致する(ADR-0053)。
 
         index 不変量:
 
@@ -317,8 +337,11 @@ class StreamingVc:
           == out_total` なので、描画の外へは決して出ない。
         - `nominal - out_sola >= 0`(探索窓が出力の先頭を割らない)は out_sola の
           clamp `out_sola <= (out_total - out_hop - out_xf) // 2` で保証する。
-        - `out_sola == 0` のときは `start == nominal == out_total - out_hop - out_xf`
-          で、SOLA 導入前と完全に同一のサンプルを出す。
+        - `out_sola == 0`(= `sola_search_len == 0`)のときは `start == nominal ==
+          out_total - out_hop - out_xf` で読み出し位置が pre-SOLA と一致し、かつ
+          フェード則も等電力(`correlated=False`)に落ちるので、出すサンプルは
+          pre-SOLA と完全に同一(byte-identity)。読み出し位置だけでなく重みも
+          一致させることでこの不変量が本当に成立する。
         - `sola_offset` が探索を諦める(tail が実質無音・相関面が平坦)ときは region
           の**中央** `out_sola` を返すので `start == nominal` になる。すなわち
           「シフト無し」に落ちる(index 0 = 最大の負シフト、ではない)。
@@ -350,7 +373,11 @@ class StreamingVc:
             out_xf = min(out_xf, out_hop, out_total - out_hop)
             # nominal - out_sola >= 0 を保証(探索窓が出力の先頭を割らない)
             out_sola = max(0, min(out_sola, (out_total - out_hop - out_xf) // 2))
-            fade_in, fade_out = crossfade_weights(out_xf)
+            # フェード則は SOLA の有無で決まる。SOLA on は隣接描画が相関する(和=1)、
+            # SOLA off は無相関(等電力)。sola_search_len==0 で pre-SOLA と byte-identity。
+            fade_in, fade_out = crossfade_weights(
+                out_xf, correlated=self.sola_search_len > 0
+            )
             self._xfade_cache = (out_hop, out_xf, out_sola, fade_in, fade_out)
         out_hop, out_xf, out_sola, fade_in, fade_out = self._xfade_cache
         out_f = out.astype(np.float32)

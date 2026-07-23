@@ -16,10 +16,15 @@ RMS 0.000298 に対し出力 0.0204 = +10〜+37dB、context 100ms 時)。
   ときの seam が壊れる。減衰するのは emit する音だけ。
 - **hangover 付きのステートフル判定**。ブロック単位(160ms なら 6.25Hz)で
   素の VAD 判定をそのまま使うと語間の短い無音でゲートがバタつく。
-- **ゲインはブロック内で線形に ramp する**。ブロック境界でゲインを階段状に
-  変えること自体がクリックを生む — この branch がずっと戦ってきた種類の
-  アーティファクトそのものなので、前ブロック終端のゲインから今ブロックの
-  目標ゲインへ滑らかに繋ぐ。
+- **ゲインはブロック内で ramp する(非対称の attack/release)**。ブロック境界で
+  ゲインを階段状に変えること自体がクリックを生む — この branch がずっと戦って
+  きた種類のアーティファクトそのものなので、前ブロック終端のゲインから今ブロック
+  の目標ゲインへ滑らかに繋ぐ。ただし**開放(attack)は短い窓(既定 ~10ms)で
+  立ち上げ、残りは目標ゲインを保持する**。開放をブロック全長(160ms)で線形に
+  すると、無音明けの語頭が最初の ~32ms を -20dB 前後で舐めてしまい、句頭の音節が
+  毎回膨らむ。開放直前は(ゲートが閉じていたので)ほぼ無音なので、速い attack でも
+  クリックにならない。**閉鎖/定常(release)はブロック全長の緩い線形のまま**
+  (末尾の無音を舐めるのでゆっくりの方がクリックが出ない)。
 
 numpy は `vspeech/lib/stream_vc.py` と同様にメソッド内 import に留める
 (この module を import 軽量に保つ)。
@@ -32,6 +37,13 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
+
+
+# ゲート開放(attack)のランプ長 ms。閉→開の遷移だけこの短い窓で立ち上げ、残りは
+# 目標ゲインを保持する(release はブロック全長のまま)。無音明けの語頭が全ブロック
+# ランプで舐められて膨らむのを防ぐ。開放直前はゲートが閉じていてほぼ無音なので
+# 速い attack でもクリックにならない。必要なら将来 config 化できるが、今は定数で十分。
+_ATTACK_MS = 10.0
 
 
 class StreamingVadGate:
@@ -94,12 +106,21 @@ class StreamingVadGate:
         return self.min_gain
 
     def ramp(self, out_i16: NDArray[np.int16], target_gain: float) -> NDArray[np.int16]:
-        """前ブロック終端のゲインから `target_gain` までブロック内で線形に繋ぐ。
+        """前ブロック終端のゲインから `target_gain` へ繋ぐ(非対称 attack/release)。
 
-        末端が正確に `target_gain` になる(endpoint 込みの linspace)ので、次
-        ブロックの ramp 始点と連続する = ブロック境界に段差が生じない。
-        `1.0 -> 1.0` は恒等の高速路: ゲート既定 off / 常時 speech のとき出力は
-        ビット単位で無ゲート時と一致する。
+        どちらの経路も末端が正確に `target_gain` になる(hold か endpoint 込みの
+        linspace)ので、次ブロックの ramp 始点と連続する = ブロック境界に段差が
+        生じない。`1.0 -> 1.0` は恒等の高速路: ゲート既定 off / 常時 speech のとき
+        出力はビット単位で無ゲート時と一致する。
+
+        - **開放(attack, `target_gain > start`)**: 短い `_ATTACK_MS` 窓(ブロック
+          長にクランプ)で `start -> target_gain` まで上げ、残りは `target_gain` を
+          保持する。無音明けの語頭が全ブロックランプで舐められて膨らむのを防ぐ。
+          開放直前はゲートが閉じていてほぼ無音なので速い attack でもクリックに
+          ならない。
+        - **閉鎖/定常(release, `target_gain <= start`)**: ブロック全長の緩い線形。
+          末尾の無音を舐めるのでゆっくりの方がクリックが出ない。`min_gain -> min_gain`
+          の保持もここ(定数ゲイン)。
         """
         import numpy as np
 
@@ -110,6 +131,17 @@ class StreamingVadGate:
         n = int(out_i16.shape[0])
         if n == 0:
             return out_i16
-        gain = np.linspace(start, target_gain, n, dtype=np.float32)
+        if target_gain > start:
+            # attack: 短い窓で立ち上げ、残りは target を保持。attack_len は実 emit
+            # 長 n から block_ms 換算で導く(emit hop に一致)。最低 1、最大 n。
+            attack_len = min(n, max(1, round(_ATTACK_MS / self.block_ms * n)))
+            gain = np.empty(n, dtype=np.float32)
+            gain[:attack_len] = np.linspace(
+                start, target_gain, attack_len, dtype=np.float32
+            )
+            gain[attack_len:] = target_gain
+        else:
+            # release/steady: 従来どおりブロック全長の線形。
+            gain = np.linspace(start, target_gain, n, dtype=np.float32)
         out_f = out_i16.astype(np.float32) * gain
         return np.clip(np.rint(out_f), -32768.0, 32767.0).astype(np.int16)

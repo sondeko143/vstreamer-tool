@@ -91,15 +91,49 @@ def test_ramp_has_no_step_discontinuity():
 
 
 def test_ramp_resumes_from_previous_block_end_gain():
-    g = _gate(min_gain=0.0)
+    from vspeech.stream_vc import gate as gate_mod
+
+    g = _gate(min_gain=0.0)  # block_ms=100.0
     n = 400
     amp = 10000
     block = np.full(n, amp, dtype=np.int16)
-    g.ramp(block, 0.0)  # 1.0 -> 0.0 で閉じ切る
-    out = g.ramp(block, 1.0).astype(np.float64)  # 0.0 -> 1.0 で開く
-    assert abs(out[0]) <= 1.0  # 前ブロック終端(0.0)から連続
+    g.ramp(block, 0.0)  # 1.0 -> 0.0 で閉じ切る(release: 全ブロック線形)
+    out = g.ramp(block, 1.0).astype(np.float64)  # 0.0 -> 1.0 で開く(attack)
+    assert abs(out[0]) <= 1.0  # 前ブロック終端(0.0)から連続 = ブロック境界に段差なし
+    assert abs(out[-1] - amp) <= 1.0  # 終端 = target なので次ブロック始点と連続
+    # 開放は短い attack 窓で立ち上がるので、跳びは attack 傾き (amp/attack_len) で
+    # 抑えられる(全ブロック線形の amp/n より急だが、無音明けなので click にならない)。
+    # ブロック境界に段差が無いことは out[0]/out[-1] の連続性で担保する。
+    attack_len = round(gate_mod._ATTACK_MS / g.block_ms * n)
+    assert np.max(np.abs(np.diff(out))) <= 2.0 * amp / attack_len
+
+
+def test_ramp_opening_uses_fast_attack_then_holds():
+    """開放遷移(0.0 -> 1.0)は短い attack 窓で立ち上げ、残りは full を保持する。
+
+    全ブロック対称ランプだと無音明けの語頭が最初の ~32ms を -20dB 前後で舐めて
+    しまう。非対称 attack は attack 窓の終端で既に full に達し、以降は保持する。
+    """
+    from vspeech.stream_vc import gate as gate_mod
+
+    g = _gate(min_gain=0.0, block_ms=160.0)
+    g._gain = 0.0  # 直前ブロックで閉じ切った状態(無音明け)
+    n = 800
+    amp = 10000
+    block = np.full(n, amp, dtype=np.int16)
+    out = g.ramp(block, 1.0).astype(np.float64)  # 0.0 -> 1.0 開放
+
+    attack_len = round(gate_mod._ATTACK_MS / 160.0 * n)  # 10ms/160ms * 800 = 50
+    # attack 窓の終端以降はフル(target=1.0)を保持している。
+    assert np.allclose(out[attack_len:], amp, atol=amp * 0.01)
+    # 語頭は旧・対称ランプ(0->1 を全ブロック)より遥かに速く立ち上がる:
+    # 旧ランプなら index 160 (=32ms) のゲインは ~0.2 (< amp*0.1 相当の減衰帯) だが、
+    # 非対称 attack では同じ位置で既に full 付近。
+    assert out[160] > amp * 0.9
+    # 開始は前ブロック終端(0.0)から連続 = ブロック境界に段差なし。
+    assert abs(out[0]) <= 1.0
+    # 終端ゲイン = target なので次ブロック始点と連続。
     assert abs(out[-1] - amp) <= 1.0
-    assert np.max(np.abs(np.diff(out))) <= 2.0 * amp / n
 
 
 def test_ramp_preserves_dtype_and_clips_to_int16_range():

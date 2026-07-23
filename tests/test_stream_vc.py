@@ -207,40 +207,60 @@ def test_streaming_vc_crossfade_rate_locked_and_finite():
     assert any(np.any(out != 0) for out in outs)
 
 
-def test_crossfade_weights_sum_to_one():
+@pytest.mark.parametrize("correlated", [True, False])
+def test_crossfade_weights_direction_and_endpoints(correlated):
     from vspeech.lib.stream_vc import crossfade_weights
 
-    # New law is amplitude-preserving (sum-to-1), NOT equal-power (sum-of-squares).
-    # sin²(πx/2) + cos²(πx/2) == 1 exactly, so fade_in + fade_out == 1 to float precision.
-    fade_in, fade_out = crossfade_weights(64)
-    assert np.allclose(fade_in + fade_out, 1.0, atol=1e-6)
-
-
-def test_crossfade_weights_center_is_half():
-    from vspeech.lib.stream_vc import crossfade_weights
-
-    # Odd n places a cell centre exactly at x=0.5, where sin²=cos²=0.5. This pins the
-    # sum-to-1 law: equal-power gave 0.707/0.707 at the centre, sum-to-1 gives 0.5/0.5.
-    fade_in, fade_out = crossfade_weights(101)
-    assert np.isclose(fade_in[50], 0.5, atol=1e-6)
-    assert np.isclose(fade_out[50], 0.5, atol=1e-6)
-
-
-def test_crossfade_weights_direction():
-    from vspeech.lib.stream_vc import crossfade_weights
-
-    fade_in, fade_out = crossfade_weights(64)
-    # fade_in rises 0->1, fade_out falls 1->0 (endpoints: sin²(small)≈0, sin²(≈π/2)≈1)
+    fade_in, fade_out = crossfade_weights(64, correlated=correlated)
+    # Both laws (sin/cos and sin²/cos²) rise/fall the same way at the endpoints.
     assert fade_in[0] < fade_in[-1]
     assert fade_out[0] > fade_out[-1]
     assert fade_in[0] < 0.1 and fade_out[0] > 0.9
     assert fade_in[-1] > 0.9 and fade_out[-1] < 0.1
 
 
-def test_crossfade_weights_zero_is_empty():
+def test_crossfade_weights_correlated_is_amplitude_preserving():
     from vspeech.lib.stream_vc import crossfade_weights
 
-    fade_in, fade_out = crossfade_weights(0)
+    # SOLA on (correlated renders): sum-to-1 (sin²/cos²) is unity-gain for
+    # correlated signals. sin²(πx/2)+cos²(πx/2)==1 exactly.
+    fade_in, fade_out = crossfade_weights(64, correlated=True)
+    assert np.allclose(fade_in + fade_out, 1.0, atol=1e-6)
+    # Odd n places a cell centre exactly at x=0.5, where sin²=cos²=0.5.
+    fi, fo = crossfade_weights(101, correlated=True)
+    assert np.isclose(fi[50], 0.5, atol=1e-6)
+    assert np.isclose(fo[50], 0.5, atol=1e-6)
+
+
+def test_crossfade_weights_uncorrelated_is_equal_power():
+    from vspeech.lib.stream_vc import crossfade_weights
+
+    # SOLA off (uncorrelated renders): equal-power (sin/cos) keeps total power
+    # flat (fi²+fo²==1). Using sum-to-1 here would notch the band by ~1.25 dB.
+    fade_in, fade_out = crossfade_weights(64, correlated=False)
+    assert np.allclose(fade_in**2 + fade_out**2, 1.0, atol=1e-6)
+    # Centre of the equal-power law is 0.707/0.707, NOT 0.5/0.5.
+    fi, fo = crossfade_weights(101, correlated=False)
+    assert np.isclose(fi[50], np.sqrt(0.5), atol=1e-6)
+    assert np.isclose(fo[50], np.sqrt(0.5), atol=1e-6)
+
+
+def test_crossfade_weights_laws_differ_at_centre():
+    from vspeech.lib.stream_vc import crossfade_weights
+
+    # The two branches must genuinely differ: sum-to-1 centre 0.5 vs
+    # equal-power centre 0.707. This is the whole point of the conditional law.
+    corr_in, _ = crossfade_weights(101, correlated=True)
+    uncorr_in, _ = crossfade_weights(101, correlated=False)
+    assert not np.isclose(corr_in[50], uncorr_in[50], atol=1e-3)
+    assert corr_in[50] < uncorr_in[50]  # 0.5 < 0.707
+
+
+@pytest.mark.parametrize("correlated", [True, False])
+def test_crossfade_weights_zero_is_empty(correlated):
+    from vspeech.lib.stream_vc import crossfade_weights
+
+    fade_in, fade_out = crossfade_weights(0, correlated=correlated)
     assert fade_in.shape == (0,) and fade_out.shape == (0,)
 
 
@@ -249,7 +269,7 @@ def test_overlap_add_boundaries():
     from vspeech.lib.stream_vc import overlap_add
 
     n = 100
-    fade_in, fade_out = crossfade_weights(n)
+    fade_in, fade_out = crossfade_weights(n, correlated=True)
     prev = np.full(n, 100.0, dtype=np.float32)
     head = np.full(n, 0.0, dtype=np.float32)
     blended = overlap_add(prev, head, fade_in, fade_out)
