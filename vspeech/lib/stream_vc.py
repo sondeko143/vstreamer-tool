@@ -3,10 +3,10 @@
 固定長ブロックを rolling 左文脈と連結してステートフル変換する。既存の
 `change_voice` の内部部品(HuBERT 特徴量 / f0 / infer / int16化)をそのまま
 再利用し、発話系の `change_voice` 経路は無改変で温存する。ブロック境界は
-等電力クロスフェードで繋ぎ、混ぜる前に SOLA で位相を合わせる
+振幅保存(和=1)クロスフェードで繋ぎ、混ぜる前に SOLA で位相を合わせる
 (`_emit_with_crossfade`)。
 
-純粋ヘルパ(next_context / equal_power_weights / overlap_add /
+純粋ヘルパ(next_context / crossfade_weights / overlap_add /
 sola_offset)は numpy でも torch tensor でも動くよう `len(seq)` ベースにしてあり(ただし
 sola_offset は numpy 配列専用)、torch 無し・
 rvc extra 無しの CPU でも import できる(重い import は StreamingVc のメソッド内
@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # Type-only: used by StreamingVc's annotations below. The pure helpers
-    # (next_context / equal_power_weights / overlap_add)
+    # (next_context / crossfade_weights / overlap_add)
     # don't need these, so keeping the imports under TYPE_CHECKING (rather
     # than module-level) still lets this module import on a CPU machine
     # without torch/onnxruntime/the rvc extra.
@@ -45,13 +45,14 @@ def next_context(seq, context_len: int):
     return seq[max(0, len(seq) - context_len) :]
 
 
-def equal_power_weights(n: int) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
-    """長さ n の等電力クロスフェード重み `(fade_in, fade_out)`。
+def crossfade_weights(n: int) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+    """長さ n のクロスフェード重み `(fade_in, fade_out)`。`fade_in + fade_out == 1`。
 
-    セル中心の sin/cos なので `fade_in**2 + fade_out**2 == 1`。独立推論した
-    (無相関の)隣接出力を混ぜても総電力が一定に保たれる — RVC デコーダは
-    ステートレスで hop ごとに位相非整合なので、線形重みより等電力が正しい。
-    `n <= 0` は空配列を返す(crossfade 無効)。
+    セル中心の sin²/cos²(= `(1-cos)/2` 型)なので和が常に 1。SOLA で位相を
+    合わせた**相関のある**隣接描画を混ぜるため、等電力(²和=1)ではなく振幅保存
+    (和=1)が正しい: 相関信号に等電力を使うと seam が最大 +1.14dB 過剰加算される
+    (SOLA 導入後の再測定, ADR-0053)。w-okada VCClient も SOLA に sum-to-1 を組む。
+    `n <= 0` は空配列を返す。
     """
     import numpy as np
 
@@ -59,15 +60,15 @@ def equal_power_weights(n: int) -> tuple[NDArray[np.float32], NDArray[np.float32
         empty = np.zeros(0, dtype=np.float32)
         return empty, empty
     x = (np.arange(n, dtype=np.float32) + 0.5) / n
-    fade_in = np.sin(0.5 * np.pi * x).astype(np.float32)
-    fade_out = np.cos(0.5 * np.pi * x).astype(np.float32)
+    fade_in = (np.sin(0.5 * np.pi * x) ** 2).astype(np.float32)
+    fade_out = (np.cos(0.5 * np.pi * x) ** 2).astype(np.float32)
     return fade_in, fade_out
 
 
 def overlap_add(prev_tail, head, fade_in, fade_out):
     """`prev_tail` をフェードアウト・`head` をフェードインして加算する。
 
-    等電力 overlap-add の 1 行。要素積なので numpy 配列でも torch tensor でも
+    クロスフェード overlap-add の 1 行。要素積なので numpy 配列でも torch tensor でも
     動く(呼び出し側は同じ長さ・同じ域で渡す)。
     """
     return prev_tail * fade_out + head * fade_in
@@ -284,7 +285,7 @@ class StreamingVc:
         return out[-out_hop:] if out.shape[0] >= out_hop else out
 
     def _emit_with_crossfade(self, out: NDArray[np.int16]) -> NDArray[np.int16]:
-        """SOLA で位相を合わせてから等電力 overlap-add し、実時間 hop ちょうどを返す。
+        """SOLA で位相を合わせてから振幅保存(和=1)overlap-add し、実時間 hop ちょうどを返す。
 
         出力域の長さ(hop / crossfade / SOLA 探索半幅)は**実時間クロック**から導く
         (`block_len * target_sample_rate / 16000` など)。描画長 out.shape[0] からの
@@ -296,13 +297,15 @@ class StreamingVc:
         より切り詰められた末尾は自然に避けられる。
 
         前 tick が emit 末尾 out_xf を `_output_tail` に保持しており、今 tick はそれと
-        同じ入力時刻を再描画した区間を等電力ブレンドして emit 先頭にする(seam の真の
+        同じ入力時刻を再描画した区間を振幅保存(和=1)ブレンドして emit 先頭にする(seam の真の
         overlap-add)。ただし RVC デコーダはステートレスで、同じ入力区間でも tick ごとに
         数 ms の位相ずれが乗る(実測: lag0 の相関 -0.02 に対し最適 lag では 0.89)。
         固定位置で混ぜると comb フィルタになるので、混ぜる前に `sola_offset` で
         `_output_tail` と最も相関する読み出し位置 `start` を ±out_sola の窓で探す
-        (SOLA = Synchronous OverLap-Add)。フェード則は等電力のまま(実測で
-        blend/rest の RMS 比 1.0007、sum-to-1 は 0.873 = -1.16dB のディップ)。
+        (SOLA = Synchronous OverLap-Add)。フェード則は振幅保存(和=1、sin²/cos²)。
+        SOLA は隣接描画を意図的に相関させる(整列点相関 ρ=0.82)ので、無相関前提の
+        等電力(²和=1)は seam を過剰加算する(SOLA on 再測定で +1.14dB、sum-to-1 は
+        -0.76dB でユニティ寄り)。w-okada VCClient も SOLA に sum-to-1 を組む(ADR-0053)。
 
         index 不変量:
 
@@ -347,7 +350,7 @@ class StreamingVc:
             out_xf = min(out_xf, out_hop, out_total - out_hop)
             # nominal - out_sola >= 0 を保証(探索窓が出力の先頭を割らない)
             out_sola = max(0, min(out_sola, (out_total - out_hop - out_xf) // 2))
-            fade_in, fade_out = equal_power_weights(out_xf)
+            fade_in, fade_out = crossfade_weights(out_xf)
             self._xfade_cache = (out_hop, out_xf, out_sola, fade_in, fade_out)
         out_hop, out_xf, out_sola, fade_in, fade_out = self._xfade_cache
         out_f = out.astype(np.float32)

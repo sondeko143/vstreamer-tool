@@ -207,37 +207,49 @@ def test_streaming_vc_crossfade_rate_locked_and_finite():
     assert any(np.any(out != 0) for out in outs)
 
 
-def test_equal_power_weights_sum_of_squares_is_one():
-    from vspeech.lib.stream_vc import equal_power_weights
+def test_crossfade_weights_sum_to_one():
+    from vspeech.lib.stream_vc import crossfade_weights
 
-    fade_in, fade_out = equal_power_weights(64)
-    power = fade_in**2 + fade_out**2
-    assert np.allclose(power, 1.0, atol=1e-5)
+    # New law is amplitude-preserving (sum-to-1), NOT equal-power (sum-of-squares).
+    # sin²(πx/2) + cos²(πx/2) == 1 exactly, so fade_in + fade_out == 1 to float precision.
+    fade_in, fade_out = crossfade_weights(64)
+    assert np.allclose(fade_in + fade_out, 1.0, atol=1e-6)
 
 
-def test_equal_power_weights_direction():
-    from vspeech.lib.stream_vc import equal_power_weights
+def test_crossfade_weights_center_is_half():
+    from vspeech.lib.stream_vc import crossfade_weights
 
-    fade_in, fade_out = equal_power_weights(64)
-    # fade_in rises 0->1, fade_out falls 1->0
+    # Odd n places a cell centre exactly at x=0.5, where sin²=cos²=0.5. This pins the
+    # sum-to-1 law: equal-power gave 0.707/0.707 at the centre, sum-to-1 gives 0.5/0.5.
+    fade_in, fade_out = crossfade_weights(101)
+    assert np.isclose(fade_in[50], 0.5, atol=1e-6)
+    assert np.isclose(fade_out[50], 0.5, atol=1e-6)
+
+
+def test_crossfade_weights_direction():
+    from vspeech.lib.stream_vc import crossfade_weights
+
+    fade_in, fade_out = crossfade_weights(64)
+    # fade_in rises 0->1, fade_out falls 1->0 (endpoints: sin²(small)≈0, sin²(≈π/2)≈1)
     assert fade_in[0] < fade_in[-1]
     assert fade_out[0] > fade_out[-1]
     assert fade_in[0] < 0.1 and fade_out[0] > 0.9
+    assert fade_in[-1] > 0.9 and fade_out[-1] < 0.1
 
 
-def test_equal_power_weights_zero_is_empty():
-    from vspeech.lib.stream_vc import equal_power_weights
+def test_crossfade_weights_zero_is_empty():
+    from vspeech.lib.stream_vc import crossfade_weights
 
-    fade_in, fade_out = equal_power_weights(0)
+    fade_in, fade_out = crossfade_weights(0)
     assert fade_in.shape == (0,) and fade_out.shape == (0,)
 
 
 def test_overlap_add_boundaries():
-    from vspeech.lib.stream_vc import equal_power_weights
+    from vspeech.lib.stream_vc import crossfade_weights
     from vspeech.lib.stream_vc import overlap_add
 
     n = 100
-    fade_in, fade_out = equal_power_weights(n)
+    fade_in, fade_out = crossfade_weights(n)
     prev = np.full(n, 100.0, dtype=np.float32)
     head = np.full(n, 0.0, dtype=np.float32)
     blended = overlap_add(prev, head, fade_in, fade_out)
