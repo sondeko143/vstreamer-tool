@@ -1,5 +1,6 @@
 import pytest
 
+from gui.readiness import STREAM_VC_FLOW
 from gui.readiness import WORKER_NAMES
 from gui.readiness import enabled_workers
 from gui.readiness import evaluate
@@ -7,6 +8,7 @@ from gui.readiness import flow_of
 from vspeech.config import Config
 from vspeech.config import PlaybackConfig
 from vspeech.config import RecordingConfig
+from vspeech.config import StreamVcConfig
 from vspeech.config import VcConfig
 
 
@@ -43,6 +45,29 @@ def test_flow_starts_at_recording_when_recording_seeds():
 def test_flow_uses_text_send_operations_without_recording():
     config = Config(text_send_operations=[["tts", "playback"]])
     assert flow_of(config) == [["(text)", "tts", "playback"]]
+
+
+def test_stream_vc_only_pipeline_is_reported_as_an_enabled_worker():
+    # stream_vc を WORKER_NAMES から落としていたとき、streaming だけの pipeline が
+    # workers=[] / ok=True になり、GUI が「何もしません」と表示していた。
+    config = Config(stream_vc=StreamVcConfig(enable=True))
+    assert enabled_workers(config) == ["stream_vc"]
+    readiness = evaluate(config)
+    assert [w.worker for w in readiness.workers] == ["stream_vc"]
+    assert not readiness.ok  # 既定の空パスは preflight が問題として挙げる
+
+
+def test_flow_shows_stream_vc_instead_of_a_fabricated_text_chain():
+    config = Config(stream_vc=StreamVcConfig(enable=True))
+    assert flow_of(config) == [STREAM_VC_FLOW]
+
+
+def test_flow_appends_stream_vc_to_the_recording_chain():
+    config = Config(
+        recording=RecordingConfig(enable=True, routes_list=[["vc", "playback"]]),
+        stream_vc=StreamVcConfig(enable=True),
+    )
+    assert flow_of(config) == [["recording", "vc", "playback"], STREAM_VC_FLOW]
 
 
 def test_worker_names_are_all_enableable_config_sections():

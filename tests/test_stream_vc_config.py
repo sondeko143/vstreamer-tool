@@ -1,6 +1,7 @@
 import io
 
 from vspeech.config import Config
+from vspeech.config import F0ExtractorType
 from vspeech.config import RvcConfig
 from vspeech.config import StreamVcConfig
 from vspeech.config import TransportType
@@ -19,6 +20,10 @@ def test_stream_vc_defaults():
     # gives each instance its own copy, not a shared mutable default.
     assert isinstance(c.rvc, RvcConfig)
     assert StreamVcConfig().rvc is not StreamVcConfig().rvc
+    # streaming の既定 f0 抽出器は [rvc] の rmvpe ではなく fcpe。最小構成の
+    # [stream_vc] が実機耳確認済みの構成で立ち上がるようにする (ADR-0053)。
+    assert c.rvc.f0_extractor_type is F0ExtractorType.fcpe
+    assert RvcConfig().f0_extractor_type is F0ExtractorType.rmvpe  # 発話系は不変
 
 
 def test_config_has_stream_vc_section():

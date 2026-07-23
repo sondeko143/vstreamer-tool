@@ -86,7 +86,9 @@ def build_stream_vc_runtime(sv_config: StreamVcConfig) -> dict[str, Any]:
     # graph surgery か上流パッチが要り、割に合わない(過去に ONNX graph surgery を
     # 試して徒労に終わっている)。
     # 代償: この f0 セッション固有の ORT 警告 (provider fallback 等) も見えなくなる。
-    # f0 が CPU に落ちた場合は `poe stream-vc-rtf` の per-block RTF で検知できる。
+    # そのため、握り潰したうちで実害のある「CUDA を要求したのに CPU へ落ちた」だけは
+    # vc_loop 側の check_cuda_provider(f0_session) でプログラム的に捕まえる
+    # (WorkerStartupError = fail-loud)。ログの間引きで診断を失わないための対。
     if rvc.f0_extractor_type == F0ExtractorType.rmvpe:
         f0_session = create_session(
             rvc.rmvpe_model_file, device, log_severity=_ORT_LOG_ERROR
@@ -152,6 +154,12 @@ async def vc_loop(
 
         rt = await to_thread(build_stream_vc_runtime, sv_config)
         check_cuda_provider(rt["session"].get_providers())
+        # f0 セッションは ORT の警告を落としてある(build_stream_vc_runtime 参照)ので、
+        # provider fallback をログでは検知できない。ここで明示的に見る。
+        # 偽陽性は無い: create_session が CUDA を要求するのは device.type == "cuda"
+        # のときだけで、意図的な CPU 実行なら 1 行上の decoder 検査で先に落ちる。
+        if rt["f0_session"] is not None:
+            check_cuda_provider(rt["f0_session"].get_providers())
         sv = make_streaming_vc(rt, sv_config)
         # warmup 失敗(固定 shape グラフ構築の失敗)は起動時失敗として fail-loud に
         # する(ADR-0038)。loop 内 process_block は guard していないので、ここで

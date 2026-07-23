@@ -17,7 +17,6 @@
 - **混ぜる前に SOLA(Synchronous OverLap-Add)で位相を合わせる**。前 tick の emit 末尾(`_output_tail`)と、今 tick の描画のうち同じ入力時刻にあたる区間を、小さな探索窓(`sola_search_ms`、既定 ±5ms)内で正規化相互相関にかけ、最も相関する読み出し位置から等電力クロスフェードする。lag は「どこから読むか」だけを変え、emit 長は常に hop 相当ちょうど — すなわち**サンプルレートのクロックから導く実時間長 `block_len * target_sample_rate / 16000`** であって、デコーダの描画長からの比率ではない — なので、レートロックは保たれる(ドリフト無し・sink の飢餓無し)。読み出し**位置**だけは描画長からの逆算(末尾アンカー)にして、HuBERT の受容野が末尾を一定量切り詰めるぶんを避ける。
 - 入力 shape を固定し、warmup を 1 回で済ませる(以後 re-autotune なし)。
 - 既存 `change_voice` の内部部品(HuBERT 特徴量抽出 / f0 抽出 / infer / int16 化)は再利用するが、発話系の `change_voice` 経路自体は無改変で温存する。
-- envelope 整合は発話全体平均に依存するため、streaming では rolling(EMA)基準へ置換するか既定 off とする。VAD はブロック粒度のバタつきを避けるため hangover 付きステートフルゲートとする(既定 off、fail-open)。
 
 ### 実測(SOLA と等電力の裏づけ)
 
@@ -30,6 +29,10 @@
 ### 検証(実機耳確認)
 
 実機(RTX 4060 Laptop / f0 抽出器 fcpe / 実声)での耳確認により、`block_ms = 160` / `context_ms = 500` / `crossfade_ms = 25` + SOLA(`sola_search_ms = 5.0`)の構成が clean であることを確認した。context を 500ms 未満にすると seam のガタつきが常時聞こえ(100ms は「ガタゴト」が乗って使い物にならない)、逆に 500ms を超えて 2000ms にしても改善しなかった。block を 80ms に縮めると片道遅延は ~199ms → ~119ms に下がるが、seam のプチプチ(クリック)が可聴になる。SOLA は上で測定した位相ずれ(lag 0 の相関 -0.02、最適 lag で 0.89)を解消するためのもので、耳確認した構成にはこれが含まれている — ただし SOLA 単独の可聴寄与は A/B で分離測定していないため、「SOLA on の構成で clean だった」という以上のことは主張しない。
+
+### 未実装(この ADR の決定に含まれないもの)
+
+envelope 整合(rolling/EMA 基準への置換)と hangover 付き VAD ゲートは、当初この Decision に書いていたが**実装していない**ので決定から外した。`StreamVcConfig` に vad/envelope のフィールドは無く、`StreamingVc` / `stream_vc/runner.py` のどちらにもゲートは無い。すなわち **streaming 経路にはノイズゲートが一切無く、部屋の環境音もそのまま変換されて鳴り続ける**([0019](0019-vc-silero-vad-gate.md) の VAD ゲートは発話系 `[vc]` 専用で、streaming には効かない)。導入するならブロック粒度のバタつき/pumping をどう抑えるかを含めて別の ADR で決めること。
 
 ## Alternatives rejected
 

@@ -11,7 +11,11 @@ from vspeech.config import Config
 from vspeech.exceptions import ConfigProblem
 from vspeech.preflight import collect_problems
 
-# config に <name>.enable を持つ worker。preflight のチェッカーと対象を揃える。
+# config に <name>.enable を持つ worker。**この列挙は preflight._CHECKERS と
+# 1:1 で追随させること** — 片方だけ増やすと readiness が黙って過少報告する
+# (stream_vc を落としていたときは「有効な worker がありません」と出た)。
+# `.enable` を持つ config セクションを機械的に集める案は採らない: telemetry の
+# ような worker でないセクションも `.enable` を持つため。
 WORKER_NAMES: tuple[str, ...] = (
     "recording",
     "transcription",
@@ -20,7 +24,13 @@ WORKER_NAMES: tuple[str, ...] = (
     "vc",
     "playback",
     "subtitle",
+    "stream_vc",
 )
+
+# stream_vc は EventType の鎖に乗らない独立サブシステム (ADR-0050): マイク →
+# 固定ブロック VC → 出力 が閉じた 1 本で、routes_list にも text_send_operations
+# にも現れない。表示用にその 1 本を固定文言で持つ。
+STREAM_VC_FLOW: list[str] = ["(mic)", "stream_vc", "(出力)"]
 
 
 @dataclass(frozen=True)
@@ -56,10 +66,17 @@ def enabled_workers(config: Config) -> list[str]:
 def flow_of(config: Config) -> list[list[str]]:
     """この pipeline の配線。recording が種なら routes_list、テキスト起点なら
     text_send_operations が実際に使われる鎖。どちらも鎖には種自身が入らない
-    ので、表示用に先頭へ足す。"""
+    ので、表示用に先頭へ足す。stream_vc は鎖に乗らないので別の 1 本として併記
+    する。stream_vc だけの pipeline では text の鎖を描かない — 走りもしない
+    tts→playback を配線として見せることになるため。"""
+    chains: list[list[str]] = []
     if config.recording.enable:
-        return [["recording", *chain] for chain in config.recording.routes_list]
-    return [["(text)", *chain] for chain in config.text_send_operations]
+        chains = [["recording", *chain] for chain in config.recording.routes_list]
+    elif enabled_workers(config) != ["stream_vc"]:
+        chains = [["(text)", *chain] for chain in config.text_send_operations]
+    if config.stream_vc.enable:
+        chains.append(list(STREAM_VC_FLOW))
+    return chains
 
 
 def evaluate(config: Config) -> Readiness:

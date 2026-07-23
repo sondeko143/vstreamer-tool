@@ -207,6 +207,9 @@ context_ms = 500.0
 crossfade_ms = 25.0
 # ※これらの数値は対象 GPU に依存する。別のマシンへ持っていくときは
 #   `uv run poe stream-vc-rtf` で per-block RTF を測り直してから決めること。
+#   ただしこのハーネスが読むのは **[rvc] セクションだけ**で、[stream_vc.rvc] は見ない。
+#   streaming 用のモデル/f0 抽出器を測りたいときは、[rvc] を [stream_vc.rvc] と同じ内容に
+#   写した config を用意して、それを --config に渡すこと。
 # SOLA(位相合わせ)の探索半幅 ms。0 で無効。RVC デコーダはステートレスなので、
 # 同じ入力区間でも tick ごとに数 ms 位相のずれた波形を返す(実測: lag0 の相関 -0.02 に
 # 対し最適 lag では 0.89)。混ぜる前に相互相関で位置を合わせる。emit 長は固定のまま
@@ -245,13 +248,17 @@ model_file = "./dummy_simple.onnx"
 hubert_model_file = "./hubert_contentvec"
 gpu_id = 0
 # ★ピッチシフト(半音)。入力話者のピッチをモデルが学習した話者のピッチ域へ合わせる値。
-#   **発話系 [rvc] と同じ値にすること**。既定 0 のまま使うと、モデルの想定から外れた f0 を
-#   NSF ハーモニック源に与えることになり、出力が唸って扇風機のようなノイズになる。
-f0_up_key = 0
+#   **発話系 [rvc] と同じ値にすること**(この例では上の [rvc] に合わせて 12)。
+#   同じモデルなのに既定 0 のまま使うと、モデルの想定から外れた f0 を NSF ハーモニック源に
+#   与えることになり、出力が唸って扇風機のようなノイズになる。
+f0_up_key = 12
 # 発話系と同じくマイクゲインとして適用される。
 input_boost = 1.0
-# 推奨: streaming では "fcpe" ([rvc] 既定の "rmvpe" より軽く、短い入力でも安定。
-# rmvpe は reflect-pad 前提の最小入力長制約があり、block/context が短いと壊れやすい)。
+# 推奨: streaming では "fcpe" ([rvc] 既定の "rmvpe" より 1 推論あたりが軽く、
+# ブロックごとに毎回走る streaming では効く。実機耳確認もこの構成で行った)。
+# なお「最小入力長」の制約を持つのは fcpe の方 (焼き込んだ reflect-pad が 433
+# サンプル ≈ 27ms を要求する) だが、runtime が左ゼロパッドで底上げするので
+# 短いブロックでも落ちない。rmvpe にはこの制約は無い。
 f0_extractor_type = "fcpe"
 fcpe_model_file = "./fcpe.onnx"
 # f0_extractor_type = "rmvpe" にする場合のみ必要:

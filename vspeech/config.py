@@ -389,8 +389,15 @@ class TransportType(Enum):
 class StreamVcConfig(BaseModel):
     enable: bool = False
     # 発話系 [vc]/[rvc] とは独立したモデル設定(ADR-0054)。共有素材パスは
-    # 各系統へ明示 propagate する方針(ADR-0046)。
-    rvc: RvcConfig = Field(default_factory=RvcConfig)
+    # 各系統へ明示 propagate する方針(ADR-0046)。f0 抽出器だけは RvcConfig の
+    # 既定 (rmvpe) を上書きして fcpe にする: streaming はブロックごとに毎回 f0 を
+    # 引くので 1 推論あたりの軽い fcpe が向き、実機耳確認もその構成で行った
+    # (ADR-0053)。[stream_vc] は既定 disable なので既存挙動は変わらない。
+    rvc: RvcConfig = Field(
+        default_factory=lambda: RvcConfig(f0_extractor_type=F0ExtractorType.fcpe),
+        description="ストリーミング専用の RVC 設定。f0_extractor_type だけ "
+        "[rvc] と既定が異なり fcpe(streaming の実機耳確認済み構成)",
+    )
     block_ms: float = Field(
         default=160.0,
         gt=0,

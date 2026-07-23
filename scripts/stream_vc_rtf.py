@@ -1,5 +1,10 @@
 """RVC ストリーミング VC の RTF 実測ハーネス。
 
+読むのは `--config` の **[rvc] セクションだけ**で、[stream_vc.rvc] は見ない
+(ADR-0054 の通り両者は独立に設定できるので、内容が違えば測る対象も違う)。
+[stream_vc.rvc] の構成を測りたいときは、[rvc] をそれと同じ内容に写した config を
+用意して渡すこと。
+
 `--config` の [rvc] セクションを流用してモデルを 1 回ロードし、合成有声信号を
 固定ブロックで StreamingVc に流して per-block 遅延と context 込み RTF を
 掃引計測する。feasible をマークした表を出し、最低遅延の feasible config を推奨
