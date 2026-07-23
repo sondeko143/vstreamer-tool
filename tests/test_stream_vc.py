@@ -250,7 +250,9 @@ def test_sola_offset_finds_known_shift():
     from vspeech.lib.stream_vc import sola_offset
 
     rng = np.random.default_rng(0)
-    sig = rng.standard_normal(4096).astype(np.float32)
+    # 振幅は int16 単位(実際に渡るのは out.astype(np.float32))。無音判定は
+    # フルスケール比なので、単位分散のままだと -90dBFS = 実質無音扱いになる。
+    sig = (rng.standard_normal(4096) * 3000.0).astype(np.float32)
     tail = sig[1000:1500]
     shift = 37
     region = sig[1000 - 100 + shift : 1500 + 100 + shift]
@@ -259,16 +261,47 @@ def test_sola_offset_finds_known_shift():
     assert sola_offset(tail, region) == 100 - shift
 
 
-def test_sola_offset_zero_when_tail_silent():
+def test_sola_offset_centers_when_tail_digitally_silent():
     from vspeech.lib.stream_vc import sola_offset
 
     tail = np.zeros(100, dtype=np.float32)
-    region = np.random.default_rng(1).standard_normal(300).astype(np.float32)
-    assert sola_offset(tail, region) == 0
+    region = (np.random.default_rng(1).standard_normal(300) * 3000.0).astype(np.float32)
+    # 「シフト無し」は index 0 ではなく中央 (len(region)-n)//2。呼び出し側が
+    # 探索半幅ぶん手前から region を切るので、0 は最大の負シフトになる。
+    assert sola_offset(tail, region) == (300 - 100) // 2
+
+
+def test_sola_offset_centers_when_tail_is_near_silent_noise_floor():
+    """デジタル無音ではない現実のノイズフロアでも探索せず中央を返す。
+
+    従来の絶対値 1e-9 判定は完全なデジタル無音でしか発火せず、ノイズ同士を
+    相関させて argmax が事実上ランダムな lag を選んでいた(合わせるべき位相が
+    そもそも無いので、どの lag も等価に「それらしい」)。
+    """
+    from vspeech.lib.stream_vc import sola_offset
+
+    rng = np.random.default_rng(7)
+    # 実測のノイズフロア RMS 0.000298 * 32768 ≈ 9.8 int16 単位より更に小さい、
+    # しかし 0 ではないレベル。
+    tail = (rng.standard_normal(100) * 1.0).astype(np.float32)
+    assert np.any(tail != 0.0)  # デジタル無音ではない
+    region = (rng.standard_normal(300) * 1.0).astype(np.float32)
+    assert sola_offset(tail, region) == (300 - 100) // 2
+
+
+def test_sola_offset_breaks_flat_ties_toward_center():
+    """相関面が完全に平坦なとき index 0 ではなく中央(公称 lag)を選ぶ。"""
+    from vspeech.lib.stream_vc import sola_offset
+
+    # DC 一定なので全 lag の正規化相関が 1.0 = 完全な同点。
+    tail = np.full(100, 5000.0, dtype=np.float32)
+    region = np.full(300, 5000.0, dtype=np.float32)
+    assert sola_offset(tail, region) == (300 - 100) // 2
 
 
 def test_sola_offset_zero_when_region_too_short():
     from vspeech.lib.stream_vc import sola_offset
 
-    tail = np.ones(100, dtype=np.float32)
-    assert sola_offset(tail, np.ones(50, dtype=np.float32)) == 0
+    # 窓が 1 つも取れないので中央は定義できない。0 だけが妥当な戻り値。
+    tail = np.full(100, 5000.0, dtype=np.float32)
+    assert sola_offset(tail, np.full(50, 5000.0, dtype=np.float32)) == 0

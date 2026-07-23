@@ -73,6 +73,21 @@ def overlap_add(prev_tail, head, fade_in, fade_out):
     return prev_tail * fade_out + head * fade_in
 
 
+# SOLA を諦める tail の RMS 下限(int16 単位のフルスケール 32768 に対する比)。
+# 1e-4 = -80dBFS 相当。従来の絶対値 1e-9 判定は「完全なデジタル無音」でしか発火せず、
+# 現実のノイズフロア(実測 RMS 0.000298 * 32768 ≈ 9.8 int16 単位)ではノイズ同士を
+# 相関させて argmax が事実上ランダムな lag を選んでいた。位相を合わせる相手が
+# そもそも無い領域では探索せず、公称(シフト無し)位置を返すのが正しい。
+_SOLA_MIN_RMS = 32768.0 * 1e-4
+
+# 相関がほぼ平坦なときに中央(公称 lag)へ寄せるための微小バイアス。正規化相関は
+# [-1, 1] なので、探索半幅で正規化した最大 1e-3 のペナルティは本物のピーク
+# (実測 0.89 vs 0.02)には影響せず、真に同点な面(例: DC 一定領域で全 lag の
+# 正規化相関が 1.0)でだけ効く。無しだと argmax が常に index 0 = 探索窓の
+# 最も手前 = 最大の負シフトを選んでしまう。
+_SOLA_CENTER_BIAS = 1e-3
+
+
 def sola_offset(prev_tail, region):
     """`region` 内で `prev_tail` と最も相関する開始位置(index)を返す。
 
@@ -82,20 +97,37 @@ def sola_offset(prev_tail, region):
     (comb)になって「扇風機」的な音になる。混ぜる前に位相を合わせる。
 
     戻り値は `region` 先頭からの index(0 <= i <= len(region)-len(prev_tail))。
-    prev_tail が無音/空、または region が短いときは 0(=従来の固定位置)。
+    シフト無し(公称)に相当するのは **index 0 ではなく中央** `(len(region)-n)//2`
+    ── 呼び出し側は探索半幅ぶん手前から region を切り出すため。したがって
+    「探索を諦める」ときは 0 ではなく中央を返す:
+
+    - `prev_tail` の RMS が `_SOLA_MIN_RMS` 未満(実質無音)→ 中央。合わせるべき
+      位相が無く、ノイズ同士の相関の argmax は任意の lag になるため。
+    - 相関面がほぼ平坦(同点)→ `_SOLA_CENTER_BIAS` で中央寄りが勝つ。
+
+    `region` が `prev_tail` より短いときだけは窓が 1 つも取れないので 0。
     """
     import numpy as np
 
     n = len(prev_tail)
     if n == 0 or len(region) < n:
         return 0
+    center = (len(region) - n) // 2  # シフト無し(公称)に相当する index
+    tail_rms = float(
+        np.sqrt(np.mean(np.square(np.asarray(prev_tail, dtype=np.float64))))
+    )
+    if tail_rms < _SOLA_MIN_RMS:
+        return center
     tail_norm = float(np.linalg.norm(prev_tail))
-    if tail_norm < 1e-9:
-        return 0
     win = np.lib.stride_tricks.sliding_window_view(region, n)
     num = win @ prev_tail
     den = np.linalg.norm(win, axis=1) * tail_norm + 1e-9
-    return int(np.argmax(num / den))
+    score = num / den
+    # 中央からの距離に比例した微小ペナルティ。探索半幅で割ってあるので窓長や
+    # サンプルレートに依らず最大 _SOLA_CENTER_BIAS。O(len(region)) で安い。
+    lags = np.arange(score.shape[0])
+    score = score - _SOLA_CENTER_BIAS * np.abs(lags - center) / max(center, 1)
+    return int(np.argmax(score))
 
 
 class StreamingVc:
@@ -284,6 +316,9 @@ class StreamingVc:
           clamp `out_sola <= (out_total - out_hop - out_xf) // 2` で保証する。
         - `out_sola == 0` のときは `start == nominal == out_total - out_hop - out_xf`
           で、SOLA 導入前と完全に同一のサンプルを出す。
+        - `sola_offset` が探索を諦める(tail が実質無音・相関面が平坦)ときは region
+          の**中央** `out_sola` を返すので `start == nominal` になる。すなわち
+          「シフト無し」に落ちる(index 0 = 最大の負シフト、ではない)。
 
         アルゴリズム遅延は out_sola サンプル(読み出し位置を探索半幅だけ手前へ
         ずらすため)に加え、HuBERT の受容野による末尾切り詰めぶん(約 320 入力
