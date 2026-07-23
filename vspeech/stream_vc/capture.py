@@ -24,7 +24,7 @@ from vspeech.stream_vc.transport import drop_oldest_put
 CAPTURE_RATE = 16000
 
 
-def ms_to_samples(ms: float, rate: int = 16000) -> int:
+def ms_to_samples(ms: float, rate: int = CAPTURE_RATE) -> int:
     """ms を rate のサンプル数へ(round)。"""
     return round(ms * rate / 1000.0)
 
@@ -48,7 +48,9 @@ def open_stream_vc_input_stream(config: StreamVcConfig, hop: int) -> sd.RawInput
     return stream
 
 
-async def capture_loop(config: StreamVcConfig, out_queue: Queue, hop: int) -> None:
+async def capture_loop(
+    config: StreamVcConfig, out_queue: Queue[NDArray[np.float32]], hop: int
+) -> None:
     """マイクから hop サンプルずつ読み、float32 ブロックを out_queue へ。"""
     with worker_startup("stream_vc"):
         stream = open_stream_vc_input_stream(config, hop)
