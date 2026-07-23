@@ -1,7 +1,7 @@
 """ストリーミング VC の transport 差し替え層(ADR-0051)。
 
-M2 は in-process(asyncio.Queue)実装のみ。producer/consumer はこの interface
-の背後に置くので、M3 で網実装(UDP/TCP/bidi)へ VC・再生の他ロジックを変えずに
+現状は in-process(asyncio.Queue)実装のみ。producer/consumer はこの interface
+の背後に置くので、網実装(UDP/TCP/bidi)へ VC・再生の他ロジックを変えずに
 差し替えられる。満杯時は最古を捨てて遅延の単調増加を防ぐ(受入基準)。
 """
 

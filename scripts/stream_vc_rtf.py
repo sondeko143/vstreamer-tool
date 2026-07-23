@@ -1,4 +1,4 @@
-"""RVC ストリーミング VC の RTF 実測ハーネス(M1)。
+"""RVC ストリーミング VC の RTF 実測ハーネス。
 
 `--config` の [rvc] セクションを流用してモデルを 1 回ロードし、合成有声信号を
 固定ブロックで StreamingVc に流して per-block 遅延と context 込み RTF を
@@ -319,7 +319,7 @@ def main() -> None:
     from dataclasses import asdict
     from pathlib import Path
 
-    parser = argparse.ArgumentParser(description="RVC streaming VC RTF harness (M1)")
+    parser = argparse.ArgumentParser(description="RVC streaming VC RTF harness")
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--block-ms", default="20,40,80,160")
     parser.add_argument("--context-ms", default="0,100,200,400,800")

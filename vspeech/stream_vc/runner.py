@@ -52,7 +52,7 @@ def apply_input_boost(block, boost):
     """入力ブロックに input_boost gain をかける([-1,1] へ clip = 発話系 vc.py の
     int16 `mul` 飽和相当)。発話系は `change_voice` の外(worker)で gain をかけるので、
     streaming も `StreamingVc` の外(この runner)でかけて対称にする。boost==1.0 は
-    恒等(既定なので M2 挙動は既定 config で不変)。"""
+    恒等(既定値なので、既定 config では挙動が変わらない)。"""
     import numpy as np
 
     if boost == 1.0:
@@ -83,7 +83,8 @@ def build_stream_vc_runtime(sv_config: StreamVcConfig) -> dict[str, Any]:
     # 推論 rank が実際と食い違い、ORT が VerifyOutputSizes 警告を **毎推論** stdout に出す。
     # 良性(実 shape で確保され f0 は正しい)だが streaming では ~6 行/秒になり、ログと
     # GUI が読む stdout パイプを埋める。グラフ側の修正は torchfcpe のトレース由来なので
-    # graph surgery か上流パッチが要り、割に合わない (M1 の surgery spike の教訓)。
+    # graph surgery か上流パッチが要り、割に合わない(過去に ONNX graph surgery を
+    # 試して徒労に終わっている)。
     # 代償: この f0 セッション固有の ORT 警告 (provider fallback 等) も見えなくなる。
     # f0 が CPU に落ちた場合は `poe stream-vc-rtf` の per-block RTF で検知できる。
     if rvc.f0_extractor_type == F0ExtractorType.rmvpe:

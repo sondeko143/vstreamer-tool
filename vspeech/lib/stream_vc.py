@@ -2,8 +2,9 @@
 
 固定長ブロックを rolling 左文脈と連結してステートフル変換する。既存の
 `change_voice` の内部部品(HuBERT 特徴量 / f0 / infer / int16化)をそのまま
-再利用し、発話系の `change_voice` 経路は無改変で温存する。M1 はこのコアの
-per-block 計測(RTF)に集中し、クロスフェード連続性の音質は M2 で足す。
+再利用し、発話系の `change_voice` 経路は無改変で温存する。ブロック境界は
+等電力クロスフェードで繋ぎ、混ぜる前に SOLA で位相を合わせる
+(`_emit_with_crossfade`)。
 
 純粋ヘルパ(next_context / slice_block_output / equal_power_weights / overlap_add /
 sola_offset)は numpy でも torch tensor でも動くよう `len(seq)` ベースにしてあり(ただし
@@ -48,8 +49,9 @@ def slice_block_output(out, block_len: int, seq_len: int):
     """`out` のうち、直近ブロック相当(末尾 block_len/seq_len)の区間。
 
     infer は `[context|block]` 全体の波形を返すので、ブロック相当の末尾だけ
-    採用する。正確なシーム整列(等電力クロスフェード)は M2 の担当で、ここは
-    比率で切り出す近似(RTF 計測には出力長は影響しない)。
+    採用する。これは crossfade 無効時(`crossfade_len=0`)の経路で、比率で
+    切り出す近似。シーム整列(等電力クロスフェード + SOLA)は
+    `_emit_with_crossfade` が行う。
     `block_out >= len(out)` のときは `out` 全体を返す(clamp)。
     """
     if block_len <= 0:

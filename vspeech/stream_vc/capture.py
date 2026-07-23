@@ -2,7 +2,7 @@
 
 発話系 recording は無改変のまま、別途 16k mono でマイクを開いて固定 hop の
 float32 ブロックを出す。排他デバイスで二重 open が失敗する環境向けの fan-out
-フォールバックは M2 スコープ外(ADR-0052 に設計として残す)。
+フォールバックは未実装(ADR-0052 に設計として残す)。
 """
 
 from asyncio import CancelledError

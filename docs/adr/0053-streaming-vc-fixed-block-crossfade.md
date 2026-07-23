@@ -40,4 +40,4 @@
 
 ## Consequences
 
-クリック無し・ピッチ連続の連続変換が、固定 shape で安定して回る(warmup 1 回)。既存 `change_voice` を壊さず内部部品を再利用するので差分を局所化できる。反面、context 分の余剰推論で per-block RTF が増える(M1 実測の主対象)。クロスフェード/f0 連続性の正しさは seeded golden で担保が要る([0016](0016-change-voice-decompose-seeded-golden.md) の決定的シード基盤を流用)。
+クリック無し・ピッチ連続の連続変換が、固定 shape で安定して回る(warmup 1 回)。既存 `change_voice` を壊さず内部部品を再利用するので差分を局所化できる。反面、context 分の余剰推論で per-block RTF が増える(RTF 実測の主対象)。クロスフェード/f0 連続性の正しさは seeded golden で担保が要る([0016](0016-change-voice-decompose-seeded-golden.md) の決定的シード基盤を流用)。

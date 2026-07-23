@@ -187,7 +187,7 @@ rmvpe_model_file = "./rmvpe.onnx"
 # fcpe の onnx（f0_extractor_type = "fcpe" のとき必要。uv run poe export-fcpe-onnx で生成）
 fcpe_model_file = "./fcpe.onnx"
 
-# ストリーミング VC (M2, ADR-0050〜0054)。発話系 [vc]/[rvc] とは独立した
+# ストリーミング VC (ADR-0050〜0054)。発話系 [vc]/[rvc] とは独立した
 # 低遅延・連続(無音区切り無し)の VC。既定 OFF — 有効化すると、発話系パイプラインは
 # 無改変のまま、別マイク入力 → 固定長ブロック VC → 別出力、が並行して常時走る。
 [stream_vc]
@@ -224,7 +224,7 @@ output_host_api_name = ""
 output_device_name = ""
 output_device_index = 1
 
-# トランスポート種別。現状は同一プロセス内直結の "in_process" のみ (M2、単一マシン)。
+# トランスポート種別。現状は同一プロセス内直結の "in_process" のみ(単一マシン内で完結)。
 # マシン分離用の段階的トランスポート (ADR-0051 の T1 unary gRPC / T3 生ソケット) は未実装。
 transport_type = "in_process"
 # capture -> VC 間の橋渡しキューの上限ブロック数。VC が詰まって溢れたら
