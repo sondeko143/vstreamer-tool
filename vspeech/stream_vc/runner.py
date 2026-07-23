@@ -259,7 +259,12 @@ async def vc_loop(
             # RuntimeError(torch.cuda.OutOfMemoryError も RuntimeError 派生)で
             # 上がってくる。**tear down せず 1 ブロック drop して継続**する:
             #   - CUDA OOM を tight loop で retry すると thrash する。
-            #   - tear down は発話系を巻き込まないとはいえサブシステム全体を落とす。
+            #   - 単発は回復可能なので 1 ブロック drop で十分。ここで tear down まで
+            #     すると(= 連続失敗が _MAX_ に達したときの raise がそうなるように)
+            #     内側 TaskGroup → main の外側 TaskGroup 経由でプロセスごと落ち、
+            #     発話系も道連れになる。それは opt-in で有効化した機能が
+            #     unrecoverable な障害を起こしたときに **意図した** fail-loud
+            #     (daemon が再起動する; ADR-0050)だが、単発の transient には過剰。
             #   - _reset_context も不要 — process_block は infer で raise すると
             #     self._context を更新しないので、次の成功ブロックが直前の good な
             #     文脈から続く(drop したブロックぶんの音は欠けるが crossfade が seam を
@@ -280,8 +285,10 @@ async def vc_loop(
                     )
                 if consecutive_errors >= _MAX_CONSECUTIVE_VC_ERRORS:
                     logger.error(
-                        "stream_vc process_block failed %d times consecutively; "
-                        "failing out",
+                        "stream_vc: process_block failed %d times consecutively — "
+                        "treating this as an unrecoverable fault in an explicitly-"
+                        "enabled feature and failing the whole process on purpose "
+                        "(fail-loud; a supervisor/daemon is expected to restart it)",
                         consecutive_errors,
                     )
                     raise
