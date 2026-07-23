@@ -10,6 +10,8 @@
 """
 
 import ast
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -80,3 +82,26 @@ def test_the_gate_would_catch_a_regression(tmp_path):
     modules = list(_imported_modules(leaked))
     assert "transformers" in modules
     assert any(_is_forbidden(module, "transformers") for module in modules)
+
+
+def test_consumer_path_is_torch_free():
+    """role=consumer(再生専任)のモジュール群は torch を一切引かない(ADR-0055)。
+
+    同一プロセス内 sys.modules チェックはテスト順序に汚染される(先に別テストが
+    torch を import していれば偽陽性で見逃す)ので、まっさらな子プロセスで確認する。
+    """
+    code = (
+        "import sys\n"
+        "import vspeech.stream_vc.consumer\n"
+        "import vspeech.stream_vc.udp\n"
+        "import vspeech.stream_vc.jitter\n"
+        "import vspeech.stream_vc.wire\n"
+        "assert 'torch' not in sys.modules, sorted(sys.modules)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"

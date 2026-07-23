@@ -15,10 +15,14 @@ from asyncio import TaskGroup
 from typing import Any
 from uuid import uuid4
 
+from vspeech.config import StreamVcConfig
+from vspeech.config import StreamVcRole
 from vspeech.exceptions import WorkerShutdown
 from vspeech.exceptions import shutdown_worker
+from vspeech.exceptions import worker_startup
 from vspeech.logger import logger
 from vspeech.shared_context import SharedContext
+from vspeech.stream_vc.transport import Transport
 
 
 def _iter_leaves(exc: BaseException):
@@ -30,34 +34,93 @@ def _iter_leaves(exc: BaseException):
         yield exc
 
 
-async def _stream_vc_subsystem(context: SharedContext) -> None:
-    from vspeech.stream_vc.capture import capture_loop
-    from vspeech.stream_vc.capture import ms_to_samples
-    from vspeech.stream_vc.playback import playback_loop
-    from vspeech.stream_vc.runner import vc_loop
-    from vspeech.stream_vc.transport import InProcessTransport
+def loops_for_role(role: StreamVcRole) -> frozenset[str]:
+    """role が起動するループ名の集合(純関数=分岐の唯一の権威, ADR-0055)。"""
+    if role is StreamVcRole.producer:
+        return frozenset({"capture", "vc"})
+    if role is StreamVcRole.consumer:
+        return frozenset({"playback"})
+    return frozenset({"capture", "vc", "playback"})  # local
 
+
+async def _build_transport(sv_config: StreamVcConfig) -> Transport:
+    """role から transport を作る。UDP endpoint 生成は async。
+
+    bind/接続失敗は worker_startup で fail-loud(設定不備を隠さない, ADR-0038)。
+    role=producer/consumer で transport_type が udp でない設定は preflight で弾く
+    (role≠local ⇒ udp 必須)。2 つ目の網 transport(TCP/bidi)が来たら、下の
+    producer/consumer の中で transport_type を見て分岐する。
+    """
+    role = sv_config.role
+    if role is StreamVcRole.local:
+        from vspeech.stream_vc.transport import InProcessTransport
+
+        return InProcessTransport(max_queued=sv_config.max_queued_blocks)
+    with worker_startup("stream_vc"):
+        if role is StreamVcRole.producer:
+            from vspeech.stream_vc.udp import create_udp_producer_transport
+
+            peer_host = sv_config.peer_host
+            peer_port = sv_config.peer_port
+            if peer_host is None or peer_port is None:
+                raise ValueError(
+                    "stream_vc.role=producer requires peer_host and peer_port"
+                )
+            return await create_udp_producer_transport(peer_host, peer_port)
+        from vspeech.stream_vc.udp import create_udp_consumer_transport
+
+        bind_port = sv_config.bind_port
+        if bind_port is None:
+            raise ValueError("stream_vc.role=consumer requires bind_port")
+        return await create_udp_consumer_transport(
+            sv_config.bind_host, bind_port, sv_config.max_queued_blocks
+        )
+
+
+async def _stream_vc_subsystem(context: SharedContext) -> None:
     sv_config = context.config.stream_vc
-    hop = ms_to_samples(sv_config.block_ms)
+    role = sv_config.role
+    runs = loops_for_role(role)
     session_id = uuid4().hex
-    capture_queue: Queue[Any] = Queue(maxsize=sv_config.max_queued_blocks)
-    transport = InProcessTransport(max_queued=sv_config.max_queued_blocks)
-    vc_ready = Event()
+    transport = await _build_transport(sv_config)
     try:
         async with TaskGroup() as tg:
-            tg.create_task(
-                capture_loop(sv_config, capture_queue, hop, vc_ready),
-                name="stream_vc_capture",
-            )
-            tg.create_task(
-                vc_loop(
-                    context, sv_config, capture_queue, transport, session_id, vc_ready
-                ),
-                name="stream_vc_runner",
-            )
-            tg.create_task(
-                playback_loop(sv_config, transport), name="stream_vc_playback"
-            )
+            if "capture" in runs or "vc" in runs:
+                from vspeech.stream_vc.capture import capture_loop
+                from vspeech.stream_vc.capture import ms_to_samples
+                from vspeech.stream_vc.runner import vc_loop
+
+                hop = ms_to_samples(sv_config.block_ms)
+                capture_queue: Queue[Any] = Queue(maxsize=sv_config.max_queued_blocks)
+                vc_ready = Event()
+                tg.create_task(
+                    capture_loop(sv_config, capture_queue, hop, vc_ready),
+                    name="stream_vc_capture",
+                )
+                tg.create_task(
+                    vc_loop(
+                        context,
+                        sv_config,
+                        capture_queue,
+                        transport,
+                        session_id,
+                        vc_ready,
+                    ),
+                    name="stream_vc_runner",
+                )
+            if role is StreamVcRole.local:
+                from vspeech.stream_vc.playback import playback_loop
+
+                tg.create_task(
+                    playback_loop(sv_config, transport), name="stream_vc_playback"
+                )
+            elif role is StreamVcRole.consumer:
+                from vspeech.stream_vc.consumer import network_playback_loop
+
+                tg.create_task(
+                    network_playback_loop(sv_config, transport),
+                    name="stream_vc_playback",
+                )
     except CancelledError as e:
         raise shutdown_worker(e)
     except BaseExceptionGroup as eg:
