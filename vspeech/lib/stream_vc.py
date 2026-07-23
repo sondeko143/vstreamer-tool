@@ -5,9 +5,10 @@
 再利用し、発話系の `change_voice` 経路は無改変で温存する。M1 はこのコアの
 per-block 計測(RTF)に集中し、クロスフェード連続性の音質は M2 で足す。
 
-純粋ヘルパ(next_context / slice_block_output)は numpy でも torch tensor でも
-動くよう `len(seq)` ベースにしてあり、torch 無し・rvc extra 無しの CPU でも
-import できる(重い import は StreamingVc のメソッド内でのみ行う)。
+純粋ヘルパ(next_context / slice_block_output / equal_power_weights / overlap_add)は
+numpy でも torch tensor でも動くよう `len(seq)` ベースにしてあり、torch 無し・
+rvc extra 無しの CPU でも import できる(重い import は StreamingVc のメソッド内
+でのみ行う)。
 """
 
 from __future__ import annotations
@@ -16,9 +17,10 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # Type-only: used by StreamingVc's annotations below. The pure helpers
-    # (next_context / slice_block_output) don't need these, so keeping the
-    # imports under TYPE_CHECKING (rather than module-level) still lets this
-    # module import on a CPU machine without torch/onnxruntime/the rvc extra.
+    # (next_context / slice_block_output / equal_power_weights / overlap_add)
+    # don't need these, so keeping the imports under TYPE_CHECKING (rather
+    # than module-level) still lets this module import on a CPU machine
+    # without torch/onnxruntime/the rvc extra.
     import numpy as np
     import torch
     from numpy.typing import NDArray
@@ -57,7 +59,7 @@ def slice_block_output(out, block_len: int, seq_len: int):
     return out[max(0, len(out) - block_out) :]
 
 
-def equal_power_weights(n: int):
+def equal_power_weights(n: int) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
     """長さ n の等電力クロスフェード重み `(fade_in, fade_out)`。
 
     セル中心の sin/cos なので `fade_in**2 + fade_out**2 == 1`。独立推論した
