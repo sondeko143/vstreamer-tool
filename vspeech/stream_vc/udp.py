@@ -73,7 +73,7 @@ class _RecvProtocol:
     def connection_made(self, transport: Any) -> None:
         self._transport = transport
 
-    def datagram_received(self, data: bytes, addr: Any) -> None:
+    def datagram_received(self, data: bytes, _addr: Any) -> None:
         try:
             packet = decode_packet(data)
         except WireError as e:

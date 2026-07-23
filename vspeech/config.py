@@ -510,7 +510,8 @@ class StreamVcConfig(BaseModel):
         default=None, gt=0, le=65535, description="producer の送信先ポート"
     )
     bind_host: str = Field(
-        default="0.0.0.0", description="consumer の待受ホスト(既定 全 IF)"
+        default="0.0.0.0",  # nosec B104 - LAN receiver binds all interfaces by design; override to restrict
+        description="consumer の待受ホスト(既定 全 IF)",
     )
     bind_port: int | None = Field(
         default=None, gt=0, le=65535, description="consumer の待受ポート"
