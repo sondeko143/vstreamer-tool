@@ -304,47 +304,92 @@ def _check_subtitle(config: Config) -> list[ConfigProblem]:
 def _check_stream_vc(config: Config) -> list[ConfigProblem]:
     if not config.stream_vc.enable:
         return []
+    from vspeech.config import StreamVcRole
+    from vspeech.config import TransportType
     from vspeech.exceptions import DeviceNotFoundError
     from vspeech.lib.audio import resolve_stream_vc_input_device
     from vspeech.lib.audio import resolve_stream_vc_output_device
+    from vspeech.stream_vc.capture import ms_to_samples
 
     w = "stream_vc"
     sv = config.stream_vc
-    problems = _check_rvc_assets(sv.rvc, w, "stream_vc.rvc")
-    # StreamingVc の guard は ms→サンプル丸め後の長さで判定する。preflight も同じ
-    # サンプル領域で比較し、sub-ms 丸めで preflight は通るが __init__ が ValueError
-    # を投げる境界を無くす。
-    from vspeech.stream_vc.capture import ms_to_samples
+    role = sv.role
+    # local (M2, 単一プロセス) は今まで通り capture+vc+playback を全部やる。
+    # producer/consumer (M3, 二機分割, ADR-0055) は片方の役目だけ持つので、
+    # 持たない側の資産/デバイスまで要求すると GPU の無い consumer 機で
+    # 通らない設定を書かされる。
+    does_vc = role in (StreamVcRole.local, StreamVcRole.producer)
+    does_play = role in (StreamVcRole.local, StreamVcRole.consumer)
+    problems: list[ConfigProblem] = []
 
-    cf = ms_to_samples(sv.crossfade_ms)
-    blk = ms_to_samples(sv.block_ms)
-    ctx = ms_to_samples(sv.context_ms)
-    if cf >= blk:
+    if does_vc:
+        problems += _check_rvc_assets(sv.rvc, w, "stream_vc.rvc")
+        # StreamingVc の guard は ms→サンプル丸め後の長さで判定する。preflight も同じ
+        # サンプル領域で比較し、sub-ms 丸めで preflight は通るが __init__ が ValueError
+        # を投げる境界を無くす。
+        cf = ms_to_samples(sv.crossfade_ms)
+        blk = ms_to_samples(sv.block_ms)
+        ctx = ms_to_samples(sv.context_ms)
+        if cf >= blk:
+            problems.append(
+                ConfigProblem(
+                    w,
+                    f"crossfade_ms ({sv.crossfade_ms}) は block_ms ({sv.block_ms}) 未満が必須です",
+                    field="stream_vc.crossfade_ms",
+                )
+            )
+        if cf > ctx:
+            problems.append(
+                ConfigProblem(
+                    w,
+                    f"crossfade_ms ({sv.crossfade_ms}) は context_ms ({sv.context_ms}) 以下が必須です",
+                    field="stream_vc.crossfade_ms",
+                )
+            )
+        # field は "stream_vc.vad_model_file" になる (worker 名がそのまま prefix)。
+        problems.extend(_check_vad_gate(sv, w))
+        try:
+            resolve_stream_vc_input_device(sv)
+        except DeviceNotFoundError as e:
+            problems.append(
+                ConfigProblem(w, str(e), field="stream_vc.input_device_index")
+            )
+    if does_play:
+        try:
+            resolve_stream_vc_output_device(sv)
+        except DeviceNotFoundError as e:
+            problems.append(
+                ConfigProblem(w, str(e), field="stream_vc.output_device_index")
+            )
+
+    # role≠local は網 transport が要る。in_process のままだと vc の送信を誰も受けず
+    # 全ブロックが黙って drop される(silent misconfig)ので fail-loud で弾く。
+    if role is not StreamVcRole.local and sv.transport_type is not TransportType.udp:
         problems.append(
             ConfigProblem(
                 w,
-                f"crossfade_ms ({sv.crossfade_ms}) は block_ms ({sv.block_ms}) 未満が必須です",
-                field="stream_vc.crossfade_ms",
+                "role=producer/consumer は transport_type=udp が必須です",
+                field="stream_vc.transport_type",
             )
         )
-    if cf > ctx:
-        problems.append(
-            ConfigProblem(
-                w,
-                f"crossfade_ms ({sv.crossfade_ms}) は context_ms ({sv.context_ms}) 以下が必須です",
-                field="stream_vc.crossfade_ms",
+    # UDP なら role ごとにアドレスが要る。in_process(local)は不要。
+    if sv.transport_type is TransportType.udp:
+        if role is StreamVcRole.producer and not (sv.peer_host and sv.peer_port):
+            problems.append(
+                ConfigProblem(
+                    w,
+                    "role=producer は peer_host/peer_port(送信先)が必須です",
+                    field="stream_vc.peer_port",
+                )
             )
-        )
-    # field は "stream_vc.vad_model_file" になる (worker 名がそのまま prefix)。
-    problems.extend(_check_vad_gate(sv, w))
-    try:
-        resolve_stream_vc_input_device(sv)
-    except DeviceNotFoundError as e:
-        problems.append(ConfigProblem(w, str(e), field="stream_vc.input_device_index"))
-    try:
-        resolve_stream_vc_output_device(sv)
-    except DeviceNotFoundError as e:
-        problems.append(ConfigProblem(w, str(e), field="stream_vc.output_device_index"))
+        if role is StreamVcRole.consumer and not sv.bind_port:
+            problems.append(
+                ConfigProblem(
+                    w,
+                    "role=consumer は bind_port(待受ポート)が必須です",
+                    field="stream_vc.bind_port",
+                )
+            )
     return problems
 
 

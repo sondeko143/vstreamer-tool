@@ -493,3 +493,35 @@ def test_vc_problems_carry_their_field():
     assert "rvc.model_file" in fields
     assert "rvc.hubert_model_file" in fields
     assert "rvc.rmvpe_model_file" in fields  # f0_extractor_type の既定は rmvpe
+
+
+def _fields(problems):
+    return {p.field for p in problems}
+
+
+def test_consumer_requires_bind_not_rvc_or_input():
+    cfg = Config.model_validate(
+        {"stream_vc": {"enable": True, "role": "consumer", "transport_type": "udp"}}
+    )
+    fields = _fields(collect_problems(cfg))
+    assert "stream_vc.bind_port" in fields
+    assert not any(f.startswith("stream_vc.rvc") for f in fields)
+    assert "stream_vc.input_device_index" not in fields
+
+
+def test_producer_requires_peer_and_input_not_output():
+    cfg = Config.model_validate(
+        {"stream_vc": {"enable": True, "role": "producer", "transport_type": "udp"}}
+    )
+    fields = _fields(collect_problems(cfg))
+    assert "stream_vc.peer_port" in fields
+    assert "stream_vc.output_device_index" not in fields
+
+
+def test_non_local_role_requires_udp_transport():
+    cfg = Config.model_validate(
+        {
+            "stream_vc": {"enable": True, "role": "consumer"}
+        }  # transport defaults in_process
+    )
+    assert "stream_vc.transport_type" in _fields(collect_problems(cfg))
