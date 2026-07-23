@@ -382,6 +382,35 @@ class RvcConfig(BaseModel):
     fcpe_model_file: Path = Field(default=Path())
 
 
+class TransportType(Enum):
+    in_process = "in_process"
+
+
+class StreamVcConfig(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    enable: bool = False
+    # 発話系 [vc]/[rvc] とは独立したモデル設定(ADR-0054)。共有素材パスは
+    # 各系統へ明示 propagate する方針(ADR-0046)。
+    rvc: RvcConfig = Field(default_factory=RvcConfig)
+    block_ms: float = Field(default=80.0, gt=0, description="固定ブロック(hop)長 ms")
+    context_ms: float = Field(default=100.0, ge=0, description="rolling 左文脈 ms")
+    crossfade_ms: float = Field(
+        default=10.0,
+        ge=0,
+        description="等電力クロスフェード帯 ms (< block, <= context)",
+    )
+    input_host_api_name: str | None = Field(default=None)
+    input_device_name: str | None = Field(default=None)
+    input_device_index: int | None = Field(default=None)
+    output_host_api_name: str | None = Field(default=None)
+    output_device_name: str | None = Field(default=None)
+    output_device_index: int | None = Field(default=None)
+    transport_type: TransportType = Field(default=TransportType.in_process)
+    max_queued_blocks: int = Field(
+        default=8, gt=0, description="capture/transport の上限。満杯で最古を drop"
+    )
+
+
 class TelemetryConfig(BaseModel):
     enable: bool = True
     max_samples: int = 5000
@@ -414,6 +443,7 @@ class Config(BaseSettings):
     whisper: WhisperConfig = Field(default_factory=WhisperConfig)
     voicevox: VoicevoxConfig = Field(default_factory=VoicevoxConfig)
     rvc: RvcConfig = Field(default_factory=RvcConfig)
+    stream_vc: StreamVcConfig = Field(default_factory=StreamVcConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
 
     listen_address: str = "[::]"
