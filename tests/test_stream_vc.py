@@ -114,3 +114,42 @@ def test_streaming_vc_process_block_shape_and_finite():
     assert out1.dtype == np.int16 and out2.dtype == np.int16
     assert out1.shape[0] > 0 and out2.shape[0] > 0
     assert np.all(np.isfinite(out1)) and np.all(np.isfinite(out2))
+
+
+def test_equal_power_weights_sum_of_squares_is_one():
+    from vspeech.lib.stream_vc import equal_power_weights
+
+    fade_in, fade_out = equal_power_weights(64)
+    power = fade_in**2 + fade_out**2
+    assert np.allclose(power, 1.0, atol=1e-5)
+
+
+def test_equal_power_weights_direction():
+    from vspeech.lib.stream_vc import equal_power_weights
+
+    fade_in, fade_out = equal_power_weights(64)
+    # fade_in rises 0->1, fade_out falls 1->0
+    assert fade_in[0] < fade_in[-1]
+    assert fade_out[0] > fade_out[-1]
+    assert fade_in[0] < 0.1 and fade_out[0] > 0.9
+
+
+def test_equal_power_weights_zero_is_empty():
+    from vspeech.lib.stream_vc import equal_power_weights
+
+    fade_in, fade_out = equal_power_weights(0)
+    assert fade_in.shape == (0,) and fade_out.shape == (0,)
+
+
+def test_overlap_add_boundaries():
+    from vspeech.lib.stream_vc import equal_power_weights
+    from vspeech.lib.stream_vc import overlap_add
+
+    n = 100
+    fade_in, fade_out = equal_power_weights(n)
+    prev = np.full(n, 100.0, dtype=np.float32)
+    head = np.full(n, 0.0, dtype=np.float32)
+    blended = overlap_add(prev, head, fade_in, fade_out)
+    # start dominated by prev (fade_out ~1), end by head (fade_out ~0)
+    assert blended[0] > 99.0
+    assert blended[-1] < 1.0

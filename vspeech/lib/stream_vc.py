@@ -57,6 +57,34 @@ def slice_block_output(out, block_len: int, seq_len: int):
     return out[max(0, len(out) - block_out) :]
 
 
+def equal_power_weights(n: int):
+    """長さ n の等電力クロスフェード重み `(fade_in, fade_out)`。
+
+    セル中心の sin/cos なので `fade_in**2 + fade_out**2 == 1`。独立推論した
+    (無相関の)隣接出力を混ぜても総電力が一定に保たれる — RVC デコーダは
+    ステートレスで hop ごとに位相非整合なので、線形重みより等電力が正しい。
+    `n <= 0` は空配列を返す(crossfade 無効)。
+    """
+    import numpy as np
+
+    if n <= 0:
+        empty = np.zeros(0, dtype=np.float32)
+        return empty, empty
+    x = (np.arange(n, dtype=np.float32) + 0.5) / n
+    fade_in = np.sin(0.5 * np.pi * x).astype(np.float32)
+    fade_out = np.cos(0.5 * np.pi * x).astype(np.float32)
+    return fade_in, fade_out
+
+
+def overlap_add(prev_tail, head, fade_in, fade_out):
+    """`prev_tail` をフェードアウト・`head` をフェードインして加算する。
+
+    等電力 overlap-add の 1 行。要素積なので numpy 配列でも torch tensor でも
+    動く(呼び出し側は同じ長さ・同じ域で渡す)。
+    """
+    return prev_tail * fade_out + head * fade_in
+
+
 class StreamingVc:
     """固定ブロック + rolling 左文脈のステートフル VC(ADR-0053)。
 
