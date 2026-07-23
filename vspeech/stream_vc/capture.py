@@ -6,6 +6,7 @@ float32 ブロックを出す。排他デバイスで二重 open が失敗する
 """
 
 from asyncio import CancelledError
+from asyncio import Event
 from asyncio import Queue
 from asyncio import to_thread
 
@@ -50,9 +51,16 @@ def open_stream_vc_input_stream(config: StreamVcConfig, hop: int) -> sd.RawInput
 
 
 async def capture_loop(
-    config: StreamVcConfig, out_queue: Queue[NDArray[np.float32]], hop: int
+    config: StreamVcConfig,
+    out_queue: Queue[NDArray[np.float32]],
+    hop: int,
+    ready: Event,
 ) -> None:
     """マイクから hop サンプルずつ読み、float32 ブロックを out_queue へ。"""
+    # VC の warmup 完了まで待ってからマイクを開く。先に開くと、モデルロード中に
+    # 実時間で溜まった音声が起動直後にキューへ殺到して drop の嵐になり、
+    # 最初の数百 ms が stale な音声で埋まる(実機ログで確認済み)。
+    await ready.wait()
     with worker_startup("stream_vc"):
         stream = open_stream_vc_input_stream(config, hop)
     logger.info("stream vc capture started")

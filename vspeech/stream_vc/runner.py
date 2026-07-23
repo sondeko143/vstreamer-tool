@@ -9,6 +9,7 @@ capture の float32 ブロックを StreamingVc(固定ブロック+左文脈+等
 from __future__ import annotations
 
 from asyncio import CancelledError
+from asyncio import Event
 from asyncio import Queue
 from asyncio import to_thread
 from time import perf_counter
@@ -123,6 +124,7 @@ async def vc_loop(
     in_queue: Queue[NDArray[np.float32]],
     transport: Transport,
     session_id: str,
+    ready: Event,
 ) -> None:
     """capture ブロックを変換し StreamPacket として transport へ送る。"""
     with worker_startup("stream_vc"):
@@ -131,7 +133,7 @@ async def vc_loop(
         # import 再利用に沿う)。
         from vspeech.worker.vc import check_cuda_provider
 
-        rt = build_stream_vc_runtime(sv_config)
+        rt = await to_thread(build_stream_vc_runtime, sv_config)
         check_cuda_provider(rt["session"].get_providers())
         sv = make_streaming_vc(rt, sv_config)
         # warmup 失敗(固定 shape グラフ構築の失敗)は起動時失敗として fail-loud に
@@ -139,6 +141,7 @@ async def vc_loop(
         # 落として WorkerStartupError にするのが正しい。
         await to_thread(sv.warmup)
     logger.info("stream vc worker started")
+    ready.set()  # ここで初めて capture がマイクを開く(起動時の drop 嵐を防ぐ)
     hop_seconds = sv_config.block_ms / 1000.0
     sample_rate = rt["target_sample_rate"]
     seq = 0
