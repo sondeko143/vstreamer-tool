@@ -5,7 +5,6 @@ float32 ブロックを出す。排他デバイスで二重 open が失敗する
 フォールバックは未実装(ADR-0052 に設計として残す)。
 """
 
-from asyncio import CancelledError
 from asyncio import Event
 from asyncio import Queue
 from asyncio import to_thread
@@ -15,11 +14,10 @@ import sounddevice as sd
 from numpy.typing import NDArray
 
 from vspeech.config import StreamVcConfig
-from vspeech.exceptions import shutdown_worker
-from vspeech.exceptions import worker_startup
 from vspeech.lib.audio import resolve_stream_vc_input_device
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
+from vspeech.stream_vc.retry import run_with_device_retry
 from vspeech.stream_vc.transport import drop_oldest_put
 
 CAPTURE_RATE = 16000
@@ -50,33 +48,47 @@ def open_stream_vc_input_stream(config: StreamVcConfig, hop: int) -> sd.RawInput
     return stream
 
 
+async def _capture_read_loop(
+    stream: sd.RawInputStream, hop: int, out_queue: Queue[NDArray[np.float32]]
+) -> None:
+    """steady-state: device fault が起きるまで hop サンプルずつ読み続ける。
+
+    device loss は stream.read() が (OSError, sd.PortAudioError) を raise する。
+    ここでは捕えず run_with_device_retry へ抜けさせ、close→backoff→再 open で
+    サブシステム内だけで回復する(兄弟 vc/playback や発話系は巻き込まない,
+    ADR-0050)。`while stream.active` だと deactivate が黙って返り get()/recv() で
+    待つ兄弟を無言で stall させうるので `while True` にする。
+    """
+    while True:
+        data, overflowed = await to_thread(stream.read, hop)
+        if overflowed:
+            logger.warning("stream_vc capture input overflow")
+        block = pcm16_to_float32(bytes(data))
+        if not drop_oldest_put(out_queue, block):
+            telemetry.record("stream_vc_capture_drop", 1.0)
+            logger.warning("stream_vc capture queue full; dropped oldest block")
+
+
 async def capture_loop(
     config: StreamVcConfig,
     out_queue: Queue[NDArray[np.float32]],
     hop: int,
     ready: Event,
 ) -> None:
-    """マイクから hop サンプルずつ読み、float32 ブロックを out_queue へ。"""
+    """マイクから hop サンプルずつ読み、float32 ブロックを out_queue へ。
+
+    初回 open は fail-loud(worker_startup)、以降の runtime device fault は
+    自力で再接続する(ADR-0050)。capture の再 open では引き継ぐ状態が無いので
+    on_reopen は無し。
+    """
     # VC の warmup 完了まで待ってからマイクを開く。先に開くと、モデルロード中に
     # 実時間で溜まった音声が起動直後にキューへ殺到して drop の嵐になり、
     # 最初の数百 ms が stale な音声で埋まる(実機ログで確認済み)。
     await ready.wait()
-    with worker_startup("stream_vc"):
-        stream = open_stream_vc_input_stream(config, hop)
-    logger.info("stream vc capture started")
-    try:
-        # device loss は stream.read() が raise する(propagate → 兄弟 vc/playback を
-        # cancel = fail-loud)。`while stream.active` だと deactivate が黙って返り、
-        # get()/recv() で待つ兄弟を無言で stall させうるので `while True` にする。
-        while True:
-            data, overflowed = await to_thread(stream.read, hop)
-            if overflowed:
-                logger.warning("stream_vc capture input overflow")
-            block = pcm16_to_float32(bytes(data))
-            if not drop_oldest_put(out_queue, block):
-                telemetry.record("stream_vc_capture_drop", 1.0)
-                logger.warning("stream_vc capture queue full; dropped oldest block")
-    except CancelledError as e:
-        raise shutdown_worker(e)
-    finally:
-        stream.close()
+    await run_with_device_retry(
+        open_stream=lambda: open_stream_vc_input_stream(config, hop),
+        run=lambda stream: _capture_read_loop(stream, hop, out_queue),
+        worker="stream_vc",
+        label="stream vc capture",
+        reopen_metric="stream_vc_capture_reopen",
+    )

@@ -19,3 +19,5 @@
 ## Consequences
 
 発話系を無傷で残せるため「発話単位の字幕/翻訳を維持」という要件に最も安全。streaming 側は連番・バックプレッシャ・ジッタ吸収を自前で設計できる。反面、sender/receiver/routing の再利用は限定的になり新規コードが増える。設定も別系統になる([0054](0054-stream-vc-config-section.md))。マシン間トランスポートは差し替え層として別途決める([0051](0051-stream-transport-swappable-tiered.md))。
+
+分離は **runtime の device fault にも及ぶ**。当初は capture/vc/playback ループの device 例外が内側 TaskGroup を abort させ、main の外側 TaskGroup が全 worker を cancel して `exit(1)` していた — streaming マイクを抜く/フォーマットが変わる/実行中に CUDA OOM が起きるだけで文字起こし・翻訳・字幕・TTS まで道連れになり、この ADR の「発話系は無傷」という約束に反していた。現在は steady-state の `(OSError, sd.PortAudioError)` を各ループ内で捕え、close→指数バックオフ(0.5s→5s)→再 open で**サブシステム自身のデバイスだけを**再接続する(発話系 `vspeech/worker/recording.py` の retry パターンを踏襲。共通処理は `vspeech/stream_vc/retry.py`)。vc ループの `process_block` の transient GPU error(CUDA error / OOM = `RuntimeError`)は tear down せず 1 ブロック drop して継続し、連続失敗が閾値を超えたときだけ落とす。一方、**起動時のリソース取得失敗は依然 fail-loud**:モデル/デバイスの初回 open は `worker_startup("stream_vc")` 内で行い、失敗は `WorkerStartupError` として伝播してサブシステムを止める(設定不備を無限 retry で隠さない)。cancellation は捕えず必ず propagate する。

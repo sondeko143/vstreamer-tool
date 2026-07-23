@@ -35,6 +35,10 @@ if TYPE_CHECKING:
 # ORT のログ閾値: 0=VERBOSE / 1=INFO / 2=WARNING(既定) / 3=ERROR / 4=FATAL
 _ORT_LOG_ERROR = 3
 
+# process_block の transient GPU error をこの回数まで連続で許して drop する。
+# 超えたら黙って spin せず落とす(下記 vc_loop の error handling 参照)。
+_MAX_CONSECUTIVE_VC_ERRORS = 10
+
 
 def make_stream_packet(
     session_id: str, seq: int, hop_seconds: float, pcm: bytes, sample_rate: int
@@ -218,6 +222,8 @@ async def vc_loop(
             block_ms=sv_config.block_ms,
         )
     seq = 0
+    consecutive_errors = 0
+    vc_error_warned = False
     try:
         while True:
             block = await in_queue.get()
@@ -228,7 +234,39 @@ async def vc_loop(
                 target_gain = await gate_target_gain(gate, vad_session, block)
             block = apply_input_boost(block, sv_config.rvc.input_boost)
             t0 = perf_counter()
-            out_i16 = await to_thread(sv.process_block, block)
+            # transient GPU error(CUDA error / OOM 等)は torch/CUDA 由来の
+            # RuntimeError(torch.cuda.OutOfMemoryError も RuntimeError 派生)で
+            # 上がってくる。**tear down せず 1 ブロック drop して継続**する:
+            #   - CUDA OOM を tight loop で retry すると thrash する。
+            #   - tear down は発話系を巻き込まないとはいえサブシステム全体を落とす。
+            #   - _reset_context も不要 — process_block は infer で raise すると
+            #     self._context を更新しないので、次の成功ブロックが直前の good な
+            #     文脈から続く(drop したブロックぶんの音は欠けるが crossfade が seam を
+            #     繋ぐ)。seq も進めない(欠落を playback に偽装しない)。
+            # ただし連続失敗が続くなら黙って spin せず落とす(下 _MAX_...)。
+            # ORT ネイティブ例外(onnxruntime の Fail/RuntimeException)は RuntimeError
+            # 派生ではないので **捕えない** — あれは大抵グラフ/モデルの恒久的な不備で
+            # fail-loud が正しい。broad な except Exception は使わない。
+            try:
+                out_i16 = await to_thread(sv.process_block, block)
+            except RuntimeError as e:
+                consecutive_errors += 1
+                telemetry.record("stream_vc_process_error", 1.0)
+                if not vc_error_warned:
+                    vc_error_warned = True
+                    logger.warning(
+                        "stream_vc process_block failed; dropping block: %r", e
+                    )
+                if consecutive_errors >= _MAX_CONSECUTIVE_VC_ERRORS:
+                    logger.error(
+                        "stream_vc process_block failed %d times consecutively; "
+                        "failing out",
+                        consecutive_errors,
+                    )
+                    raise
+                continue
+            consecutive_errors = 0
+            vc_error_warned = False  # 回復したら次の障害でまた 1 回警告する
             telemetry.record("stream_vc", perf_counter() - t0)
             if gate is not None:
                 out_i16 = gate.ramp(out_i16, target_gain)
