@@ -1,6 +1,6 @@
 # 0050. ストリーミング VC を Command/routing の外の専用サブシステムとして分離する
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-22
 - Related: [spec](../superpowers/specs/2026-07-22-rvc-streaming-vc-split-machine-design.md), [0004](0004-per-destination-sender-transport.md), [0051](0051-stream-transport-swappable-tiered.md), [0053](0053-streaming-vc-fixed-block-crossfade.md), [0054](0054-stream-vc-config-section.md)
 

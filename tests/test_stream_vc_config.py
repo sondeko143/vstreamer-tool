@@ -9,9 +9,10 @@ from vspeech.config import TransportType
 def test_stream_vc_defaults():
     c = StreamVcConfig()
     assert c.enable is False
-    assert c.block_ms == 80.0
-    assert c.context_ms == 100.0
-    assert c.crossfade_ms == 10.0
+    # 実機耳確認 (RTX 4060 Laptop / fcpe / 実声) で clean だった 160/500/25。
+    assert c.block_ms == 160.0
+    assert c.context_ms == 500.0
+    assert c.crossfade_ms == 25.0
     assert c.transport_type == TransportType.in_process
     assert c.max_queued_blocks == 8
     # nested rvc is an independent RvcConfig (ADR-0054/0046): default_factory

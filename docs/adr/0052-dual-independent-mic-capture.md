@@ -1,6 +1,6 @@
 # 0052. ストリーミングと発話系でマイクを二重独立キャプチャする
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-22
 - Related: [spec](../superpowers/specs/2026-07-22-rvc-streaming-vc-split-machine-design.md), [0050](0050-streaming-vc-separate-subsystem.md), [0031](0031-audio-pyaudio-to-sounddevice.md)
 

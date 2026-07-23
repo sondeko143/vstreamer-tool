@@ -67,8 +67,8 @@
 | [0047](0047-obs-identify-unsubscribes-from-events.md) | Identify で eventSubscriptions=0 を明示し、読まないイベントを OBS に送らせない（0043 を refine） | Accepted (refines 0043) | 2026-07-18 |
 | [0048](0048-gcp-auth-channel-with-retrying-session.md) | GCP のトークン更新を retry 付き session に載せるため認証チャネルを自前で組む | Accepted | 2026-07-18 |
 | [0049](0049-fcpe-baked-waveform-onnx-f0-extractor.md) | FCPE を波形入力 ONNX f0 抽出器としてスパイク先行で追加する | Accepted | 2026-07-21 |
-| [0050](0050-streaming-vc-separate-subsystem.md) | ストリーミング VC を Command/routing の外の専用サブシステムとして分離する | Proposed | 2026-07-22 |
+| [0050](0050-streaming-vc-separate-subsystem.md) | ストリーミング VC を Command/routing の外の専用サブシステムとして分離する | Accepted | 2026-07-22 |
 | [0051](0051-stream-transport-swappable-tiered.md) | マシン間ストリーミングトランスポートを差し替え層とし段階昇格する | Proposed | 2026-07-22 |
-| [0052](0052-dual-independent-mic-capture.md) | ストリーミングと発話系でマイクを二重独立キャプチャする | Proposed | 2026-07-22 |
-| [0053](0053-streaming-vc-fixed-block-crossfade.md) | ストリーミング VC を固定ブロック+左文脈+クロスフェードのステートフル変換にする | Proposed | 2026-07-22 |
-| [0054](0054-stream-vc-config-section.md) | ストリーミング VC 設定を [stream_vc] として発話系 VC と分離する | Proposed | 2026-07-22 |
+| [0052](0052-dual-independent-mic-capture.md) | ストリーミングと発話系でマイクを二重独立キャプチャする | Accepted | 2026-07-22 |
+| [0053](0053-streaming-vc-fixed-block-crossfade.md) | ストリーミング VC を固定ブロック+左文脈+クロスフェードのステートフル変換にする | Accepted | 2026-07-22 |
+| [0054](0054-stream-vc-config-section.md) | ストリーミング VC 設定を [stream_vc] として発話系 VC と分離する | Accepted | 2026-07-22 |

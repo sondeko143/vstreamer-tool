@@ -391,12 +391,23 @@ class StreamVcConfig(BaseModel):
     # 発話系 [vc]/[rvc] とは独立したモデル設定(ADR-0054)。共有素材パスは
     # 各系統へ明示 propagate する方針(ADR-0046)。
     rvc: RvcConfig = Field(default_factory=RvcConfig)
-    block_ms: float = Field(default=80.0, gt=0, description="固定ブロック(hop)長 ms")
-    context_ms: float = Field(default=100.0, ge=0, description="rolling 左文脈 ms")
-    crossfade_ms: float = Field(
-        default=10.0,
+    block_ms: float = Field(
+        default=160.0,
+        gt=0,
+        description="固定ブロック(hop)長 ms。160ms が実機耳確認で clean、"
+        "80ms は速い代わりに seam のプチプチが残る",
+    )
+    context_ms: float = Field(
+        default=500.0,
         ge=0,
-        description="等電力クロスフェード帯 ms (< block, <= context)",
+        description="rolling 左文脈 ms。実機耳確認で 500ms 未満はガタつき、"
+        "500ms 超にしても改善しない",
+    )
+    crossfade_ms: float = Field(
+        default=25.0,
+        ge=0,
+        description="等電力クロスフェード帯 ms (< block, <= context)。"
+        "25ms が実機耳確認済みの値",
     )
     sola_search_ms: float = Field(
         default=5.0,

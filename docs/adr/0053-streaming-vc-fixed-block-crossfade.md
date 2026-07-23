@@ -1,6 +1,6 @@
 # 0053. ストリーミング VC を固定ブロック+左文脈+クロスフェードのステートフル変換にする
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-22
 - Related: [spec](../superpowers/specs/2026-07-22-rvc-streaming-vc-split-machine-design.md), [0016](0016-change-voice-decompose-seeded-golden.md), [0017](0017-rvc-input-envelope-shape-transfer.md), [0019](0019-vc-silero-vad-gate.md), [0050](0050-streaming-vc-separate-subsystem.md)
 
@@ -26,6 +26,10 @@
 フェード則は別途測定して**等電力が正しい**と確認済み(blend/rest の RMS 比 **1.0007**)。sum-to-1 の線形重みは **0.873 = -1.16dB のディップ**になるため却下した。よって SOLA は探索位置だけを変え、`equal_power_weights` は変更しない。
 
 代償は `sola_search_ms` 分のアルゴリズム遅延(読み出し位置を探索半幅だけ手前へずらす)のみ。emit 長は固定のままなのでドリフトは発生しない。`sola_search_ms = 0` は SOLA 無効 = 導入前と完全に同一のサンプルを出す。
+
+### 検証(実機耳確認)
+
+実機(RTX 4060 Laptop / f0 抽出器 fcpe / 実声)での耳確認により、`block_ms = 160` / `context_ms = 500` / `crossfade_ms = 25` + SOLA(`sola_search_ms = 5.0`)の構成が clean であることを確認した。context を 500ms 未満にすると seam のガタつきが常時聞こえ(100ms は「ガタゴト」が乗って使い物にならない)、逆に 500ms を超えて 2000ms にしても改善しなかった。block を 80ms に縮めると片道遅延は ~199ms → ~119ms に下がるが、seam のプチプチ(クリック)が可聴になる。SOLA は上で測定した位相ずれ(lag 0 の相関 -0.02、最適 lag で 0.89)を解消するためのもので、耳確認した構成にはこれが含まれている — ただし SOLA 単独の可聴寄与は A/B で分離測定していないため、「SOLA on の構成で clean だった」という以上のことは主張しない。
 
 ## Alternatives rejected
 

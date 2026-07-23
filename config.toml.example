@@ -192,17 +192,21 @@ fcpe_model_file = "./fcpe.onnx"
 # 無改変のまま、別マイク入力 → 固定長ブロック VC → 別出力、が並行して常時走る。
 [stream_vc]
 enable = false
-# 固定ブロック(hop)長 ms。実測 (RTX 5060Ti, M1 RTF ハーネス): 推論自体に
-# fcpe ~40ms / rmvpe ~55-73ms の固定 per-inference オーバーヘッドが乗るため、
-# 現行ハードで real-time feasible なのは block 80-160ms (片道推論 ~120-200ms、
-# 80ms 付近が RTF~0.5 の境界)。これより小さい block は現行ハードでは不可。
-block_ms = 80.0
+# ★以下 block/context/crossfade は実機耳確認 (RTX 4060 Laptop / fcpe / 実声) で
+#   詰めた値。160/500/25 が clean だと確認できた組み合わせ。
+# 固定ブロック(hop)長 ms。160ms = 片道 ~199ms (p50 推論 35.3ms, RTF 0.24) で clean。
+# 80ms は片道 ~119ms と速いが、seam のプチプチ(クリック)が可聴なので推奨しない。
+block_ms = 160.0
 # rolling 左文脈長 ms。HuBERT/f0 抽出の文脈として block の前に付ける実音声の長さ
 # (reflect-pad ではなく実データ、ADR-0053)。crossfade_ms 以上にすること。
-context_ms = 100.0
+# 耳確認: 500ms 未満だとガタガタ鳴る(100ms は「ガタゴト」が常時乗る)。
+# 500ms 超 (2000ms を試験) にしても改善しないので、500ms が実用上の底。
+context_ms = 500.0
 # 等電力クロスフェード帯 ms。block_ms 未満 かつ context_ms 以下が必須
-# (満たさないと preflight/起動時にエラー)。既定の 10ms 程度で良い。
-crossfade_ms = 10.0
+# (満たさないと preflight/起動時にエラー)。25ms が耳確認済みの値。
+crossfade_ms = 25.0
+# ※これらの数値は対象 GPU に依存する。別のマシンへ持っていくときは
+#   `uv run poe stream-vc-rtf` で per-block RTF を測り直してから決めること。
 # SOLA(位相合わせ)の探索半幅 ms。0 で無効。RVC デコーダはステートレスなので、
 # 同じ入力区間でも tick ごとに数 ms 位相のずれた波形を返す(実測: lag0 の相関 -0.02 に
 # 対し最適 lag では 0.89)。混ぜる前に相互相関で位置を合わせる。emit 長は固定のまま
