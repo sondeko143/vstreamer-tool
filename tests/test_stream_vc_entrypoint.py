@@ -43,19 +43,23 @@ def test_entrypoint_boots_stream_vc():
         encoding="utf-8",
     )
     booted = False
+    import threading
+
+    # Enforce the 120s budget even if the child emits no stdout at all: a bare
+    # readline()/iterator has no timeout, so without this a silent startup hang
+    # would block indefinitely. The timer kills the child, which closes its
+    # stdout pipe -> the `for line in proc.stdout` loop ends at EOF and we
+    # assert cleanly (booted stays False) instead of hanging.
+    killer = threading.Timer(120.0, proc.kill)
+    killer.start()
     try:
         assert proc.stdout is not None
-        import time
-
-        deadline = time.time() + 120
-        while time.time() < deadline:
-            line = proc.stdout.readline()
-            if not line:
-                break
+        for line in proc.stdout:
             if "stream vc worker started" in line:
                 booted = True
                 break
     finally:
+        killer.cancel()
         proc.terminate()
         try:
             proc.wait(timeout=15)
