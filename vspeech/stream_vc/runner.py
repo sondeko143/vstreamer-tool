@@ -44,6 +44,18 @@ def make_stream_packet(
     )
 
 
+def apply_input_boost(block, boost):
+    """入力ブロックに input_boost gain をかける([-1,1] へ clip = 発話系 vc.py の
+    int16 `mul` 飽和相当)。発話系は `change_voice` の外(worker)で gain をかけるので、
+    streaming も `StreamingVc` の外(この runner)でかけて対称にする。boost==1.0 は
+    恒等(既定なので M2 挙動は既定 config で不変)。"""
+    import numpy as np
+
+    if boost == 1.0:
+        return block
+    return np.clip(block * boost, -1.0, 1.0).astype(np.float32)
+
+
 def build_stream_vc_runtime(sv_config: StreamVcConfig) -> dict[str, Any]:
     """[stream_vc.rvc] から device + モデル + metadata を構築する。"""
     import json
@@ -86,6 +98,10 @@ def build_stream_vc_runtime(sv_config: StreamVcConfig) -> dict[str, Any]:
 def make_streaming_vc(rt: dict[str, Any], sv_config: StreamVcConfig) -> StreamingVc:
     from vspeech.lib.stream_vc import StreamingVc
 
+    # rvc.quality(発話系の reflect-pad 量)は固定ブロック streaming コアには本質的に
+    # 非該当なので意図的に適用しない: streaming は reflect-pad ではなく実際のローリング
+    # 左文脈(context_len)を使うため、pad 量というパラメタが意味を持たない。一方
+    # input_boost は発話系と対称に honor する(vc_loop でブロックへ適用)。
     return StreamingVc(
         rvc_config=rt["rvc_config"],
         device=rt["device"],
@@ -110,6 +126,9 @@ async def vc_loop(
 ) -> None:
     """capture ブロックを変換し StreamPacket として transport へ送る。"""
     with worker_startup("stream_vc"):
+        # check_cuda_provider は worker/vc.py の pure helper を import 再利用
+        # (relocate は vc.py 編集=非ゴール違反ゆえ不可; ADR-0050/0053 の内部部品
+        # import 再利用に沿う)。
         from vspeech.worker.vc import check_cuda_provider
 
         rt = build_stream_vc_runtime(sv_config)
@@ -126,6 +145,7 @@ async def vc_loop(
     try:
         while True:
             block = await in_queue.get()
+            block = apply_input_boost(block, sv_config.rvc.input_boost)
             t0 = perf_counter()
             out_i16 = await to_thread(sv.process_block, block)
             telemetry.record("stream_vc", perf_counter() - t0)

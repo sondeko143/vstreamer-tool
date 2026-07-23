@@ -37,6 +37,7 @@ def open_stream_vc_output_stream(
         channels=1,
         device=device.index,
         dtype="int16",
+        latency="low",
     )
     stream.start()
     return stream

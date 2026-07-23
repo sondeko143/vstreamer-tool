@@ -305,7 +305,15 @@ def _check_stream_vc(config: Config) -> list[ConfigProblem]:
     w = "stream_vc"
     sv = config.stream_vc
     problems = _check_rvc_assets(sv.rvc, w, "stream_vc.rvc")
-    if sv.crossfade_ms >= sv.block_ms:
+    # StreamingVc の guard は ms→サンプル丸め後の長さで判定する。preflight も同じ
+    # サンプル領域で比較し、sub-ms 丸めで preflight は通るが __init__ が ValueError
+    # を投げる境界を無くす。
+    from vspeech.stream_vc.capture import ms_to_samples
+
+    cf = ms_to_samples(sv.crossfade_ms)
+    blk = ms_to_samples(sv.block_ms)
+    ctx = ms_to_samples(sv.context_ms)
+    if cf >= blk:
         problems.append(
             ConfigProblem(
                 w,
@@ -313,7 +321,7 @@ def _check_stream_vc(config: Config) -> list[ConfigProblem]:
                 field="stream_vc.crossfade_ms",
             )
         )
-    if sv.crossfade_ms > sv.context_ms:
+    if cf > ctx:
         problems.append(
             ConfigProblem(
                 w,

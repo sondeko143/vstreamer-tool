@@ -43,6 +43,7 @@ def open_stream_vc_input_stream(config: StreamVcConfig, hop: int) -> sd.RawInput
         device=device.index,
         channels=1,
         dtype="int16",
+        latency="low",
     )
     stream.start()
     return stream
@@ -56,7 +57,10 @@ async def capture_loop(
         stream = open_stream_vc_input_stream(config, hop)
     logger.info("stream vc capture started")
     try:
-        while stream.active:
+        # device loss は stream.read() が raise する(propagate → 兄弟 vc/playback を
+        # cancel = fail-loud)。`while stream.active` だと deactivate が黙って返り、
+        # get()/recv() で待つ兄弟を無言で stall させうるので `while True` にする。
+        while True:
             data, overflowed = await to_thread(stream.read, hop)
             if overflowed:
                 logger.warning("stream_vc capture input overflow")
