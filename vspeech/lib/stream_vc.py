@@ -112,6 +112,7 @@ class StreamingVc:
         use_final_proj: bool,
         block_len: int,
         context_len: int,
+        crossfade_len: int = 0,
     ) -> None:
         import torch
 
@@ -131,6 +132,20 @@ class StreamingVc:
         self._is_half = _is_model_half(session)
         self._sid = torch.tensor(0, device=device).unsqueeze(0).long()
         self._context = torch.zeros(context_len, device=device, dtype=torch.float32)
+
+        self.crossfade_len = crossfade_len
+        r = target_sample_rate
+        self._out_ctx = round(context_len * r / 16000)
+        self._out_hop = round(block_len * r / 16000)
+        self._out_xf = round(crossfade_len * r / 16000)
+        self._fade_in, self._fade_out = equal_power_weights(self._out_xf)
+        self._output_tail = None  # 初回 crossfade で zeros(out_xf) を遅延生成
+        if crossfade_len > 0 and context_len < crossfade_len:
+            raise ValueError(
+                "context_len must be >= crossfade_len for context-overlap crossfade"
+            )
+        if crossfade_len >= block_len:
+            raise ValueError("crossfade_len must be < block_len")
 
     def warmup(self, n: int = 3) -> None:
         """zeros ブロックで ONNX グラフ / CUDA カーネルを先に構築する。
@@ -207,4 +222,34 @@ class StreamingVc:
 
         out = audio_i16.detach().cpu().numpy()
         self._context = next_context(seq, self.context_len).detach()
+        if self.crossfade_len > 0:
+            return self._emit_with_crossfade(out)
         return slice_block_output(out, self.block_len, seq.shape[0])
+
+    def _emit_with_crossfade(self, out: NDArray[np.int16]) -> NDArray[np.int16]:
+        """context-overlap 帯で等電力 overlap-add し、hop 相当ちょうどを返す。
+
+        `out` は `[context|block]` 全体の int16 出力。前 tick が hop 末尾 out_xf
+        を `_output_tail` に保持しており、今 tick はそれと同じ入力時刻を context
+        末尾として再描画した `out[out_ctx-out_xf:out_ctx]` を等電力ブレンドして
+        emit 先頭にする(seam の真の overlap-add、位相非整合を隠す)。emit は毎回
+        out_hop サンプルちょうど = 入力 hop と同レート(ドリフト無し)。末尾 out_xf
+        を次 tick 用の tail として保持する(算法遅延は crossfade 分のみ)。
+        """
+        import numpy as np
+
+        out_ctx, out_hop, out_xf = self._out_ctx, self._out_hop, self._out_xf
+        need = out_ctx + out_hop
+        if out.shape[0] < need:  # context_len=0 等の端で稀に丸め不足 → 左ゼロ詰め
+            out = np.pad(out, (need - out.shape[0], 0))
+        out_f = out.astype(np.float32)
+        if self._output_tail is None:
+            self._output_tail = np.zeros(out_xf, dtype=np.float32)
+        ctx_tail = out_f[out_ctx - out_xf : out_ctx]
+        blended = overlap_add(
+            self._output_tail, ctx_tail, self._fade_in, self._fade_out
+        )
+        fresh_middle = out_f[out_ctx : out_ctx + out_hop - out_xf]
+        emit_f = np.concatenate([blended, fresh_middle])
+        self._output_tail = out_f[out_ctx + out_hop - out_xf : need].copy()
+        return np.clip(np.rint(emit_f), -32768.0, 32767.0).astype(np.int16)

@@ -116,6 +116,47 @@ def test_streaming_vc_process_block_shape_and_finite():
     assert np.all(np.isfinite(out1)) and np.all(np.isfinite(out2))
 
 
+@_gpu_gate
+def test_streaming_vc_crossfade_rate_locked_and_finite():
+    from scripts import capture_change_voice_golden as cap
+    from vspeech.lib.stream_vc import StreamingVc
+
+    assert _GOLDEN_CONFIG is not None
+    rt = cap.build_rvc_runtime(_GOLDEN_CONFIG)
+
+    block_len = 1280  # 80ms @ 16k
+    context_len = 1600  # 100ms @ 16k
+    crossfade_len = 160  # 10ms @ 16k
+    sv = StreamingVc(
+        rvc_config=rt["rvc_config"],
+        device=rt["device"],
+        hubert_model=rt["hubert_model"],
+        session=rt["session"],
+        f0_session=rt["f0_session"],
+        target_sample_rate=rt["target_sample_rate"],
+        f0_enabled=rt["f0_enabled"],
+        emb_output_layer=rt["emb_output_layer"],
+        use_final_proj=rt["use_final_proj"],
+        block_len=block_len,
+        context_len=context_len,
+        crossfade_len=crossfade_len,
+    )
+    sv.warmup()
+
+    from scripts.stream_vc_rtf import make_voiced_signal
+
+    signal = make_voiced_signal(16000, 2.0, seed=0)
+    expected = round(block_len * rt["target_sample_rate"] / 16000)
+    outs = [
+        sv.process_block(signal[i * block_len : (i + 1) * block_len]) for i in range(3)
+    ]
+    for out in outs:
+        assert out.dtype == np.int16
+        assert out.shape[0] == expected  # rate-locked emit, no drift
+        assert np.all(np.isfinite(out))
+    assert any(np.any(out != 0) for out in outs)
+
+
 def test_equal_power_weights_sum_of_squares_is_one():
     from vspeech.lib.stream_vc import equal_power_weights
 
