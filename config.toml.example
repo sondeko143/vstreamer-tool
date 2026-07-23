@@ -187,6 +187,59 @@ rmvpe_model_file = "./rmvpe.onnx"
 # fcpe の onnx（f0_extractor_type = "fcpe" のとき必要。uv run poe export-fcpe-onnx で生成）
 fcpe_model_file = "./fcpe.onnx"
 
+# ストリーミング VC (M2, ADR-0050〜0054)。発話系 [vc]/[rvc] とは独立した
+# 低遅延・連続(無音区切り無し)の VC。既定 OFF — 有効化すると、発話系パイプラインは
+# 無改変のまま、別マイク入力 → 固定長ブロック VC → 別出力、が並行して常時走る。
+[stream_vc]
+enable = false
+# 固定ブロック(hop)長 ms。実測 (RTX 5060Ti, M1 RTF ハーネス): 推論自体に
+# fcpe ~40ms / rmvpe ~55-73ms の固定 per-inference オーバーヘッドが乗るため、
+# 現行ハードで real-time feasible なのは block 80-160ms (片道推論 ~120-200ms、
+# 80ms 付近が RTF~0.5 の境界)。これより小さい block は現行ハードでは不可。
+block_ms = 80.0
+# rolling 左文脈長 ms。HuBERT/f0 抽出の文脈として block の前に付ける実音声の長さ
+# (reflect-pad ではなく実データ、ADR-0053)。crossfade_ms 以上にすること。
+context_ms = 100.0
+# 等電力クロスフェード帯 ms。block_ms 未満 かつ context_ms 以下が必須
+# (満たさないと preflight/起動時にエラー)。既定の 10ms 程度で良い。
+crossfade_ms = 10.0
+
+# 発話系 [recording] とは別に開くマイク入力 (ADR-0052: 二重独立キャプチャ。
+# 発話系 recording は無改変のまま別途マイクを開く)。未指定(空)ならシステム既定入力。
+input_host_api_name = ""
+input_device_name = ""
+input_device_index = 0
+
+# 出力デバイス。[playback] とは別に開く。未指定(空)ならシステム既定出力。
+output_host_api_name = ""
+output_device_name = ""
+output_device_index = 1
+
+# トランスポート種別。現状は同一プロセス内直結の "in_process" のみ (M2、単一マシン)。
+# マシン分離用の段階的トランスポート (ADR-0051 の T1 unary gRPC / T3 生ソケット) は未実装。
+transport_type = "in_process"
+# capture -> VC 間の橋渡しキューの上限ブロック数。VC が詰まって溢れたら
+# 最古のブロックを drop する (drop は telemetry に記録される)。
+max_queued_blocks = 8
+
+# ストリーミング専用の RVC モデル設定。[rvc] とは完全に独立したモデルを指せる
+# (ADR-0054)。f0_up_key/window など未記載のフィールドは [rvc] と同じ意味を持ち、
+# 省略時はコードの既定値 (f0_up_key=0, window=160) が使われる。
+# quality (reflect-pad の折返し量) はここでは無視される — StreamingVc は
+# context_ms による実データ左文脈を使うため N/A。
+[stream_vc.rvc]
+model_file = "./dummy_simple.onnx"
+hubert_model_file = "./hubert_contentvec"
+gpu_id = 0
+# 発話系と同じくマイクゲインとして適用される。
+input_boost = 1.0
+# 推奨: streaming では "fcpe" ([rvc] 既定の "rmvpe" より軽く、短い入力でも安定。
+# rmvpe は reflect-pad 前提の最小入力長制約があり、block/context が短いと壊れやすい)。
+f0_extractor_type = "fcpe"
+fcpe_model_file = "./fcpe.onnx"
+# f0_extractor_type = "rmvpe" にする場合のみ必要:
+# rmvpe_model_file = "./rmvpe.onnx"
+
 [subtitle.text]
 display_sec_per_letter = 0.4
 min_display_sec = 6.0
