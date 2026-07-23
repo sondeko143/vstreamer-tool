@@ -1,7 +1,7 @@
 """streaming VC の変換ループ(ADR-0053)。
 
-capture の float32 ブロックを StreamingVc(固定ブロック+左文脈+等電力
-クロスフェード)で変換し、StreamPacket にして transport へ送る。モデルの構築は
+capture の float32 ブロックを StreamingVc(固定ブロック+左文脈+クロスフェード)
+で変換し、StreamPacket にして transport へ送る。モデルの構築は
 発話系 rvc_worker(vspeech/worker/vc.py)と同じ手順を [stream_vc.rvc] から行う
 (発話系は無改変)。重い import は関数内。
 """
@@ -21,6 +21,7 @@ from vspeech.exceptions import shutdown_worker
 from vspeech.exceptions import worker_startup
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
+from vspeech.stream_vc.capture import CaptureSignal
 from vspeech.stream_vc.capture import ms_to_samples
 from vspeech.stream_vc.packet import StreamPacket
 from vspeech.stream_vc.transport import Transport
@@ -31,14 +32,27 @@ if TYPE_CHECKING:
 
     from vspeech.lib.stream_vc import StreamingVc
     from vspeech.shared_context import SharedContext
+    from vspeech.stream_vc.capture import CaptureItem
     from vspeech.stream_vc.gate import StreamingVadGate
 
-# ORT のログ閾値: 0=VERBOSE / 1=INFO / 2=WARNING(既定) / 3=ERROR / 4=FATAL
+# ORT のログ閾値: 0=VERBOSE / 1=INFO / 2=WARNING / 3=ERROR / 4=FATAL。
+# SessionOptions().log_severity_level の既定は -1 = Env のレベルを継承 (onnx_session.py)。
 _ORT_LOG_ERROR = 3
 
 # process_block の transient GPU error をこの回数まで連続で許して drop する。
 # 超えたら黙って spin せず落とす(下記 vc_loop の error handling 参照)。
 _MAX_CONSECUTIVE_VC_ERRORS = 10
+
+# transient な process_block drop の警告も underflow/drop 同様に間引く。fail/success が
+# 交互だと reset-on-success 方式では毎 drop 警告が出て stdout(GUI の読むパイプ)を
+# 埋める。連続失敗の tear-down 判定(_MAX_CONSECUTIVE_VC_ERRORS)とは別の通算カウンタで
+# 絞る。telemetry(stream_vc_process_error)は毎 drop 記録する。
+VC_ERROR_LOG_EVERY = 50
+
+
+def should_log_vc_error(count: int) -> bool:
+    """通算 count 回目の process_block drop をログに出すか(1 回目と以降 N 回ごと)。"""
+    return count == 1 or count % VC_ERROR_LOG_EVERY == 0
 
 
 def make_stream_packet(
@@ -183,7 +197,7 @@ def make_streaming_vc(rt: dict[str, Any], sv_config: StreamVcConfig) -> Streamin
 async def vc_loop(
     context: SharedContext,
     sv_config: StreamVcConfig,
-    in_queue: Queue[NDArray[np.float32]],
+    in_queue: Queue[CaptureItem],
     transport: Transport,
     session_id: str,
     ready: Event,
@@ -230,10 +244,22 @@ async def vc_loop(
         )
     seq = 0
     consecutive_errors = 0
-    vc_error_warned = False
+    vc_error_count = 0
     try:
         while True:
             block = await in_queue.get()
+            # capture が device 再 open した境界の番兵(capture と runner は別タスクで
+            # capture の on_reopen から sv へ直接触れないので帯域内で知らせる)。ここに
+            # 至るまで sv は数秒前の rolling 文脈/クロスフェード tail を抱えたままで、
+            # 再 open 直後の fresh block をそれと crossfade すると seam がプチる。
+            # pause/resume と同じく文脈と VAD ゲートを捨て、次の fresh block を無音から
+            # 始める。番兵は音声ではないので変換せず continue する。
+            if block is CaptureSignal.REOPEN:
+                sv._reset_context()
+                if gate is not None:
+                    gate.reset()
+                telemetry.record("stream_vc_capture_reopen_reset", 1.0)
+                continue
             # 全体停止ゲート(発話系 worker/playback.py と同じ idiom)。paused の間は
             # 消費/変換を止める — capture は回り続け drop_oldest_put が backlog を
             # 捨てるので paused 音声は溜まらない。get() 済みの block は pause 前後の
@@ -267,8 +293,11 @@ async def vc_loop(
             #     (daemon が再起動する; ADR-0050)だが、単発の transient には過剰。
             #   - _reset_context も不要 — process_block は infer で raise すると
             #     self._context を更新しないので、次の成功ブロックが直前の good な
-            #     文脈から続く(drop したブロックぶんの音は欠けるが crossfade が seam を
-            #     繋ぐ)。seq も進めない(欠落を playback に偽装しない)。
+            #     文脈から続く。drop したぶん音は 1 ブロック欠け、次tickの SOLA は
+            #     本来非連続な 2 区間を crossfade するので、稀に 1 回のプチっとした
+            #     不連続が残りうる(crossfade はこれを透明に隠すわけではない)。ただ
+            #     OOM は稀で、ここで reset しても改善はしないので許容する。seq も
+            #     進めない(欠落を playback に偽装しない)。
             # ただし連続失敗が続くなら黙って spin せず落とす(下 _MAX_...)。
             # ORT ネイティブ例外(onnxruntime の Fail/RuntimeException)は RuntimeError
             # 派生ではないので **捕えない** — あれは大抵グラフ/モデルの恒久的な不備で
@@ -277,11 +306,13 @@ async def vc_loop(
                 out_i16 = await to_thread(sv.process_block, block)
             except RuntimeError as e:
                 consecutive_errors += 1
+                vc_error_count += 1
                 telemetry.record("stream_vc_process_error", 1.0)
-                if not vc_error_warned:
-                    vc_error_warned = True
+                if should_log_vc_error(vc_error_count):
                     logger.warning(
-                        "stream_vc process_block failed; dropping block: %r", e
+                        "stream_vc process_block failed; dropping block (total %d): %r",
+                        vc_error_count,
+                        e,
                     )
                 if consecutive_errors >= _MAX_CONSECUTIVE_VC_ERRORS:
                     logger.error(
@@ -293,8 +324,10 @@ async def vc_loop(
                     )
                     raise
                 continue
+            # 連続失敗カウンタだけ回復でリセットする(tear-down 判定用)。警告の間引きは
+            # 通算カウンタ vc_error_count なので reset しない(fail/success 交互でも
+            # 毎 drop 警告しないため)。
             consecutive_errors = 0
-            vc_error_warned = False  # 回復したら次の障害でまた 1 回警告する
             telemetry.record("stream_vc", perf_counter() - t0)
             if gate is not None:
                 out_i16 = gate.ramp(out_i16, target_gain)

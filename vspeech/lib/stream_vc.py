@@ -61,8 +61,11 @@ def crossfade_weights(
       (`fade_in² + fade_out² == 1`)。SOLA を切ると隣接描画は無相関(ρ≈0)で、
       無相関どうしを和=1 で混ぜるとクロスフェード帯に約 -1.25dB のノッチ(=
       block レートの微小トレモロ)が出る。等電力なら無相関加算でも合成パワーが
-      平坦になり、かつ SOLA 導入前の出力とビット単位で一致する(byte-identity
-      不変量: `sola_search_ms=0` は pre-SOLA と同じ音を出す)。
+      平坦になり、かつ SOLA 導入前の出力に等電力則として float32 の丸め(~1 ULP,
+      max|Δ|≈1.19e-7)まで一致する。厳密なビット一致ではない — 重みを
+      `theta=0.5πx; sin(theta)` と先に畳むので pre-SOLA の `sin(0.5πx)` 直書きと
+      ~1 ULP ずれる — が、int16 量子化より遥かに下で可聴でない(計算は無害なので
+      変えない)。
 
     `n <= 0` は空配列を返す。
     """
@@ -325,7 +328,8 @@ class StreamingVc:
         -0.76dB でユニティ寄り。w-okada VCClient も SOLA に sum-to-1)。SOLA off
         (`sola_search_len == 0`)は隣接描画が無相関(ρ≈0)なので等電力(²和=1、
         sin/cos)。無相関に和=1 を使うと帯域に約 -1.25dB のノッチ(block レートの
-        トレモロ)が出る。等電力なら pre-SOLA 出力とビット単位で一致する(ADR-0053)。
+        トレモロ)が出る。等電力なら pre-SOLA 出力に float32 の丸め(~1 ULP)まで
+        一致する(厳密なビット一致ではない; ADR-0053)。
 
         index 不変量:
 
@@ -340,8 +344,9 @@ class StreamingVc:
         - `out_sola == 0`(= `sola_search_len == 0`)のときは `start == nominal ==
           out_total - out_hop - out_xf` で読み出し位置が pre-SOLA と一致し、かつ
           フェード則も等電力(`correlated=False`)に落ちるので、出すサンプルは
-          pre-SOLA と完全に同一(byte-identity)。読み出し位置だけでなく重みも
-          一致させることでこの不変量が本当に成立する。
+          pre-SOLA と float32 の丸め(~1 ULP)まで一致する(重みを先に畳んだぶんの
+          ずれで厳密なビット一致ではないが、int16 量子化より下で可聴でない)。
+          読み出し位置だけでなく重みも一致させることでこの不変量が成立する。
         - `sola_offset` が探索を諦める(tail が実質無音・相関面が平坦)ときは region
           の**中央** `out_sola` を返すので `start == nominal` になる。すなわち
           「シフト無し」に落ちる(index 0 = 最大の負シフト、ではない)。
@@ -374,7 +379,7 @@ class StreamingVc:
             # nominal - out_sola >= 0 を保証(探索窓が出力の先頭を割らない)
             out_sola = max(0, min(out_sola, (out_total - out_hop - out_xf) // 2))
             # フェード則は SOLA の有無で決まる。SOLA on は隣接描画が相関する(和=1)、
-            # SOLA off は無相関(等電力)。sola_search_len==0 で pre-SOLA と byte-identity。
+            # SOLA off は無相関(等電力)。sola_search_len==0 で pre-SOLA と ~1 ULP 一致。
             fade_in, fade_out = crossfade_weights(
                 out_xf, correlated=self.sola_search_len > 0
             )

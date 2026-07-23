@@ -370,7 +370,7 @@ def _patch_runtime(monkeypatch, fake):
             "use_final_proj": True,
         },
     )
-    monkeypatch.setattr(runner_mod, "make_streaming_vc", lambda rt, cfg: fake)
+    monkeypatch.setattr(runner_mod, "make_streaming_vc", lambda _rt, _cfg: fake)
     return runner_mod
 
 
@@ -424,3 +424,77 @@ async def test_pause_stops_consuming_and_resets_on_resume(monkeypatch):
         await task
     except BaseException:
         pass
+
+
+# --- capture 再 open の番兵 -------------------------------------------------
+#
+# capture が device 再 open すると capture_queue に CaptureSignal.REOPEN 番兵が入る。
+# runner はそれを見たら文脈と VAD ゲートを reset し、番兵自体は変換しない(pause と
+# 同じ扱い)。実モデルを差し替えて CPU で検証する。
+
+
+async def test_capture_reopen_sentinel_resets_context_and_gate(monkeypatch):
+    """再 open 番兵は変換されず、_reset_context + gate.reset を呼ぶ。"""
+    import asyncio
+    from asyncio import Event
+    from asyncio import Queue
+
+    from vspeech.config import StreamVcConfig
+    from vspeech.stream_vc import runner as runner_mod
+    from vspeech.stream_vc.capture import CaptureSignal
+
+    fake = _FakeStreamingVc()
+    # gate 有効(vad_session != None)にして gate.reset も検証する。
+    sv = StreamVcConfig(vad_gate=True)
+    monkeypatch.setattr(
+        runner_mod,
+        "build_stream_vc_runtime",
+        lambda cfg: {
+            "rvc_config": cfg.rvc,
+            "device": None,
+            "hubert_model": None,
+            "session": _FakeSession(),
+            "f0_session": None,
+            "vad_session": object(),
+            "target_sample_rate": 40000,
+            "f0_enabled": True,
+            "emb_output_layer": 9,
+            "use_final_proj": True,
+        },
+    )
+    monkeypatch.setattr(runner_mod, "make_streaming_vc", lambda _rt, _cfg: fake)
+    monkeypatch.setattr(
+        "vspeech.lib.vad.speech_probs", lambda _session, _audio: np.full(5, 0.99)
+    )
+    reset_calls: list[int] = []
+    real_reset = StreamingVadGate.reset
+
+    def spy_reset(self):
+        reset_calls.append(1)
+        return real_reset(self)
+
+    monkeypatch.setattr(StreamingVadGate, "reset", spy_reset)
+
+    in_queue: Queue = Queue()
+    in_queue.put_nowait(CaptureSignal.REOPEN)  # 再 open 番兵(先頭)
+    in_queue.put_nowait(np.zeros(2560, dtype=np.float32))  # 続く fresh block
+    transport = _CollectTransport()
+    task = asyncio.create_task(
+        runner_mod.vc_loop(_context(), sv, in_queue, transport, "sess", Event())
+    )
+    for _ in range(2000):
+        await asyncio.sleep(0)
+        if len(transport.packets) >= 1 or task.done():
+            break
+    if task.done():
+        task.result()  # 起動時例外はそのまま浮かせる
+    task.cancel()
+    try:
+        await task
+    except BaseException:
+        pass
+
+    assert fake.resets == 1  # 番兵で _reset_context を 1 回
+    assert reset_calls == [1]  # gate.reset も 1 回
+    assert len(transport.packets) == 1  # 番兵は packet を生まない(fresh block だけ)
+    assert transport.packets[0].pcm == _VC_OUT.tobytes()

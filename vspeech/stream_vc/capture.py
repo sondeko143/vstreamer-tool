@@ -8,6 +8,7 @@ float32 ブロックを出す。排他デバイスで二重 open が失敗する
 from asyncio import Event
 from asyncio import Queue
 from asyncio import to_thread
+from enum import Enum
 
 import numpy as np
 import sounddevice as sd
@@ -21,6 +22,22 @@ from vspeech.stream_vc.retry import run_with_device_retry
 from vspeech.stream_vc.transport import drop_oldest_put
 
 CAPTURE_RATE = 16000
+
+
+class CaptureSignal(Enum):
+    """capture → runner の帯域内シグナル(音声ブロックに混ぜて capture_queue へ流す番兵)。
+
+    capture と runner(vc_loop)は別タスクなので、capture の device 再 open から
+    runner の StreamingVc へ直接触れない。単一メンバの Enum を番兵にすることで、
+    runner 側は `block is CaptureSignal.REOPEN` の identity 判定で音声ブロックと
+    区別でき、型も `NDArray | CaptureSignal` に正直に絞れる。
+    """
+
+    REOPEN = 0  # device 再 open の境界。runner は文脈/VAD ゲートを reset する。
+
+
+# capture_queue が運ぶ要素型:音声ブロック、または帯域内シグナルの番兵。
+type CaptureItem = NDArray[np.float32] | CaptureSignal
 
 
 def ms_to_samples(ms: float, rate: int = CAPTURE_RATE) -> int:
@@ -49,7 +66,7 @@ def open_stream_vc_input_stream(config: StreamVcConfig, hop: int) -> sd.RawInput
 
 
 async def _capture_read_loop(
-    stream: sd.RawInputStream, hop: int, out_queue: Queue[NDArray[np.float32]]
+    stream: sd.RawInputStream, hop: int, out_queue: Queue[CaptureItem]
 ) -> None:
     """steady-state: device fault が起きるまで hop サンプルずつ読み続ける。
 
@@ -71,16 +88,24 @@ async def _capture_read_loop(
 
 async def capture_loop(
     config: StreamVcConfig,
-    out_queue: Queue[NDArray[np.float32]],
+    out_queue: Queue[CaptureItem],
     hop: int,
     ready: Event,
 ) -> None:
     """マイクから hop サンプルずつ読み、float32 ブロックを out_queue へ。
 
     初回 open は fail-loud(worker_startup)、以降の runtime device fault は
-    自力で再接続する(ADR-0050)。capture の再 open では引き継ぐ状態が無いので
-    on_reopen は無し。
+    自力で再接続する(ADR-0050)。capture 自体は再 open で引き継ぐ状態を持たないが、
+    runner(vc_loop, 別タスク)は数秒前の rolling 文脈/クロスフェード tail を抱えた
+    ままなので、再 open 境界に CaptureSignal.REOPEN 番兵を capture_queue へ積んで
+    runner に文脈 reset を促す(直接触れないので帯域内で知らせる)。fault 時点で
+    積むため、番兵は queue 内の「fault 前の stale ブロック」と「再 open 後の fresh
+    ブロック」のちょうど境界に入る。満杯でも必ず入るよう drop_oldest_put を使う。
     """
+
+    def _signal_reopen() -> None:
+        drop_oldest_put(out_queue, CaptureSignal.REOPEN)
+
     # VC の warmup 完了まで待ってからマイクを開く。先に開くと、モデルロード中に
     # 実時間で溜まった音声が起動直後にキューへ殺到して drop の嵐になり、
     # 最初の数百 ms が stale な音声で埋まる(実機ログで確認済み)。
@@ -90,5 +115,6 @@ async def capture_loop(
         run=lambda stream: _capture_read_loop(stream, hop, out_queue),
         worker="stream_vc",
         label="stream vc capture",
+        on_reopen=_signal_reopen,
         reopen_metric="stream_vc_capture_reopen",
     )

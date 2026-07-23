@@ -56,6 +56,17 @@ def should_log_drop(count: int) -> bool:
     return count == 1 or count % DROP_LOG_EVERY == 0
 
 
+# seq 飛び(gap = 欠落パケット)も drop/underflow と同様に間引いてログする。
+# 網トランスポート導入前は起きない想定だが、恒常的な gap がログ(= GUI の読む
+# stdout パイプ)を埋めないよう最初の 1 回と以降 N 回ごとに絞る。telemetry は毎回。
+GAP_LOG_EVERY = 50
+
+
+def should_log_gap(count: int) -> bool:
+    """通算 count 回目の gap をログに出すか(1 回目と以降 N 回ごと)。"""
+    return count == 1 or count % GAP_LOG_EVERY == 0
+
+
 def open_stream_vc_output_stream(
     config: StreamVcConfig, sample_rate: int
 ) -> sd.RawOutputStream:
@@ -84,6 +95,7 @@ async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
     prev_seq: int | None = None
     underflow_count = 0
     drop_count = 0
+    gap_count = 0
     # 一度でも open に成功したか(初回 fail-loud と runtime 再 open を区別するため)。
     started = False
     backoff = BACKOFF_START
@@ -99,9 +111,14 @@ async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
                     gap = detect_gap(prev_seq, old.seq)
                     if gap > 0:
                         telemetry.record("stream_vc_gap", float(gap))
-                        logger.warning(
-                            "stream_vc playback gap: %d packet(s) missing", gap
-                        )
+                        gap_count += 1
+                        if should_log_gap(gap_count):
+                            logger.warning(
+                                "stream_vc playback gap: %d packet(s) missing "
+                                "(total %d)",
+                                gap,
+                                gap_count,
+                            )
                     prev_seq = old.seq
                     telemetry.record("stream_vc_playback_drop", 1.0)
                     drop_count += 1
@@ -132,7 +149,13 @@ async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
                 gap = detect_gap(prev_seq, packet.seq)
                 if gap > 0:
                     telemetry.record("stream_vc_gap", float(gap))
-                    logger.warning("stream_vc playback gap: %d packet(s) missing", gap)
+                    gap_count += 1
+                    if should_log_gap(gap_count):
+                        logger.warning(
+                            "stream_vc playback gap: %d packet(s) missing (total %d)",
+                            gap,
+                            gap_count,
+                        )
                 prev_seq = packet.seq
                 # write() の戻り値 = paOutputUnderflowed (capture.py の read() の
                 # overflowed と対称)。捨てると「無音の穴」が黙って出る — この module が
@@ -164,5 +187,8 @@ async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
     except CancelledError as e:
         raise shutdown_worker(e)
     finally:
+        # close_quietly で包む: Ctrl-C 中に出力デバイスが faulted だと raw close() が
+        # sd.PortAudioError を投げ、それが finally から抜けて直前の WorkerShutdown を
+        # 置き換えてしまう(clean cancel が error-exit に化ける)。
         if stream is not None:
-            stream.close()
+            close_quietly(stream)
