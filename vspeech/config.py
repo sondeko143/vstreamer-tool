@@ -387,7 +387,6 @@ class TransportType(Enum):
 
 
 class StreamVcConfig(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
     enable: bool = False
     # 発話系 [vc]/[rvc] とは独立したモデル設定(ADR-0054)。共有素材パスは
     # 各系統へ明示 propagate する方針(ADR-0046)。
