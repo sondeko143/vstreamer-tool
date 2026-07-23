@@ -22,6 +22,7 @@ from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
 from vspeech.stream_vc.jitter import JitterBuffer
 from vspeech.stream_vc.jitter import PopKind
+from vspeech.stream_vc.packet import StreamPacket
 from vspeech.stream_vc.playback import open_stream_vc_output_stream
 from vspeech.stream_vc.playback import should_log_gap
 from vspeech.stream_vc.playback import should_log_underflow
@@ -29,7 +30,9 @@ from vspeech.stream_vc.retry import close_quietly
 from vspeech.stream_vc.transport import Transport
 
 
-def consume_into_buffer(transport: Transport, buffer: JitterBuffer, first) -> None:
+def consume_into_buffer(
+    transport: Transport, buffer: JitterBuffer, first: StreamPacket
+) -> None:
     """recv した first と poll した残り全部を jitter buffer へ push する。"""
     buffer.push(first)
     for packet in transport.poll():
