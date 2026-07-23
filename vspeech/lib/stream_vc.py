@@ -5,8 +5,9 @@
 再利用し、発話系の `change_voice` 経路は無改変で温存する。M1 はこのコアの
 per-block 計測(RTF)に集中し、クロスフェード連続性の音質は M2 で足す。
 
-純粋ヘルパ(next_context / slice_block_output / equal_power_weights / overlap_add)は
-numpy でも torch tensor でも動くよう `len(seq)` ベースにしてあり、torch 無し・
+純粋ヘルパ(next_context / slice_block_output / equal_power_weights / overlap_add /
+sola_offset)は numpy でも torch tensor でも動くよう `len(seq)` ベースにしてあり(ただし
+sola_offset は numpy 配列専用)、torch 無し・
 rvc extra 無しの CPU でも import できる(重い import は StreamingVc のメソッド内
 でのみ行う)。
 """
@@ -87,6 +88,31 @@ def overlap_add(prev_tail, head, fade_in, fade_out):
     return prev_tail * fade_out + head * fade_in
 
 
+def sola_offset(prev_tail, region):
+    """`region` 内で `prev_tail` と最も相関する開始位置(index)を返す。
+
+    RVC デコーダはステートレスなので、同じ入力区間でも tick ごとに位相が
+    ずれた波形を返す(実測: lag0 の相関 -0.02 に対し最適 lag では 0.89)。
+    固定位置で混ぜると同じ波形を数 ms ずらして足すことになり、櫛形フィルタ
+    (comb)になって「扇風機」的な音になる。混ぜる前に位相を合わせる。
+
+    戻り値は `region` 先頭からの index(0 <= i <= len(region)-len(prev_tail))。
+    prev_tail が無音/空、または region が短いときは 0(=従来の固定位置)。
+    """
+    import numpy as np
+
+    n = len(prev_tail)
+    if n == 0 or len(region) < n:
+        return 0
+    tail_norm = float(np.linalg.norm(prev_tail))
+    if tail_norm < 1e-9:
+        return 0
+    win = np.lib.stride_tricks.sliding_window_view(region, n)
+    num = win @ prev_tail
+    den = np.linalg.norm(win, axis=1) * tail_norm + 1e-9
+    return int(np.argmax(num / den))
+
+
 class StreamingVc:
     """固定ブロック + rolling 左文脈のステートフル VC(ADR-0053)。
 
@@ -113,6 +139,7 @@ class StreamingVc:
         block_len: int,
         context_len: int,
         crossfade_len: int = 0,
+        sola_search_len: int = 0,
     ) -> None:
         import torch
 
@@ -134,13 +161,15 @@ class StreamingVc:
         self._context = torch.zeros(context_len, device=device, dtype=torch.float32)
 
         self.crossfade_len = crossfade_len
-        # crossfade の出力域長(hop / crossfade / context 境界)は「実際の decoder
-        # 出力長 out.shape[0]」から比率導出する(slice_block_output と同じ思想)。
-        # target_sr 固定比率だと p_len の window 切り捨てで実出力が短いとき seam に
-        # zero-pad が混じる。out.shape[0] は seq shape 固定なので warmup 後は毎tick
-        # 一定 → 初回 emit で算出しキャッシュする。
+        # SOLA 探索半幅(16kHz 入力サンプル)。0 で SOLA 無効 = 固定位置の従来挙動。
+        self.sola_search_len = sola_search_len
+        # crossfade の出力域長(hop / crossfade / SOLA 探索半幅 / context 境界)は
+        # 「実際の decoder 出力長 out.shape[0]」から比率導出する(slice_block_output と
+        # 同じ思想)。target_sr 固定比率だと p_len の window 切り捨てで実出力が短いとき
+        # seam に zero-pad が混じる。out.shape[0] は seq shape 固定なので warmup 後は
+        # 毎tick一定 → 初回 emit で算出しキャッシュする。
         self._xfade_cache: (
-            tuple[int, int, NDArray[np.float32], NDArray[np.float32]] | None
+            tuple[int, int, int, NDArray[np.float32], NDArray[np.float32]] | None
         ) = None
         self._output_tail = None  # 初回 crossfade で zeros(out_xf) を遅延生成
         if crossfade_len > 0 and context_len < crossfade_len:
@@ -234,15 +263,36 @@ class StreamingVc:
         return slice_block_output(out, self.block_len, seq.shape[0])
 
     def _emit_with_crossfade(self, out: NDArray[np.int16]) -> NDArray[np.int16]:
-        """context-overlap 帯で等電力 overlap-add し、hop 相当ちょうどを返す。
+        """SOLA で位相を合わせてから等電力 overlap-add し、hop 相当ちょうどを返す。
 
-        出力域の長さ(hop / crossfade / context 境界)は「実際の decoder 出力長
-        out.shape[0]」から比率導出する(slice_block_output と同じ思想)。out.shape[0]
-        は seq shape 固定なので warmup 後は毎tick一定 → 初回に算出してキャッシュ。
-        前 tick が hop 末尾 out_xf を `_output_tail` に保持しており、今 tick はそれと
-        同じ入力時刻を context 末尾として再描画した区間を等電力ブレンドして emit
-        先頭にする(seam の真の overlap-add)。emit は毎回 out_hop ちょうど = 入力
-        hop と同レート(ドリフト無し)。末尾 out_xf を次 tick 用 tail として保持する。
+        出力域の長さ(hop / crossfade / SOLA 探索半幅 / context 境界)は「実際の
+        decoder 出力長 out.shape[0]」から比率導出する(slice_block_output と同じ思想)。
+        out.shape[0] は seq shape 固定なので warmup 後は毎tick一定 → 初回に算出して
+        キャッシュ。
+
+        前 tick が emit 末尾 out_xf を `_output_tail` に保持しており、今 tick はそれと
+        同じ入力時刻を再描画した区間を等電力ブレンドして emit 先頭にする(seam の真の
+        overlap-add)。ただし RVC デコーダはステートレスで、同じ入力区間でも tick ごとに
+        数 ms の位相ずれが乗る(実測: lag0 の相関 -0.02 に対し最適 lag では 0.89)。
+        固定位置で混ぜると comb フィルタになるので、混ぜる前に `sola_offset` で
+        `_output_tail` と最も相関する読み出し位置 `start` を ±out_sola の窓で探す
+        (SOLA = Synchronous OverLap-Add)。フェード則は等電力のまま(実測で
+        blend/rest の RMS 比 1.0007、sum-to-1 は 0.873 = -1.16dB のディップ)。
+
+        index 不変量:
+
+        - emit 長は常にちょうど out_hop(= 入力 hop と同レート、ドリフト無し)。
+          lag は「どこから読むか」だけを変え、「どれだけ出すか」は変えない。
+        - 触れる最大 index は
+          `start + out_hop + out_xf <= (nominal + out_sola) + out_hop + out_xf
+          == out_total` なので、描画の外へは決して出ない。
+        - `nominal - out_sola >= 0`(探索窓が出力の先頭を割らない)は out_sola の
+          clamp `out_sola <= (out_total - out_hop - out_xf) // 2` で保証する。
+        - `out_sola == 0` のときは `start == nominal == out_total - out_hop - out_xf`
+          で、SOLA 導入前と完全に同一のサンプルを出す。
+
+        代償は out_sola サンプル分のアルゴリズム遅延(読み出し位置を探索半幅だけ
+        手前へずらすため)。
         """
         import numpy as np
 
@@ -253,16 +303,25 @@ class StreamingVc:
             out_xf = round(out_total * self.crossfade_len / seq_len)
             # crossfade 帯は hop 以下 かつ context 区間(out_total-out_hop)以下に抑える
             out_xf = min(out_xf, out_hop, out_total - out_hop)
+            out_sola = round(out_total * self.sola_search_len / seq_len)
+            # nominal - out_sola >= 0 を保証(探索窓が出力の先頭を割らない)
+            out_sola = max(0, min(out_sola, (out_total - out_hop - out_xf) // 2))
             fade_in, fade_out = equal_power_weights(out_xf)
-            self._xfade_cache = (out_hop, out_xf, fade_in, fade_out)
-        out_hop, out_xf, fade_in, fade_out = self._xfade_cache
+            self._xfade_cache = (out_hop, out_xf, out_sola, fade_in, fade_out)
+        out_hop, out_xf, out_sola, fade_in, fade_out = self._xfade_cache
         out_f = out.astype(np.float32)
-        boundary = out_total - out_hop  # hop 区間の開始 = context 区間の末尾
         if self._output_tail is None:
             self._output_tail = np.zeros(out_xf, dtype=np.float32)
-        ctx_tail = out_f[boundary - out_xf : boundary]
-        blended = overlap_add(self._output_tail, ctx_tail, fade_in, fade_out)
-        fresh_middle = out_f[boundary : out_total - out_xf]
-        emit_f = np.concatenate([blended, fresh_middle])
-        self._output_tail = out_f[out_total - out_xf :].copy()
+        # 読み出し開始位置。out_sola=0 なら従来と同一 (= out_total-out_hop-out_xf)。
+        nominal = out_total - out_hop - out_xf - out_sola
+        if out_sola > 0:
+            region = out_f[nominal - out_sola : nominal + out_sola + out_xf]
+            start = (nominal - out_sola) + sola_offset(self._output_tail, region)
+        else:
+            start = nominal
+        head = out_f[start : start + out_xf]
+        blended = overlap_add(self._output_tail, head, fade_in, fade_out)
+        middle = out_f[start + out_xf : start + out_hop]
+        emit_f = np.concatenate([blended, middle])
+        self._output_tail = out_f[start + out_hop : start + out_hop + out_xf].copy()
         return np.clip(np.rint(emit_f), -32768.0, 32767.0).astype(np.int16)

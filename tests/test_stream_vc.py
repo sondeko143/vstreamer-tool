@@ -127,6 +127,7 @@ def test_streaming_vc_crossfade_rate_locked_and_finite():
     block_len = 1280  # 80ms @ 16k
     context_len = 1600  # 100ms @ 16k
     crossfade_len = 160  # 10ms @ 16k
+    sola_search_len = 80  # 5ms @ 16k -> exercise the SOLA path, not just lag 0
     sv = StreamingVc(
         rvc_config=rt["rvc_config"],
         device=rt["device"],
@@ -140,6 +141,7 @@ def test_streaming_vc_crossfade_rate_locked_and_finite():
         block_len=block_len,
         context_len=context_len,
         crossfade_len=crossfade_len,
+        sola_search_len=sola_search_len,
     )
     sv.warmup()
 
@@ -151,6 +153,8 @@ def test_streaming_vc_crossfade_rate_locked_and_finite():
     ]
     # Rate-lock invariant: emit length is derived from the actual (stable)
     # decoder output length, so every tick emits the same count -> no drift.
+    # SOLA only moves *where* we read, never *how much* we emit, so this must
+    # hold with the search window on as well.
     lengths = {out.shape[0] for out in outs}
     assert len(lengths) == 1  # all equal -> rate-locked, no drift
     for out in outs:
@@ -197,3 +201,31 @@ def test_overlap_add_boundaries():
     # start dominated by prev (fade_out ~1), end by head (fade_out ~0)
     assert blended[0] > 99.0
     assert blended[-1] < 1.0
+
+
+def test_sola_offset_finds_known_shift():
+    from vspeech.lib.stream_vc import sola_offset
+
+    rng = np.random.default_rng(0)
+    sig = rng.standard_normal(4096).astype(np.float32)
+    tail = sig[1000:1500]
+    shift = 37
+    region = sig[1000 - 100 + shift : 1500 + 100 + shift]
+    # region は sig[937:1637] なので、tail (= sig[1000:1500]) と一致するのは
+    # region 先頭からの index 1000 - 937 = 63 = 100 - shift。
+    assert sola_offset(tail, region) == 100 - shift
+
+
+def test_sola_offset_zero_when_tail_silent():
+    from vspeech.lib.stream_vc import sola_offset
+
+    tail = np.zeros(100, dtype=np.float32)
+    region = np.random.default_rng(1).standard_normal(300).astype(np.float32)
+    assert sola_offset(tail, region) == 0
+
+
+def test_sola_offset_zero_when_region_too_short():
+    from vspeech.lib.stream_vc import sola_offset
+
+    tail = np.ones(100, dtype=np.float32)
+    assert sola_offset(tail, np.ones(50, dtype=np.float32)) == 0

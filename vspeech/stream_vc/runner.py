@@ -116,6 +116,7 @@ def make_streaming_vc(rt: dict[str, Any], sv_config: StreamVcConfig) -> Streamin
         block_len=ms_to_samples(sv_config.block_ms),
         context_len=ms_to_samples(sv_config.context_ms),
         crossfade_len=ms_to_samples(sv_config.crossfade_ms),
+        sola_search_len=ms_to_samples(sv_config.sola_search_ms),
     )
 
 

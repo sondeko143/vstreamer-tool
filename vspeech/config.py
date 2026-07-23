@@ -398,6 +398,11 @@ class StreamVcConfig(BaseModel):
         ge=0,
         description="等電力クロスフェード帯 ms (< block, <= context)",
     )
+    sola_search_ms: float = Field(
+        default=5.0,
+        ge=0,
+        description="SOLA 位相合わせの探索半幅 ms (0 で無効)。実測 ±5ms で十分",
+    )
     input_host_api_name: str | None = Field(default=None)
     input_device_name: str | None = Field(default=None)
     input_device_index: int | None = Field(default=None)
