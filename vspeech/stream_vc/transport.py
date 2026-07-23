@@ -56,6 +56,15 @@ class Transport(ABC):
         """
         return []
 
+    def poll(self) -> list[StreamPacket]:
+        """到着済みで待機中の packet を全て非ブロッキングに取り出して返す。
+
+        consumer が recv 後に呼び、socket キューにある残りを一括で jitter buffer へ
+        push するためのもの(並べ替えを buffer に見せる)。キューを覗けない transport は
+        既定で何もしない。
+        """
+        return []
+
 
 class InProcessTransport(Transport):
     """同一プロセス内の asyncio.Queue 実装(ADR-0051 tier-0)。"""
