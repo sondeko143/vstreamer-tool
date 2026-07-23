@@ -80,3 +80,16 @@ def test_reset_clears_state():
     buf.reset()
     buf.push(_pkt(0, 0))
     assert buf.pop().pcm == bytes([0, 0])  # next_seq re-primes from scratch
+
+
+def test_two_consecutive_misses_second_is_silence():
+    buf = JitterBuffer(target_depth=0)
+    buf.push(_pkt(0, 7))
+    assert buf.pop().kind is PopKind.NORMAL  # seq 0 plays; last_good set
+    buf.push(_pkt(3, 3))  # seqs 1 and 2 never arrive -> two consecutive misses
+    r1 = buf.pop()  # expects 1 -> miss -> conceal (fade of last_good)
+    r2 = buf.pop()  # expects 2 -> second consecutive miss -> pure silence
+    assert r1.kind is PopKind.CONCEAL
+    assert r2.kind is PopKind.CONCEAL
+    assert set(r2.pcm) == {0}  # silence on the second consecutive miss
+    assert buf.pop().pcm == bytes([3, 3])  # resumes in order at seq 3

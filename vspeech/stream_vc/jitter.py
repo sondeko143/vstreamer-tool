@@ -50,6 +50,7 @@ class JitterBuffer:
         self._next_seq = None
         self._last_good = None
         self._concealed_since_good = 0
+        self._block_bytes = 0
 
     def push(self, packet: StreamPacket) -> bool:
         if not self._block_bytes:
