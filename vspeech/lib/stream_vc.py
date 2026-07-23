@@ -6,7 +6,7 @@
 等電力クロスフェードで繋ぎ、混ぜる前に SOLA で位相を合わせる
 (`_emit_with_crossfade`)。
 
-純粋ヘルパ(next_context / slice_block_output / equal_power_weights / overlap_add /
+純粋ヘルパ(next_context / equal_power_weights / overlap_add /
 sola_offset)は numpy でも torch tensor でも動くよう `len(seq)` ベースにしてあり(ただし
 sola_offset は numpy 配列専用)、torch 無し・
 rvc extra 無しの CPU でも import できる(重い import は StreamingVc のメソッド内
@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # Type-only: used by StreamingVc's annotations below. The pure helpers
-    # (next_context / slice_block_output / equal_power_weights / overlap_add)
+    # (next_context / equal_power_weights / overlap_add)
     # don't need these, so keeping the imports under TYPE_CHECKING (rather
     # than module-level) still lets this module import on a CPU machine
     # without torch/onnxruntime/the rvc extra.
@@ -43,23 +43,6 @@ def next_context(seq, context_len: int):
     if context_len <= 0:
         return seq[:0]
     return seq[max(0, len(seq) - context_len) :]
-
-
-def slice_block_output(out, block_len: int, seq_len: int):
-    """`out` のうち、直近ブロック相当(末尾 block_len/seq_len)の区間。
-
-    infer は `[context|block]` 全体の波形を返すので、ブロック相当の末尾だけ
-    採用する。これは crossfade 無効時(`crossfade_len=0`)の経路で、比率で
-    切り出す近似。シーム整列(等電力クロスフェード + SOLA)は
-    `_emit_with_crossfade` が行う。
-    `block_out >= len(out)` のときは `out` 全体を返す(clamp)。
-    """
-    if block_len <= 0:
-        return out
-    block_out = round(len(out) * block_len / seq_len)
-    if block_out <= 0:
-        return out
-    return out[max(0, len(out) - block_out) :]
 
 
 def equal_power_weights(n: int) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
@@ -165,11 +148,11 @@ class StreamingVc:
         self.crossfade_len = crossfade_len
         # SOLA 探索半幅(16kHz 入力サンプル)。0 で SOLA 無効 = 固定位置の従来挙動。
         self.sola_search_len = sola_search_len
-        # crossfade の出力域長(hop / crossfade / SOLA 探索半幅 / context 境界)は
-        # 「実際の decoder 出力長 out.shape[0]」から比率導出する(slice_block_output と
-        # 同じ思想)。target_sr 固定比率だと p_len の window 切り捨てで実出力が短いとき
-        # seam に zero-pad が混じる。out.shape[0] は seq shape 固定なので warmup 後は
-        # 毎tick一定 → 初回 emit で算出しキャッシュする。
+        # crossfade の出力域長(hop / crossfade / SOLA 探索半幅)は実時間クロック
+        # (`* target_sample_rate / 16000`)から導く。描画長 out.shape[0] からの比率
+        # 導出は HuBERT の受容野ぶん(約 320 入力サンプル)短く出て sink を飢えさせる。
+        # 読み出し位置だけは out.shape[0] からの逆算(末尾アンカー)を維持し、
+        # 切り詰められた末尾を避ける。長さは毎tick一定 → 初回 emit で算出しキャッシュ。
         self._xfade_cache: (
             tuple[int, int, int, NDArray[np.float32], NDArray[np.float32]] | None
         ) = None
@@ -262,15 +245,23 @@ class StreamingVc:
         self._context = next_context(seq, self.context_len).detach()
         if self.crossfade_len > 0:
             return self._emit_with_crossfade(out)
-        return slice_block_output(out, self.block_len, seq.shape[0])
+        # crossfade 無効時も長さは実時間クロック由来。描画長からの比率導出は
+        # HuBERT の受容野ぶん(約 320 入力サンプル)短く出て sink を飢えさせる。
+        # 位置は末尾アンカーのままなので、切り詰められた末尾は避けられる。
+        out_hop = round(self.block_len * self.target_sample_rate / 16000)
+        return out[-out_hop:] if out.shape[0] >= out_hop else out
 
     def _emit_with_crossfade(self, out: NDArray[np.int16]) -> NDArray[np.int16]:
-        """SOLA で位相を合わせてから等電力 overlap-add し、hop 相当ちょうどを返す。
+        """SOLA で位相を合わせてから等電力 overlap-add し、実時間 hop ちょうどを返す。
 
-        出力域の長さ(hop / crossfade / SOLA 探索半幅 / context 境界)は「実際の
-        decoder 出力長 out.shape[0]」から比率導出する(slice_block_output と同じ思想)。
-        out.shape[0] は seq shape 固定なので warmup 後は毎tick一定 → 初回に算出して
-        キャッシュ。
+        出力域の長さ(hop / crossfade / SOLA 探索半幅)は**実時間クロック**から導く
+        (`block_len * target_sample_rate / 16000` など)。描画長 out.shape[0] からの
+        比率導出は誤りで、HuBERT の受容野が末尾を一定量(約 320 入力サンプル)切り
+        詰めるぶんだけ hop が短くなり、sink を永続的に飢えさせる(実測 3.03% =
+        30.3ms/s)。長さは shape 固定なら毎tick一定なので初回に算出してキャッシュ。
+
+        一方、**読み出し位置は out_total からの逆算(末尾アンカー)**のまま。これに
+        より切り詰められた末尾は自然に避けられる。
 
         前 tick が emit 末尾 out_xf を `_output_tail` に保持しており、今 tick はそれと
         同じ入力時刻を再描画した区間を等電力ブレンドして emit 先頭にする(seam の真の
@@ -283,7 +274,8 @@ class StreamingVc:
 
         index 不変量:
 
-        - emit 長は常にちょうど out_hop(= 入力 hop と同レート、ドリフト無し)。
+        - emit 長は常にちょうど out_hop = `block_len * target_sample_rate / 16000`
+          (= 入力 hop を sink のサンプルレートへ写した実時間長。ドリフト無し)。
           lag は「どこから読むか」だけを変え、「どれだけ出すか」は変えない。
         - 触れる最大 index は
           `start + out_hop + out_xf <= (nominal + out_sola) + out_hop + out_xf
@@ -293,19 +285,31 @@ class StreamingVc:
         - `out_sola == 0` のときは `start == nominal == out_total - out_hop - out_xf`
           で、SOLA 導入前と完全に同一のサンプルを出す。
 
-        代償は out_sola サンプル分のアルゴリズム遅延(読み出し位置を探索半幅だけ
-        手前へずらすため)。
+        アルゴリズム遅延は out_sola サンプル(読み出し位置を探索半幅だけ手前へ
+        ずらすため)に加え、HuBERT の受容野による末尾切り詰めぶん(約 320 入力
+        サンプル = 20ms)が乗る。どちらも emit 長には影響しない。
         """
         import numpy as np
 
         out_total = out.shape[0]
         if self._xfade_cache is None:
-            seq_len = self.context_len + self.block_len
-            out_hop = round(out_total * self.block_len / seq_len)
-            out_xf = round(out_total * self.crossfade_len / seq_len)
+            r = self.target_sample_rate
+            # 長さは実時間クロックから導く。out_total からの比率で出すと、HuBERT の
+            # 受容野で末尾が一定量(約 320 入力サンプル)切り詰められるぶんだけ hop が
+            # 短くなり、出力デバイスを永続的に飢えさせる(実測 3.03% = 30.3ms/s)。
+            # 読み出し位置は従来どおり out_total からの逆算(末尾アンカー)なので、
+            # 切り詰められた末尾は自然に避けられる。
+            out_hop = round(self.block_len * r / 16000)
+            out_xf = round(self.crossfade_len * r / 16000)
+            out_sola = round(self.sola_search_len * r / 16000)
+            if out_total < out_hop:
+                raise ValueError(
+                    f"decoder output ({out_total}) < one hop ({out_hop}): "
+                    "context_ms が短すぎる(HuBERT の受容野ぶん実効長が縮む)。"
+                    "context_ms を増やすこと。"
+                )
             # crossfade 帯は hop 以下 かつ context 区間(out_total-out_hop)以下に抑える
             out_xf = min(out_xf, out_hop, out_total - out_hop)
-            out_sola = round(out_total * self.sola_search_len / seq_len)
             # nominal - out_sola >= 0 を保証(探索窓が出力の先頭を割らない)
             out_sola = max(0, min(out_sola, (out_total - out_hop - out_xf) // 2))
             fade_in, fade_out = equal_power_weights(out_xf)

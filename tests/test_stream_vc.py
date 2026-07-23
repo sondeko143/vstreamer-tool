@@ -5,7 +5,6 @@ import numpy as np
 import pytest
 
 from vspeech.lib.stream_vc import next_context
-from vspeech.lib.stream_vc import slice_block_output
 
 
 def test_next_context_returns_tail():
@@ -18,33 +17,75 @@ def test_next_context_zero_is_empty():
     assert len(next_context(seq, 0)) == 0
 
 
-def test_slice_block_output_takes_block_tail():
-    out = np.arange(10)
-    # block is last block_len/seq_len = 2/10 of the sequence -> last 2 output samples
-    assert list(slice_block_output(out, block_len=2, seq_len=10)) == [8, 9]
-
-
-def test_slice_block_output_rounds_proportionally():
-    out = np.arange(100)
-    # 40 / (200+40) of 100 -> round(16.67) = 17
-    assert len(slice_block_output(out, block_len=40, seq_len=240)) == 17
-
-
 def test_next_context_clamps_when_longer_than_seq():
     # context_len > len(seq): return the whole buffer (not a negative-index slice)
     seq = np.arange(3)
     assert list(next_context(seq, 5)) == [0, 1, 2]
 
 
-def test_slice_block_output_block_len_zero_returns_all():
-    out = np.arange(10)
-    assert list(slice_block_output(out, block_len=0, seq_len=10)) == list(range(10))
+def _bare_streaming_vc(
+    *,
+    block_len: int = 2560,
+    context_len: int = 8000,
+    crossfade_len: int = 400,
+    sola_search_len: int = 80,
+    target_sample_rate: int = 48000,
+):
+    """モデル/GPU 無しで `_emit_with_crossfade` だけを駆動する StreamingVc。
+
+    `__init__` は torch / rvc extra を要求するので、必要な属性だけ手で埋めた
+    素のインスタンスを作る(CPU のみで emit 長の契約を固定するため)。
+    """
+    from vspeech.lib.stream_vc import StreamingVc
+
+    sv = object.__new__(StreamingVc)
+    sv.block_len = block_len
+    sv.context_len = context_len
+    sv.crossfade_len = crossfade_len
+    sv.sola_search_len = sola_search_len
+    sv.target_sample_rate = target_sample_rate
+    sv._xfade_cache = None
+    sv._output_tail = None
+    return sv
 
 
-def test_slice_block_output_clamps_when_block_exceeds_seq():
-    # block_len > seq_len: clamp to the whole output, not a negative-index slice
-    out = np.arange(100)
-    assert list(slice_block_output(out, block_len=300, seq_len=240)) == list(range(100))
+def test_emit_with_crossfade_hop_is_realtime_clock_not_render_ratio():
+    """emit 長は実時間クロック(block_len*sr/16000)ちょうどで、描画長に依存しない。
+
+    描画長からの比率導出(out_total * block_len / seq_len)だと、HuBERT の受容野が
+    末尾を一定量(約 320 入力サンプル)切り詰めるぶんだけ hop が短くなり、出力
+    デバイスを永続的に飢えさせる(実測 3.03% = 30.3ms/s)。GPU 無しで実値を固定する
+    回帰テスト。「毎tick同じ長さ」だけでは一定だが誤った値を素通しするので、
+    実値と「out_total 非依存」の両方を assert する。
+    """
+    block_len, sr = 2560, 48000
+    seq_len = 8000 + block_len
+    expected = round(block_len * sr / 16000)
+    assert expected == 7680
+
+    # 切り詰め無しの理想長と、実機で実際に返ってくる長さ(受容野ぶん短い)。
+    ideal_total = round(seq_len * sr / 16000)
+    truncated_total = round((seq_len - 320) * sr / 16000)
+    assert ideal_total != truncated_total
+
+    lengths: list[int] = []
+    for out_total in (ideal_total, truncated_total):
+        sv = _bare_streaming_vc(block_len=block_len, target_sample_rate=sr)
+        out = np.arange(out_total, dtype=np.int16)
+        emitted = [sv._emit_with_crossfade(out).shape[0] for _ in range(4)]
+        assert len(set(emitted)) == 1  # tick 間で一定 = レートロック
+        lengths.append(emitted[0])
+
+    # 実値ちょうど、かつ描画長 out_total に依存しない(← バグを捕まえる assert)
+    assert lengths == [expected, expected]
+
+
+def test_emit_with_crossfade_raises_when_output_shorter_than_hop():
+    """描画長が 1 hop に満たないときは黙って短く出さず、原因を言って落ちる。"""
+    sv = _bare_streaming_vc()
+    out = np.arange(4000, dtype=np.int16)  # < hop(7680)
+    with pytest.raises(ValueError, match="context_ms"):
+        sv._emit_with_crossfade(out)
 
 
 def test_helpers_work_on_torch_tensors():
@@ -55,8 +96,6 @@ def test_helpers_work_on_torch_tensors():
     seq = torch.arange(5)
     assert next_context(seq, 2).tolist() == [3, 4]
     assert next_context(seq, 0).numel() == 0
-    out = torch.arange(10)
-    assert slice_block_output(out, block_len=2, seq_len=10).tolist() == [8, 9]
 
 
 _CONFIG_ENV = "VSPEECH_RVC_GOLDEN_CONFIG"
@@ -151,10 +190,14 @@ def test_streaming_vc_crossfade_rate_locked_and_finite():
     outs = [
         sv.process_block(signal[i * block_len : (i + 1) * block_len]) for i in range(3)
     ]
-    # Rate-lock invariant: emit length is derived from the actual (stable)
-    # decoder output length, so every tick emits the same count -> no drift.
-    # SOLA only moves *where* we read, never *how much* we emit, so this must
-    # hold with the search window on as well.
+    # Rate-lock invariant: emit length is the real-time hop derived from the
+    # sample-rate clock, so every tick emits exactly one hop -> no drift and no
+    # starvation. SOLA only moves *where* we read, never *how much* we emit, so
+    # this must hold with the search window on as well. Assert the real value,
+    # not just equality: a constant-but-short hop (the render-ratio bug) also
+    # passes an all-equal check while starving the sink.
+    expected = round(block_len * rt["target_sample_rate"] / 16000)
+    assert outs[0].shape[0] == expected
     lengths = {out.shape[0] for out in outs}
     assert len(lengths) == 1  # all equal -> rate-locked, no drift
     for out in outs:
