@@ -149,10 +149,10 @@ class _FakeStreamingVc:
         self.warmed = 0
         self.resets = 0
 
-    def warmup(self, n: int = 3) -> None:
+    def warmup(self, _n: int = 3) -> None:
         self.warmed += 1
 
-    def process_block(self, block):
+    def process_block(self, _block):
         return _VC_OUT.copy()
 
     def _reset_context(self) -> None:
@@ -209,7 +209,7 @@ async def _run_vc_loop(monkeypatch, sv_config, vad_session, n_blocks: int):
         },
     )
     monkeypatch.setattr(
-        runner_mod, "make_streaming_vc", lambda rt, cfg: _FakeStreamingVc()
+        runner_mod, "make_streaming_vc", lambda _rt, _cfg: _FakeStreamingVc()
     )
 
     ramp_calls: list[float] = []
@@ -264,7 +264,7 @@ async def test_gate_enabled_attenuates_silent_blocks(monkeypatch):
         vad_gate=True, vad_hangover_ms=0.0, vad_min_gain=0.0, block_ms=160.0
     )
     monkeypatch.setattr(
-        "vspeech.lib.vad.speech_probs", lambda session, audio: np.zeros(5)
+        "vspeech.lib.vad.speech_probs", lambda _session, _audio: np.zeros(5)
     )
     transport, ramp_calls = await _run_vc_loop(monkeypatch, sv, object(), 2)
     assert ramp_calls == [0.0, 0.0]  # 目標ゲインは min_gain
@@ -281,7 +281,7 @@ async def test_gate_open_on_speech_is_bit_identical(monkeypatch):
 
     sv = StreamVcConfig(vad_gate=True)
     monkeypatch.setattr(
-        "vspeech.lib.vad.speech_probs", lambda session, audio: np.full(5, 0.99)
+        "vspeech.lib.vad.speech_probs", lambda _session, _audio: np.full(5, 0.99)
     )
     transport, ramp_calls = await _run_vc_loop(monkeypatch, sv, object(), 2)
     assert ramp_calls == [1.0, 1.0]
@@ -297,7 +297,7 @@ async def test_gate_failure_is_fail_open_and_warns_once(monkeypatch, caplog):
 
     sv = StreamVcConfig(vad_gate=True)
 
-    def boom(session, audio):
+    def boom(_session, _audio):
         raise RuntimeError("vad exploded")
 
     monkeypatch.setattr("vspeech.lib.vad.speech_probs", boom)

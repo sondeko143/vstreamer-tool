@@ -96,7 +96,7 @@ async def test_first_open_failure_is_fail_loud():
     def open_stream() -> _FakeStream:
         raise OSError("no such device")
 
-    async def run(stream: _FakeStream) -> None:
+    async def run(_stream: _FakeStream) -> None:
         raise AssertionError("run should not be reached")
 
     with pytest.raises(WorkerStartupError):
@@ -118,7 +118,7 @@ async def test_non_device_error_propagates_without_retry():
         opened.append(s)
         return s
 
-    async def run(stream: _FakeStream) -> None:
+    async def run(_stream: _FakeStream) -> None:
         raise ValueError("bug")
 
     with pytest.raises(ValueError):
