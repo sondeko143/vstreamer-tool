@@ -804,15 +804,12 @@ from vspeech.exceptions import shutdown_worker
 from vspeech.exceptions import worker_startup
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
-from vspeech.stream_vc.capture import ms_to_samples
 from vspeech.stream_vc.jitter import JitterBuffer
 from vspeech.stream_vc.jitter import PopKind
-from vspeech.stream_vc.playback import DROP_LOG_EVERY  # noqa: F401 (kept for parity)
-from vspeech.stream_vc.playback import close_quietly
-from vspeech.stream_vc.playback import detect_gap
 from vspeech.stream_vc.playback import open_stream_vc_output_stream
 from vspeech.stream_vc.playback import should_log_gap
 from vspeech.stream_vc.playback import should_log_underflow
+from vspeech.stream_vc.retry import close_quietly
 from vspeech.stream_vc.transport import Transport
 
 
@@ -831,7 +828,6 @@ async def network_playback_loop(config: StreamVcConfig, transport: Transport) ->
     logger.info("stream_vc consumer jitter buffer depth: %d block(s)", target_depth)
     stream: sd.RawOutputStream | None = None
     session: str | None = None
-    prev_seq: int | None = None
     prev_recv: float | None = None
     started = False
     underflow_count = 0
@@ -890,8 +886,6 @@ async def network_playback_loop(config: StreamVcConfig, transport: Transport) ->
                 if stream is not None:
                     close_quietly(stream)
                 stream = None
-            prev_seq = packet.seq  # observed newest arrival (telemetry continuity)
-            _ = prev_seq
     except CancelledError as e:
         raise shutdown_worker(e)
     finally:
@@ -899,7 +893,7 @@ async def network_playback_loop(config: StreamVcConfig, transport: Transport) ->
             close_quietly(stream)
 ```
 
-> Note on gap accounting: producer-side `seq` gaps (packets the producer dropped before send) are surfaced by the `JitterBuffer` at pop time as `CONCEAL`/`gap`, which is the single authority here — do **not** also diff `packet.seq` against `prev_seq` on arrival, or reordered arrivals would double-count. `detect_gap` stays imported only for the local `playback.py` path.
+> Note on gap accounting: producer-side `seq` gaps (packets the producer dropped before send) are surfaced by the `JitterBuffer` at pop time as `CONCEAL`/`gap`, which is the single authority here — do **not** also diff `packet.seq` against a previous seq on arrival, or reordered arrivals would double-count. (`detect_gap` in `playback.py` is used only by the local M2 path; the consumer does not import it.)
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -965,7 +959,7 @@ Expected: FAIL (`ImportError: cannot import name 'loops_for_role'`). The torch-f
 
 - [ ] **Step 3: Implement the role wiring**
 
-Rewrite the body of `_stream_vc_subsystem` in `vspeech/stream_vc/subsystem.py` to branch on role. Keep the existing `_iter_leaves` and the `except CancelledError / except BaseExceptionGroup` handling verbatim — only the transport construction and `tg.create_task` set change:
+Rewrite the body of `_stream_vc_subsystem` in `vspeech/stream_vc/subsystem.py` to branch on role. Keep the existing `_iter_leaves` and the `except CancelledError / except BaseExceptionGroup` handling verbatim — only the transport construction and `tg.create_task` set change. Add the module-level imports these use: `from vspeech.config import StreamVcRole`, `from vspeech.exceptions import worker_startup` (the current module does not import `worker_startup`). `Queue`, `Event`, `Any`, `uuid4`, `shutdown_worker`, `TaskGroup` are already imported. (`TransportType` is not needed here — the factory branches on role.)
 
 ```python
 from vspeech.config import StreamVcRole
@@ -982,12 +976,15 @@ def loops_for_role(role: StreamVcRole) -> frozenset[str]:
 
 
 async def _build_transport(sv_config):
-    """role/transport_type から transport を作る。UDP endpoint 生成は async。
+    """role から transport を作る。UDP endpoint 生成は async。
 
     bind/接続失敗は worker_startup で fail-loud(設定不備を隠さない, ADR-0038)。
+    role=producer/consumer で transport_type が udp でない設定は preflight で弾く
+    (role≠local ⇒ udp 必須)。2 つ目の網 transport(TCP/bidi)が来たら、下の
+    producer/consumer の中で transport_type を見て分岐する。
     """
     role = sv_config.role
-    if role is StreamVcRole.local or sv_config.transport_type is TransportType.in_process:
+    if role is StreamVcRole.local:
         from vspeech.stream_vc.transport import InProcessTransport
 
         return InProcessTransport(max_queued=sv_config.max_queued_blocks)
@@ -1107,6 +1104,13 @@ def test_producer_requires_peer_and_input_not_output():
     fields = _fields(collect_problems(cfg))
     assert "stream_vc.peer_port" in fields
     assert "stream_vc.output_device_index" not in fields
+
+
+def test_non_local_role_requires_udp_transport():
+    cfg = Config.model_validate(
+        {"stream_vc": {"enable": True, "role": "consumer"}}  # transport defaults in_process
+    )
+    assert "stream_vc.transport_type" in _fields(collect_problems(cfg))
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1160,6 +1164,12 @@ def _check_stream_vc(config: Config) -> list[ConfigProblem]:
         except DeviceNotFoundError as e:
             problems.append(ConfigProblem(w, str(e), field="stream_vc.output_device_index"))
 
+    # role≠local は網 transport が要る。in_process のままだと vc の送信を誰も受けず
+    # 全ブロックが黙って drop される(silent misconfig)ので fail-loud で弾く。
+    if role is not StreamVcRole.local and sv.transport_type is not TransportType.udp:
+        problems.append(ConfigProblem(
+            w, "role=producer/consumer は transport_type=udp が必須です",
+            field="stream_vc.transport_type"))
     # UDP なら role ごとにアドレスが要る。in_process(local)は不要。
     if sv.transport_type is TransportType.udp:
         if role is StreamVcRole.producer and not (sv.peer_host and sv.peer_port):
