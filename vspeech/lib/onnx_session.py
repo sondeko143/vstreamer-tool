@@ -3,6 +3,10 @@
 RVC decoder / HuBERT content encoder / RMVPE がここを通る。ここ以外で組み立てないこと。
 複製すると execution provider の選択が片方でしか直らない。`tests/test_onnx_session.py`
 が検査する。CPU 固定の Silero VAD (`vad.py`) だけが例外。
+
+`log_severity` は ORT のログ閾値 (0=VERBOSE / 1=INFO / 2=WARNING(既定) / 3=ERROR /
+4=FATAL)。既定 None ならセッション既定のまま。特定モデルが良性の警告を毎推論吐く場合
+だけ呼び出し側で上げる。
 """
 
 from pathlib import Path
@@ -14,13 +18,17 @@ from onnxruntime import InferenceSession
 from onnxruntime import SessionOptions
 
 
-def create_session(model_file: Path, device: torch.device) -> InferenceSession:
+def create_session(
+    model_file: Path, device: torch.device, log_severity: int | None = None
+) -> InferenceSession:
     """`device` を尊重してセッションを開く。
 
     `torch.device("cuda")` は `index` が `None` になる。ORT には 0 を渡すこと。
     """
     sess_options = SessionOptions()
     sess_options.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
+    if log_severity is not None:
+        sess_options.log_severity_level = log_severity
     providers = ["CPUExecutionProvider"]
     providers_options: list[dict[str, Any]] = [{}]
     if device.type == "cuda" and torch.cuda.is_available():

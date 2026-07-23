@@ -31,6 +31,9 @@ if TYPE_CHECKING:
 
     from vspeech.lib.stream_vc import StreamingVc
 
+# ORT のログ閾値: 0=VERBOSE / 1=INFO / 2=WARNING(既定) / 3=ERROR / 4=FATAL
+_ORT_LOG_ERROR = 3
+
 
 def make_stream_packet(
     session_id: str, seq: int, hop_seconds: float, pcm: bytes, sample_rate: int
@@ -75,10 +78,22 @@ def build_stream_vc_runtime(sv_config: StreamVcConfig) -> dict[str, Any]:
         file_name=rvc.hubert_model_file, device=device, is_half=half_available
     )
     session = create_session(rvc.model_file, device)
+    # f0 セッションだけ ORT の警告を落とす。fcpe.onnx (poe export-fcpe-onnx, ADR-0049) は
+    # torchfcpe を dynamic_axes 付きでトレースした都合で中間ノード /bundled/Squeeze_1 の
+    # 推論 rank が実際と食い違い、ORT が VerifyOutputSizes 警告を **毎推論** stdout に出す。
+    # 良性(実 shape で確保され f0 は正しい)だが streaming では ~6 行/秒になり、ログと
+    # GUI が読む stdout パイプを埋める。グラフ側の修正は torchfcpe のトレース由来なので
+    # graph surgery か上流パッチが要り、割に合わない (M1 の surgery spike の教訓)。
+    # 代償: この f0 セッション固有の ORT 警告 (provider fallback 等) も見えなくなる。
+    # f0 が CPU に落ちた場合は `poe stream-vc-rtf` の per-block RTF で検知できる。
     if rvc.f0_extractor_type == F0ExtractorType.rmvpe:
-        f0_session = create_session(rvc.rmvpe_model_file, device)
+        f0_session = create_session(
+            rvc.rmvpe_model_file, device, log_severity=_ORT_LOG_ERROR
+        )
     elif rvc.f0_extractor_type == F0ExtractorType.fcpe:
-        f0_session = create_session(rvc.fcpe_model_file, device)
+        f0_session = create_session(
+            rvc.fcpe_model_file, device, log_severity=_ORT_LOG_ERROR
+        )
     else:
         f0_session = None
     modelmeta: Any = session.get_modelmeta()
