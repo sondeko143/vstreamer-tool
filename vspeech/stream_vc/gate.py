@@ -58,6 +58,16 @@ class StreamingVadGate:
         # 起動直後の発話頭が ramp で欠ける)。
         self._gain = 1.0
 
+    def reset(self) -> None:
+        """hangover 予算と直前ゲインを構築直後(開いた状態・hangover 空)へ戻す。
+
+        pause/resume で実時間が飛んだあと、pause 前の hangover 残量やゲインが漏れて
+        resume 直後のブロックを妙に減衰/保持させないため、runner が resume 遷移で
+        呼ぶ。`warned`(fail-open 警告の重複抑止)は障害状態なので触らない。
+        """
+        self._hangover_remaining_ms = 0.0
+        self._gain = 1.0
+
     def speech_from_probs(self, probs: NDArray[np.float64]) -> bool:
         """ブロック内の窓確率の **max** を threshold と比較する。
 

@@ -120,6 +120,19 @@ def test_ramp_handles_empty_block():
     assert out.shape[0] == 0
 
 
+def test_reset_restores_open_and_empty_hangover_but_keeps_warned():
+    """reset() は構築直後(開いた状態・hangover 空)へ戻すが、warned は触らない。"""
+    g = _gate(hangover_ms=300.0, block_ms=100.0, min_gain=0.0)
+    g.update(True)
+    g.update(False)
+    g._gain = 0.3
+    g.warned = True
+    g.reset()
+    assert g._gain == 1.0
+    assert g._hangover_remaining_ms == 0.0
+    assert g.warned is True  # fail-open の障害フラグは保持
+
+
 # --- vc_loop の配線 ---------------------------------------------------------
 #
 # 実モデル/GPU を読まずに vc_loop を回すため build_stream_vc_runtime と
@@ -134,12 +147,16 @@ class _FakeStreamingVc:
 
     def __init__(self) -> None:
         self.warmed = 0
+        self.resets = 0
 
     def warmup(self, n: int = 3) -> None:
         self.warmed += 1
 
     def process_block(self, block):
         return _VC_OUT.copy()
+
+    def _reset_context(self) -> None:
+        self.resets += 1
 
 
 class _FakeSession:
@@ -157,6 +174,14 @@ class _CollectTransport(Transport):
 
     async def recv(self) -> StreamPacket:  # pragma: no cover - vc_loop は使わない
         raise NotImplementedError
+
+
+def _context():
+    """running が set(= 非 pause)な最小 SharedContext。"""
+    from vspeech.config import Config
+    from vspeech.shared_context import SharedContext
+
+    return SharedContext(config=Config())
 
 
 async def _run_vc_loop(monkeypatch, sv_config, vad_session, n_blocks: int):
@@ -201,7 +226,7 @@ async def _run_vc_loop(monkeypatch, sv_config, vad_session, n_blocks: int):
         in_queue.put_nowait(np.zeros(2560, dtype=np.float32))
     transport = _CollectTransport()
     task = asyncio.create_task(
-        runner_mod.vc_loop(sv_config, in_queue, transport, "sess", Event())
+        runner_mod.vc_loop(_context(), sv_config, in_queue, transport, "sess", Event())
     )
     for _ in range(2000):
         await asyncio.sleep(0)
@@ -283,3 +308,85 @@ async def test_gate_failure_is_fail_open_and_warns_once(monkeypatch, caplog):
         assert p.pcm == _VC_OUT.tobytes()  # 素通し(1.0 -> 1.0 は恒等の高速路)
     warnings = [r for r in caplog.records if "vad gate failed" in r.getMessage()]
     assert len(warnings) == 1
+
+
+# --- pause/resume ゲート(COMMIT 2) -----------------------------------------
+#
+# vc_loop は Command routing の外だが context.running を尊重する。実モデルを
+# 差し替えて、pause 中は消費/変換が止まり、resume で _reset_context が呼ばれる
+# ことを CPU で検証する。
+
+
+def _patch_runtime(monkeypatch, fake):
+    from vspeech.stream_vc import runner as runner_mod
+
+    monkeypatch.setattr(
+        runner_mod,
+        "build_stream_vc_runtime",
+        lambda cfg: {
+            "rvc_config": cfg.rvc,
+            "device": None,
+            "hubert_model": None,
+            "session": _FakeSession(),
+            "f0_session": None,
+            "vad_session": None,
+            "target_sample_rate": 40000,
+            "f0_enabled": True,
+            "emb_output_layer": 9,
+            "use_final_proj": True,
+        },
+    )
+    monkeypatch.setattr(runner_mod, "make_streaming_vc", lambda rt, cfg: fake)
+    return runner_mod
+
+
+async def test_pause_stops_consuming_and_resets_on_resume(monkeypatch):
+    """pause 中は vc_loop がブロックを変換せず、resume で _reset_context を 1 回呼ぶ。"""
+    import asyncio
+    from asyncio import Event
+    from asyncio import Queue
+
+    from vspeech.config import Config
+    from vspeech.config import StreamVcConfig
+    from vspeech.shared_context import SharedContext
+
+    fake = _FakeStreamingVc()
+    runner_mod = _patch_runtime(monkeypatch, fake)
+
+    context = SharedContext(config=Config())  # 既定で running.set()
+    sv = StreamVcConfig()
+    in_queue: Queue = Queue()
+    transport = _CollectTransport()
+    ready = Event()
+    task = asyncio.create_task(
+        runner_mod.vc_loop(context, sv, in_queue, transport, "sess", ready)
+    )
+    # 起動(warmup, to_thread)完了まで待つ。
+    await asyncio.wait_for(ready.wait(), timeout=5)
+
+    # pause して 3 ブロック投入。ループは block0 を get したところで running.wait()
+    # に park する(process_block/send はしない)。
+    context.running.clear()
+    for _ in range(3):
+        in_queue.put_nowait(np.zeros(2560, dtype=np.float32))
+    for _ in range(50):
+        await asyncio.sleep(0)
+    assert transport.packets == []  # paused: 一切変換していない
+    assert in_queue.qsize() == 2  # block0 だけ消費して park(stale は resume で捨てる)
+    assert fake.resets == 0
+
+    # resume: park していた wait() が返り _reset_context → continue で block0 は捨て、
+    # block1/block2 を変換する。
+    context.running.set()
+    for _ in range(2000):
+        await asyncio.sleep(0)
+        if len(transport.packets) >= 2:
+            break
+    assert fake.resets == 1  # resume 遷移で 1 回だけ
+    assert len(transport.packets) == 2  # stale block0 は drop、block1/block2 のみ
+
+    task.cancel()
+    try:
+        await task
+    except BaseException:
+        pass

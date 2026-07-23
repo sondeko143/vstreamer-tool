@@ -39,7 +39,9 @@ async def _stream_vc_subsystem(context: SharedContext) -> None:
                 name="stream_vc_capture",
             )
             tg.create_task(
-                vc_loop(sv_config, capture_queue, transport, session_id, vc_ready),
+                vc_loop(
+                    context, sv_config, capture_queue, transport, session_id, vc_ready
+                ),
                 name="stream_vc_runner",
             )
             tg.create_task(

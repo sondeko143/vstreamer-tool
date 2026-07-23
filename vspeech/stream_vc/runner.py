@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
     from vspeech.lib.stream_vc import StreamingVc
+    from vspeech.shared_context import SharedContext
     from vspeech.stream_vc.gate import StreamingVadGate
 
 # ORT のログ閾値: 0=VERBOSE / 1=INFO / 2=WARNING(既定) / 3=ERROR / 4=FATAL
@@ -180,13 +181,19 @@ def make_streaming_vc(rt: dict[str, Any], sv_config: StreamVcConfig) -> Streamin
 
 
 async def vc_loop(
+    context: SharedContext,
     sv_config: StreamVcConfig,
     in_queue: Queue[NDArray[np.float32]],
     transport: Transport,
     session_id: str,
     ready: Event,
 ) -> None:
-    """capture ブロックを変換し StreamPacket として transport へ送る。"""
+    """capture ブロックを変換し StreamPacket として transport へ送る。
+
+    サブシステムは Command routing の外だが、発話系と同じ全体停止ゲート
+    `context.running` は尊重する:pause 中は消費/変換を止め、capture の
+    drop_oldest_put が backlog を捨てるので paused 音声は溜まらない(ADR-0050)。
+    """
     with worker_startup("stream_vc"):
         # check_cuda_provider は worker/vc.py の pure helper を import 再利用
         # (relocate は vc.py 編集=非ゴール違反ゆえ不可; ADR-0050/0053 の内部部品
@@ -227,6 +234,20 @@ async def vc_loop(
     try:
         while True:
             block = await in_queue.get()
+            # 全体停止ゲート(発話系 worker/playback.py と同じ idiom)。paused の間は
+            # 消費/変換を止める — capture は回り続け drop_oldest_put が backlog を
+            # 捨てるので paused 音声は溜まらない。get() 済みの block は pause 前後の
+            # stale なものなので、resume 後は捨てて次の fresh block から始める。
+            if not context.running.is_set():
+                await context.running.wait()
+                # not-set -> set の遷移(= resume)。実時間が飛んでいるので rolling
+                # 文脈/クロスフェード tail(_reset_context)と VAD ゲートを捨て、
+                # 最初の post-resume block を pre-pause の尾ではなく無音から fade-in
+                # させる。
+                sv._reset_context()
+                if gate is not None:
+                    gate.reset()
+                continue
             # ゲート判定は input_boost **前**の素のブロックで行う(ブースト後の
             # 見かけのレベルではなく実際のマイクレベルで判定する)。
             target_gain = 1.0
