@@ -385,6 +385,13 @@ class RvcConfig(BaseModel):
 
 class TransportType(Enum):
     in_process = "in_process"
+    udp = "udp"
+
+
+class StreamVcRole(Enum):
+    local = "local"  # M2: capture+vc+playback in one process (default, unchanged)
+    producer = "producer"  # capture + vc + UDP send (GPU host)
+    consumer = "consumer"  # UDP recv + jitter buffer + playback (no torch/GPU)
 
 
 class StreamVcConfig(BaseModel):
@@ -489,6 +496,31 @@ class StreamVcConfig(BaseModel):
     transport_type: TransportType = Field(default=TransportType.in_process)
     max_queued_blocks: int = Field(
         default=8, gt=0, description="capture/transport の上限。満杯で最古を drop"
+    )
+    role: StreamVcRole = Field(
+        default=StreamVcRole.local,
+        description="local=M2 単一プロセス(既定)。producer=capture+vc+送信。"
+        "consumer=受信+jitter buffer+再生(GPU/torch 不要)。ADR-0055",
+    )
+    # producer: 送信先。consumer: 待受。role=local では未使用。
+    peer_host: str | None = Field(
+        default=None, description="producer の送信先ホスト(consumer の bind と一致)"
+    )
+    peer_port: int | None = Field(
+        default=None, gt=0, le=65535, description="producer の送信先ポート"
+    )
+    bind_host: str = Field(
+        default="0.0.0.0", description="consumer の待受ホスト(既定 全 IF)"
+    )
+    bind_port: int | None = Field(
+        default=None, gt=0, le=65535, description="consumer の待受ポート"
+    )
+    jitter_buffer_ms: float = Field(
+        default=0.0,
+        ge=0,
+        description="consumer のジッタバッファ深さ ms。深さ=付加遅延なので既定は"
+        "浅く保ち、実測ジッタから最小に詰める(ADR-0056)。round(jitter_buffer_ms/"
+        "block_ms) ブロックを prebuffer してから再生を始める",
     )
 
 
