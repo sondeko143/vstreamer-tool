@@ -69,6 +69,10 @@ async def vspeech_coro(config: Config):
                 from vspeech.worker.vc import create_vc_task
 
                 create_vc_task(tg=tg, context=context)
+            if config.stream_vc.enable:
+                from vspeech.stream_vc.subsystem import create_stream_vc_task
+
+                create_stream_vc_task(tg=tg, context=context)
     except* WorkerStartupError as eg:
         for e in eg.exceptions:
             logger.error("worker startup failed: %s", e)
