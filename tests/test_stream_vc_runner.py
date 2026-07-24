@@ -1,4 +1,13 @@
+from vspeech.config import StreamVcConfig
+from vspeech.stream_vc.runner import make_stream_envelope
 from vspeech.stream_vc.runner import make_stream_packet
+
+
+def test_make_stream_envelope_gated_by_flag():
+    assert make_stream_envelope(StreamVcConfig()) is None  # default off
+    env = make_stream_envelope(StreamVcConfig(envelope_follow=True))
+    assert env is not None
+    assert env.strength == 1.0
 
 
 def test_make_stream_packet_pts_is_seq_times_hop():

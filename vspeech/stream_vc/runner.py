@@ -80,6 +80,22 @@ def apply_input_boost(block, boost):
     return np.clip(block * boost, -1.0, 1.0).astype(np.float32)
 
 
+def make_stream_envelope(sv_config: StreamVcConfig):
+    """envelope_follow のとき StreamingEnvelope を作る (off なら None)。純関数。"""
+    if not sv_config.envelope_follow:
+        return None
+    from vspeech.stream_vc.envelope import StreamingEnvelope
+
+    return StreamingEnvelope(
+        strength=sv_config.envelope_strength,
+        min_gain=sv_config.envelope_min_gain,
+        max_gain=sv_config.envelope_max_gain,
+        window_ms=sv_config.envelope_window_ms,
+        ema_ms=sv_config.envelope_ema_ms,
+        block_ms=sv_config.block_ms,
+    )
+
+
 async def gate_target_gain(
     gate: StreamingVadGate, vad_session: Any, block: NDArray[np.float32]
 ) -> float:
@@ -242,6 +258,7 @@ async def vc_loop(
             min_gain=sv_config.vad_min_gain,
             block_ms=sv_config.block_ms,
         )
+    envelope = make_stream_envelope(sv_config)
     seq = 0
     consecutive_errors = 0
     vc_error_count = 0
@@ -258,6 +275,8 @@ async def vc_loop(
                 sv._reset_context()
                 if gate is not None:
                     gate.reset()
+                if envelope is not None:
+                    envelope.reset()
                 telemetry.record("stream_vc_capture_reopen_reset", 1.0)
                 continue
             # 全体停止ゲート(発話系 worker/playback.py と同じ idiom)。paused の間は
@@ -273,13 +292,17 @@ async def vc_loop(
                 sv._reset_context()
                 if gate is not None:
                     gate.reset()
+                if envelope is not None:
+                    envelope.reset()
                 continue
-            # ゲート判定は input_boost **前**の素のブロックで行う(ブースト後の
-            # 見かけのレベルではなく実際のマイクレベルで判定する)。
+            # ゲート/エンベロープ判定は input_boost **前**の素のブロックで行う
+            # (ブースト後の見かけのレベルではなく実際のマイクレベルで判定/整形する)。
+            # raw を保持してから boost する (boost==1.0 の identity fast-path でも安全)。
+            raw_block = block
             target_gain = 1.0
             if gate is not None:
-                target_gain = await gate_target_gain(gate, vad_session, block)
-            block = apply_input_boost(block, sv_config.rvc.input_boost)
+                target_gain = await gate_target_gain(gate, vad_session, raw_block)
+            block = apply_input_boost(raw_block, sv_config.rvc.input_boost)
             t0 = perf_counter()
             # transient GPU error(CUDA error / OOM 等)は torch/CUDA 由来の
             # RuntimeError(torch.cuda.OutOfMemoryError も RuntimeError 派生)で
@@ -329,6 +352,10 @@ async def vc_loop(
             # 毎 drop 警告しないため)。
             consecutive_errors = 0
             telemetry.record("stream_vc", perf_counter() - t0)
+            # 入力エンベロープ追従 (ADR-0057) → VAD ゲートの順 (バッチ apply_input_envelope
+            # と同じ順)。envelope は安価な numpy 演算なので inline (to_thread 不要)。
+            if envelope is not None:
+                out_i16 = envelope.apply(out_i16, raw_block)
             if gate is not None:
                 out_i16 = gate.ramp(out_i16, target_gain)
                 if target_gain != 1.0:
