@@ -20,9 +20,9 @@ class _FakeTransport(Transport):
         return out
 
 
-def _pkt(seq):
+def _pkt(seq, session="cd" * 16):
     return StreamPacket(
-        session_id="cd" * 16,
+        session_id=session,
         seq=seq,
         pts=0.0,
         pcm=bytes([seq % 256]) * 4,
@@ -34,6 +34,16 @@ async def test_consume_into_buffer_drains_recv_and_poll():
     t = _FakeTransport([_pkt(0), _pkt(1), _pkt(2)])
     buf = JitterBuffer(target_depth=0)
     first = await t.recv()
-    consume_into_buffer(t, buf, first)
+    consume_into_buffer(t, buf, first, first.session_id)
     assert buf.depth == 3  # first(0) + poll(1,2)
     assert buf.pop().kind is PopKind.NORMAL
+
+
+async def test_consume_into_buffer_skips_foreign_session_poll_packets():
+    # poll batch mixes current-session (0,1) and a stale prior-session packet;
+    # only the current-session ones are pushed.
+    t = _FakeTransport([_pkt(0), _pkt(1), _pkt(99, session="ff" * 16)])
+    buf = JitterBuffer(target_depth=0)
+    first = await t.recv()
+    consume_into_buffer(t, buf, first, first.session_id)
+    assert buf.depth == 2  # first(0) + poll(1); foreign-session 99 skipped

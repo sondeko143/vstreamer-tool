@@ -51,3 +51,12 @@ def test_send_protocol_error_received_counts_and_logs():
     proto.error_received(OSError("route gone"))
     proto.error_received(OSError("again"))
     assert proto.error_count == 2
+
+
+def test_send_protocol_error_logging_is_throttled():
+    from vspeech.stream_vc.udp import _SendProtocol
+
+    proto = _SendProtocol()
+    for _ in range(120):
+        proto.error_received(OSError("peer down"))
+    assert proto.error_count == 120  # every event counted (telemetry parity)

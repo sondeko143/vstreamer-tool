@@ -525,3 +525,18 @@ def test_non_local_role_requires_udp_transport():
         }  # transport defaults in_process
     )
     assert "stream_vc.transport_type" in _fields(collect_problems(cfg))
+
+
+def test_local_role_rejects_udp_transport():
+    cfg = Config.model_validate(
+        {"stream_vc": {"enable": True, "role": "local", "transport_type": "udp"}}
+    )
+    problems = collect_problems(cfg)
+    assert "stream_vc.transport_type" in _fields(problems)
+    assert any("無視されます" in p.detail for p in problems)
+
+
+def test_local_role_default_transport_has_no_transport_problem():
+    # 既定 (role=local, transport_type=in_process) は transport 問題を出さない。
+    cfg = Config.model_validate({"stream_vc": {"enable": True}})
+    assert "stream_vc.transport_type" not in _fields(collect_problems(cfg))

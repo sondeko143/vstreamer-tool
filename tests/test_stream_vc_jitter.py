@@ -73,6 +73,19 @@ def test_overflow_fast_forwards_to_bound_latency():
     assert buf.pop().kind is PopKind.NORMAL
 
 
+def test_burst_loss_beyond_slack_is_counted_as_gap():
+    buf = JitterBuffer(target_depth=0)
+    buf.push(_pkt(0, 0))
+    assert buf.pop().kind is PopKind.NORMAL  # next_seq -> 1
+    # seqs 1..5 (5 > target_depth 0 + slack 4) never arrive; seq 6 lands
+    buf.push(_pkt(6, 6))
+    r = buf.pop()
+    assert r.kind is PopKind.NORMAL  # jumped to the live packet
+    assert r.gap == 5  # the 5 never-arrived are observable, not silent
+    assert r.dropped == 0  # none were buffered-and-stale
+    assert r.pcm == bytes([6, 6])
+
+
 def test_reset_clears_state():
     buf = JitterBuffer(target_depth=0)
     buf.push(_pkt(5, 5))

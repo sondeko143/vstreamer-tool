@@ -84,6 +84,8 @@ class JitterBuffer:
             else:
                 return PopResult(self._silence(), PopKind.PREBUFFER, gap=0, dropped=0)
         dropped = 0
+        # never-arrived packets skipped by fast-forward = real loss (observable)
+        gap = 0
         # 遅延上限: backlog が余裕を超えたら near-live へ飛ばす(捨てた分を記録)。
         if self._buf:
             newest = max(self._buf)
@@ -93,13 +95,17 @@ class JitterBuffer:
                     if s < target:
                         del self._buf[s]
                         dropped += 1
+                # of the skipped [next_seq, target) range: dropped = arrived-but-stale
+                # (drained for latency), the rest never arrived = real loss. The spec
+                # requires loss be observable (無音の穴を黙って作らない), so surface it.
+                gap = (target - self._next_seq) - dropped
                 self._next_seq = target
         pcm = self._buf.pop(self._next_seq, None)
         if pcm is not None:
             self._next_seq += 1
             self._last_good = pcm
             self._concealed_since_good = 0
-            return PopResult(pcm, PopKind.NORMAL, gap=0, dropped=dropped)
+            return PopResult(pcm, PopKind.NORMAL, gap=gap, dropped=dropped)
         # 期待 seq が無い。**新しい seq がバッファにある**ときだけ実 loss と確定
         # (期待 seq を飛び越えた)→ conceal して advance。バッファが空なら starvation
         # (まだ届いていないだけ)なので **advance しない**: cursor を進めると、まだ配送中の
@@ -108,5 +114,7 @@ class JitterBuffer:
         # 発生、final review で実証)。
         if self._buf:
             self._next_seq += 1
-            return PopResult(self._conceal(), PopKind.CONCEAL, gap=1, dropped=dropped)
-        return PopResult(self._conceal(), PopKind.CONCEAL, gap=0, dropped=dropped)
+            return PopResult(
+                self._conceal(), PopKind.CONCEAL, gap=gap + 1, dropped=dropped
+            )
+        return PopResult(self._conceal(), PopKind.CONCEAL, gap=gap, dropped=dropped)

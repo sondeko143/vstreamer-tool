@@ -34,15 +34,29 @@ from vspeech.stream_vc.transport import Transport
 
 
 def consume_into_buffer(
-    transport: Transport, buffer: JitterBuffer, first: StreamPacket
+    transport: Transport, buffer: JitterBuffer, first: StreamPacket, session: str
 ) -> None:
-    """recv した first と poll した残り全部を jitter buffer へ push する。"""
-    buffer.push(first)
+    """recv した first と、poll した現セッション packet を jitter buffer へ push する。
+
+    poll 分は session_id で filter する: producer 再起動直後は旧セッションの高 seq が
+    socket queue に残りうるが、それを push すると overflow fast-forward が cursor を
+    旧 seq へ飛ばし新セッションを late 落ちさせる(永久無音)。late/dup(push False)は
+    reorder の観測用に記録する。"""
+    if not buffer.push(first):
+        telemetry.record("stream_vc_reorder_drop", 1.0)
     for packet in transport.poll():
-        buffer.push(packet)
+        if packet.session_id != session:
+            telemetry.record("stream_vc_session_skip", 1.0)
+            continue
+        if not buffer.push(packet):
+            telemetry.record("stream_vc_reorder_drop", 1.0)
 
 
 async def network_playback_loop(config: StreamVcConfig, transport: Transport) -> None:
+    # 意図的に context.running (pause) gate を持たない: consumer は vc_loop を回さず
+    # 変換音声を鳴らすだけ。全体 pause は producer 側を止めることで達成する(producer の
+    # vc_loop が送信を止める → consumer は starve して無音になる)。ADR-0050 の single-check
+    # モデルに従い、pause 判定は producer 一箇所だけに置く。
     target_depth = round(config.jitter_buffer_ms / config.block_ms)
     buffer = JitterBuffer(target_depth=target_depth)
     logger.info("stream_vc consumer jitter buffer depth: %d block(s)", target_depth)
@@ -55,6 +69,11 @@ async def network_playback_loop(config: StreamVcConfig, transport: Transport) ->
     backoff = BACKOFF_START
     try:
         while True:
+            # concealment は recv 駆動: 到着しているストリーム内の gap にだけ発火する。
+            # ネットワークが完全に停止すると recv() でブロックし、ここでは conceal されない
+            # — 出力デバイスが自力で underflow し、次の成功 write で記録される。有線 LAN
+            # 前提の M3 では許容(ADR-0056 measure-first)。lossy な回線が要るなら出力クロック
+            # 駆動の pacer で再訪する。
             packet = await transport.recv()
             now = perf_counter()
             if prev_recv is not None:
@@ -63,9 +82,16 @@ async def network_playback_loop(config: StreamVcConfig, transport: Transport) ->
             if packet.session_id != session:
                 if session is not None:
                     logger.info("stream_vc consumer: producer session changed; reset")
+                    if stream is not None:
+                        # a new session may use a different target_sample_rate; drop the
+                        # stream so it reopens at the incoming packet's rate.
+                        close_quietly(stream)
+                        stream = None
                 session = packet.session_id
                 buffer.reset()
-            consume_into_buffer(transport, buffer, packet)
+            # session は上のブロックで必ず packet.session_id に揃う(== 現セッション)。
+            # packet.session_id を渡すことで型を str に確定させる(session は str | None)。
+            consume_into_buffer(transport, buffer, packet, packet.session_id)
             result = buffer.pop()
             telemetry.record("stream_vc_jitter_buffer_depth", float(buffer.depth))
             if result.kind is PopKind.CONCEAL:

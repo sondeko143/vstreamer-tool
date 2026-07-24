@@ -372,6 +372,17 @@ def _check_stream_vc(config: Config) -> list[ConfigProblem]:
                 field="stream_vc.transport_type",
             )
         )
+    # 逆向き: role=local は単一マシン (in_process) で完結するので udp 設定は無視される。
+    # 黙って捨てず fail-loud で指摘する(2 機分割の書き間違いを早期に検出)。
+    if role is StreamVcRole.local and sv.transport_type is TransportType.udp:
+        problems.append(
+            ConfigProblem(
+                w,
+                "role=local は単一マシン (in_process) で動作し transport_type=udp は無視されます。"
+                "2 マシンに分けるなら role を producer/consumer にしてください",
+                field="stream_vc.transport_type",
+            )
+        )
     # UDP なら role ごとにアドレスが要る。in_process(local)は不要。
     if sv.transport_type is TransportType.udp:
         if role is StreamVcRole.producer and not (sv.peer_host and sv.peer_port):

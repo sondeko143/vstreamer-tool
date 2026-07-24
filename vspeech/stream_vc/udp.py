@@ -22,6 +22,15 @@ from vspeech.stream_vc.wire import WireError
 from vspeech.stream_vc.wire import decode_packet
 from vspeech.stream_vc.wire import encode_packet
 
+_LOG_EVERY = 50
+
+
+def _should_log(count: int) -> bool:
+    """first occurrence + every _LOG_EVERY-th. UDP protocol callbacks can fire at
+    packet rate (peer down → ICMP per datagram); unthrottled logs flood the GUI
+    stdout pipe. telemetry still records every event, so observability is unchanged."""
+    return count == 1 or count % _LOG_EVERY == 0
+
 
 class _SendProtocol(DatagramProtocol):
     """producer 送信専用エンドポイントのプロトコル。
@@ -38,7 +47,10 @@ class _SendProtocol(DatagramProtocol):
     def error_received(self, exc: Exception) -> None:
         self.error_count += 1
         telemetry.record("stream_vc_send_error", 1.0)
-        logger.warning("stream_vc udp send error (async): %r", exc)
+        if _should_log(self.error_count):
+            logger.warning(
+                "stream_vc udp send error (async, total %d): %r", self.error_count, exc
+            )
 
 
 class UdpProducerTransport(Transport):
@@ -69,6 +81,8 @@ class _RecvProtocol:
 
     def __init__(self, queue: Queue[StreamPacket]) -> None:
         self._queue = queue
+        self._malformed_count = 0
+        self._error_count = 0
 
     def connection_made(self, transport: Any) -> None:
         self._transport = transport
@@ -79,13 +93,25 @@ class _RecvProtocol:
         try:
             packet = decode_packet(data)
         except WireError as e:
-            logger.warning("stream_vc udp: dropping malformed datagram: %r", e)
+            self._malformed_count += 1
+            telemetry.record("stream_vc_malformed_drop", 1.0)
+            if _should_log(self._malformed_count):
+                logger.warning(
+                    "stream_vc udp: dropping malformed datagram (total %d): %r",
+                    self._malformed_count,
+                    e,
+                )
             return
         if not drop_oldest_put(self._queue, packet):
             telemetry.record("stream_vc_recv_drop", 1.0)
 
     def error_received(self, exc: Exception) -> None:
-        logger.warning("stream_vc udp recv error: %r", exc)
+        self._error_count += 1
+        telemetry.record("stream_vc_recv_error", 1.0)
+        if _should_log(self._error_count):
+            logger.warning(
+                "stream_vc udp recv error (total %d): %r", self._error_count, exc
+            )
 
     def connection_lost(self, exc: Exception | None) -> None:
         if exc is not None:
