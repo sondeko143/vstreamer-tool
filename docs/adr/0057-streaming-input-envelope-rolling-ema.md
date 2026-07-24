@@ -1,6 +1,6 @@
 # 0057. ストリーミング VC の入力エンベロープ追従を rolling-EMA 参照で行う
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-24
 - Related: [spec](../superpowers/specs/2026-07-24-streaming-input-envelope-follow-design.md), [0053](0053-streaming-vc-fixed-block-crossfade.md), [0017](0017-rvc-input-envelope-shape-transfer.md), [0018](0018-rvc-envelope-duck-only.md), [0054](0054-stream-vc-config-section.md)
 
@@ -30,4 +30,4 @@
 
 ## Consequences
 
-attack/decay がバッチ並みに入力へ追従する(opt-in)。rolling EMA は 1 スカラ状態で安く、GPU/モデルを要さない(CPU で単体テスト可能)。参照が rolling ゆえ長い無音では参照がノイズ床へ寄り、ノイズ抑制は担えない(VAD ゲート併用が前提)。`envelope_ema_ms` が短すぎると loud onset で参照が跳ねて追従が過敏になり、長すぎるとレベル変化に鈍い → 実測で調整する。出力ブロックは入力ブロックから ~20ms 時間ずれるが v1 では非補償。既定 off で出力はビット単位で不変。Status は `Proposed`:実機耳確認(streaming の attack/decay が機能無効時より滑らかで、バッチに近い)で裏づけたら `Accepted` に昇格し [0053](0053-streaming-vc-fixed-block-crossfade.md) を extend する。
+attack/decay がバッチ並みに入力へ追従する(opt-in)。rolling EMA は 1 スカラ状態で安く、GPU/モデルを要さない(CPU で単体テスト可能)。参照が rolling ゆえ長い無音では参照がノイズ床へ寄り、ノイズ抑制は担えない(VAD ゲート併用が前提)。`envelope_ema_ms` が短すぎると loud onset で参照が跳ねて追従が過敏になり、長すぎるとレベル変化に鈍い → 実測で調整する。出力ブロックは入力ブロックから ~20ms 時間ずれるが v1 では非補償。既定 off で出力はビット単位で不変。Status は `Accepted`(実装 + 全コミット independent review + 実機で連続発話の attack/decay 整形を確認)。[0053](0053-streaming-vc-fixed-block-crossfade.md) を extend する。
