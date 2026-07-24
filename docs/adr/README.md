@@ -74,3 +74,4 @@
 | [0054](0054-stream-vc-config-section.md) | ストリーミング VC 設定を [stream_vc] として発話系 VC と分離する | Accepted | 2026-07-22 |
 | [0055](0055-stream-vc-producer-consumer-role-split.md) | ストリーミング VC を producer/consumer の role で 2 マシンに分割する | Accepted | 2026-07-24 |
 | [0056](0056-stream-vc-consumer-jitter-buffer.md) | consumer 側の並べ替え/穴埋め/遅延上限を transport 非依存の jitter buffer に集約する | Accepted | 2026-07-24 |
+| [0057](0057-streaming-input-envelope-rolling-ema.md) | ストリーミング VC の入力エンベロープ追従を rolling-EMA 参照で行う（0053 を extend） | Proposed | 2026-07-24 |
