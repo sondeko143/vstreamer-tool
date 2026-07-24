@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from vspeech.config import Config
 from vspeech.config import StreamVcRole
 from vspeech.config import TransportType
@@ -73,9 +76,6 @@ def test_stream_vc_envelope_parses():
 
 
 def test_stream_vc_envelope_min_gt_max_rejected():
-    import pytest
-    from pydantic import ValidationError
-
     with pytest.raises(ValidationError):
         Config.model_validate(
             {"stream_vc": {"envelope_min_gain": 0.5, "envelope_max_gain": 0.2}}
