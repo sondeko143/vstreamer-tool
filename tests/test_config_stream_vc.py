@@ -41,3 +41,32 @@ def test_stream_vc_consumer_parses_bind_and_jitter():
     assert sv.role is StreamVcRole.consumer
     assert (sv.bind_host, sv.bind_port) == ("0.0.0.0", 9999)
     assert sv.jitter_buffer_ms == 60.0
+
+
+def test_stream_vc_envelope_defaults_off():
+    sv = Config().stream_vc
+    assert sv.envelope_follow is False
+    assert sv.envelope_strength == 1.0
+    assert sv.envelope_min_gain == 0.1
+    assert sv.envelope_max_gain == 1.0
+    assert sv.envelope_window_ms == 25.0
+    assert sv.envelope_ema_ms == 2000.0
+
+
+def test_stream_vc_envelope_parses():
+    sv = Config.model_validate(
+        {
+            "stream_vc": {
+                "envelope_follow": True,
+                "envelope_strength": 1.5,
+                "envelope_min_gain": 0.2,
+                "envelope_ema_ms": 1500.0,
+            }
+        }
+    ).stream_vc
+    assert sv.envelope_follow is True
+    assert (sv.envelope_strength, sv.envelope_min_gain, sv.envelope_ema_ms) == (
+        1.5,
+        0.2,
+        1500.0,
+    )

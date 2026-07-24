@@ -487,6 +487,35 @@ class StreamVcConfig(BaseModel):
         le=1.0,
         description="ゲートが閉じたときの出力ゲイン (0.0 = 完全ミュート)",
     )
+    # 入力エンベロープ追従 (opt-in, ADR-0057)。出力音量を入力の相対ラウドネス包絡へ
+    # duck 追従させ、アタック/ディケイをバッチ変換に近づける。既定 off でビット不変。
+    # 参照は入力平均 RMS の rolling EMA (envelope_ema_ms)。VAD ゲートの前に適用。
+    envelope_follow: bool = Field(
+        default=False,
+        description="出力音量を入力の相対ラウドネス包絡へ追従させる (アタック/"
+        "ディケイを滑らかに)。off だと RVC 生出力のままで立ち上がりが急峻",
+    )
+    envelope_strength: float = Field(
+        default=1.0, ge=0, description="包絡形状の指数。>1 で追従を強調、0 で無効相当"
+    )
+    envelope_min_gain: float = Field(
+        default=0.1, ge=0.0, le=1.0, description="duck の下限ゲイン (静音部の残し量)"
+    )
+    envelope_max_gain: float = Field(
+        default=1.0,
+        ge=0.0,
+        description="ゲイン上限。既定 1.0 = duck のみ (クリップしない)。>1 は "
+        "loud 部を int16 域外へ持ち上げてハードクリップするのでヘッドルームがある時のみ",
+    )
+    envelope_window_ms: float = Field(
+        default=25.0, gt=0, description="入力 RMS のフレーム窓 ms"
+    )
+    envelope_ema_ms: float = Field(
+        default=2000.0,
+        gt=0,
+        description="参照レベル (入力平均 RMS の rolling EMA) の時定数 ms。"
+        "短いと loud onset で参照が跳ねて過敏、長いとレベル変化に鈍い。実測で調整",
+    )
     input_host_api_name: str | None = Field(default=None)
     input_device_name: str | None = Field(default=None)
     input_device_index: int | None = Field(default=None)
