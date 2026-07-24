@@ -54,9 +54,14 @@ def test_send_protocol_error_received_counts_and_logs():
 
 
 def test_send_protocol_error_logging_is_throttled():
+    from unittest.mock import patch
+
     from vspeech.stream_vc.udp import _SendProtocol
 
     proto = _SendProtocol()
-    for _ in range(120):
-        proto.error_received(OSError("peer down"))
+    with patch("vspeech.stream_vc.udp.logger") as mock_logger:
+        for _ in range(120):
+            proto.error_received(OSError("peer down"))
     assert proto.error_count == 120  # every event counted (telemetry parity)
+    # log is throttled first + every 50th: over 120 events that is counts 1, 50, 100
+    assert mock_logger.warning.call_count == 3
