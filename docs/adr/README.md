@@ -68,9 +68,9 @@
 | [0048](0048-gcp-auth-channel-with-retrying-session.md) | GCP のトークン更新を retry 付き session に載せるため認証チャネルを自前で組む | Accepted | 2026-07-18 |
 | [0049](0049-fcpe-baked-waveform-onnx-f0-extractor.md) | FCPE を波形入力 ONNX f0 抽出器としてスパイク先行で追加する | Accepted | 2026-07-21 |
 | [0050](0050-streaming-vc-separate-subsystem.md) | ストリーミング VC を Command/routing の外の専用サブシステムとして分離する | Accepted | 2026-07-22 |
-| [0051](0051-stream-transport-swappable-tiered.md) | マシン間ストリーミングトランスポートを差し替え層とし段階昇格する | Proposed | 2026-07-22 |
+| [0051](0051-stream-transport-swappable-tiered.md) | マシン間ストリーミングトランスポートを差し替え層とし段階昇格する | Accepted | 2026-07-22 |
 | [0052](0052-dual-independent-mic-capture.md) | ストリーミングと発話系でマイクを二重独立キャプチャする | Accepted | 2026-07-22 |
 | [0053](0053-streaming-vc-fixed-block-crossfade.md) | ストリーミング VC を固定ブロック+左文脈+クロスフェードのステートフル変換にする | Accepted | 2026-07-22 |
 | [0054](0054-stream-vc-config-section.md) | ストリーミング VC 設定を [stream_vc] として発話系 VC と分離する | Accepted | 2026-07-22 |
-| [0055](0055-stream-vc-producer-consumer-role-split.md) | ストリーミング VC を producer/consumer の role で 2 マシンに分割する | Proposed | 2026-07-24 |
-| [0056](0056-stream-vc-consumer-jitter-buffer.md) | consumer 側の並べ替え/穴埋め/遅延上限を transport 非依存の jitter buffer に集約する | Proposed | 2026-07-24 |
+| [0055](0055-stream-vc-producer-consumer-role-split.md) | ストリーミング VC を producer/consumer の role で 2 マシンに分割する | Accepted | 2026-07-24 |
+| [0056](0056-stream-vc-consumer-jitter-buffer.md) | consumer 側の並べ替え/穴埋め/遅延上限を transport 非依存の jitter buffer に集約する | Accepted | 2026-07-24 |

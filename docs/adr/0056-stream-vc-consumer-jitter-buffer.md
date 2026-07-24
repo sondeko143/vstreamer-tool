@@ -1,6 +1,6 @@
 # 0056. consumer 側の並べ替え/穴埋め/遅延上限を transport 非依存の jitter buffer に集約する
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-24
 - Related: [spec](../superpowers/specs/2026-07-22-rvc-streaming-vc-split-machine-design.md), [0051](0051-stream-transport-swappable-tiered.md), [0050](0050-streaming-vc-separate-subsystem.md), [0055](0055-stream-vc-producer-consumer-role-split.md), [0006](0006-clock-skew-threshold-warning.md)
 
@@ -34,4 +34,4 @@ spec の受入基準は「欠落・並べ替えが起きても再生側が検出
 - concealment・深さ・loss 検出を CPU で単体テストでき、実機/GPU 無しで回帰を張れる。
 - 深さは付加遅延なので、既定は浅く保ち、実測ジッタから最小に詰める運用ステップ(M3 の実測)が要る。
 - 片道遅延の数値は出さない(estimate 扱い)。将来 latency 数値が必要なら M1 の RTF budget + 実測 buffer 深さから積むか、clock 同期/RTT echo を足す。
-- Status は `Proposed`。実装と実測が裏づけたら `Accepted` に昇格する。
+- Status は `Accepted`(実装 + 実機実測が裏づけ)。final review が既定 `jitter_buffer_ms=0` での永久無音化バグ(空バッファでの conceal が cursor を進め in-flight packet を追い越す)を摘出→「実 loss(新 seq が在る)だけ advance、starvation は advance しない」に修正済み。
