@@ -434,6 +434,15 @@ class StreamVcConfig(BaseModel):
                 }
         return data
 
+    @model_validator(mode="after")
+    def _check_envelope_gain_bounds(self):
+        if self.envelope_min_gain > self.envelope_max_gain:
+            raise ValueError(
+                f"envelope_min_gain ({self.envelope_min_gain}) must be <= "
+                f"envelope_max_gain ({self.envelope_max_gain})"
+            )
+        return self
+
     block_ms: float = Field(
         default=160.0,
         gt=0,

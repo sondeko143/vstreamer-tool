@@ -70,3 +70,13 @@ def test_stream_vc_envelope_parses():
         0.2,
         1500.0,
     )
+
+
+def test_stream_vc_envelope_min_gt_max_rejected():
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Config.model_validate(
+            {"stream_vc": {"envelope_min_gain": 0.5, "envelope_max_gain": 0.2}}
+        )

@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from vspeech.lib.stream_vc import StreamingVc
     from vspeech.shared_context import SharedContext
     from vspeech.stream_vc.capture import CaptureItem
+    from vspeech.stream_vc.envelope import StreamingEnvelope
     from vspeech.stream_vc.gate import StreamingVadGate
 
 # ORT のログ閾値: 0=VERBOSE / 1=INFO / 2=WARNING / 3=ERROR / 4=FATAL。
@@ -80,7 +81,7 @@ def apply_input_boost(block, boost):
     return np.clip(block * boost, -1.0, 1.0).astype(np.float32)
 
 
-def make_stream_envelope(sv_config: StreamVcConfig):
+def make_stream_envelope(sv_config: StreamVcConfig) -> StreamingEnvelope | None:
     """envelope_follow のとき StreamingEnvelope を作る (off なら None)。純関数。"""
     if not sv_config.envelope_follow:
         return None
