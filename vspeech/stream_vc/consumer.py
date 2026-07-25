@@ -19,14 +19,13 @@ import sounddevice as sd
 from vspeech.config import StreamVcConfig
 from vspeech.exceptions import shutdown_worker
 from vspeech.exceptions import worker_startup
+from vspeech.lib.log_throttle import LogThrottle
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
 from vspeech.stream_vc.jitter import JitterBuffer
 from vspeech.stream_vc.jitter import PopKind
 from vspeech.stream_vc.packet import StreamPacket
 from vspeech.stream_vc.playback import open_stream_vc_output_stream
-from vspeech.stream_vc.playback import should_log_gap
-from vspeech.stream_vc.playback import should_log_underflow
 from vspeech.stream_vc.retry import BACKOFF_START
 from vspeech.stream_vc.retry import close_quietly
 from vspeech.stream_vc.retry import next_backoff
@@ -64,8 +63,9 @@ async def network_playback_loop(config: StreamVcConfig, transport: Transport) ->
     session: str | None = None
     prev_recv: float | None = None
     started = False
-    underflow_count = 0
-    gap_count = 0
+    # playback.py と同じ理由の時間ベース間引き(ADR-0062)。
+    underflow_throttle = LogThrottle()
+    gap_throttle = LogThrottle()
     backoff = BACKOFF_START
     try:
         while True:
@@ -98,12 +98,11 @@ async def network_playback_loop(config: StreamVcConfig, transport: Transport) ->
                 telemetry.record("stream_vc_conceal", 1.0)
             if result.gap:
                 telemetry.record("stream_vc_gap", float(result.gap))
-                gap_count += 1
-                if should_log_gap(gap_count):
+                if (n := gap_throttle.hit()) is not None:
                     logger.warning(
                         "stream_vc consumer gap: %d packet(s) missing (total %d)",
                         result.gap,
-                        gap_count,
+                        n,
                     )
             if result.dropped:
                 telemetry.record("stream_vc_playback_drop", float(result.dropped))
@@ -125,11 +124,9 @@ async def network_playback_loop(config: StreamVcConfig, transport: Transport) ->
                 underflowed = await to_thread(stream.write, result.pcm)
                 if underflowed:
                     telemetry.record("stream_vc_playback_underflow", 1.0)
-                    underflow_count += 1
-                    if should_log_underflow(underflow_count):
+                    if (n := underflow_throttle.hit()) is not None:
                         logger.warning(
-                            "stream_vc consumer output underflow (total %d)",
-                            underflow_count,
+                            "stream_vc consumer output underflow (total %d)", n
                         )
             except (OSError, sd.PortAudioError) as e:
                 logger.warning("stream_vc consumer output fault; reopen: %r", e)

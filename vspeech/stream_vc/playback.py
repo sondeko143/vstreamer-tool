@@ -19,6 +19,7 @@ from vspeech.config import StreamVcConfig
 from vspeech.exceptions import shutdown_worker
 from vspeech.exceptions import worker_startup
 from vspeech.lib.audio import resolve_stream_vc_output_device
+from vspeech.lib.log_throttle import LogThrottle
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
 from vspeech.stream_vc.retry import BACKOFF_START
@@ -33,38 +34,6 @@ def detect_gap(prev_seq: int | None, seq: int) -> int:
         return 0
     missing = seq - prev_seq - 1
     return missing if missing > 0 else 0
-
-
-# 出力 underflow は VC が間に合わなければ毎ブロック (block_ms=160 なら ~6 回/秒)
-# 起きうる。telemetry は毎回記録するが、ログは最初の 1 回と以降 N 回ごとに間引く
-# — 警告自体がログを埋めては本末転倒なので。
-UNDERFLOW_LOG_EVERY = 50
-
-
-def should_log_underflow(count: int) -> bool:
-    """通算 count 回目の underflow をログに出すか(1 回目と以降 N 回ごと)。"""
-    return count == 1 or count % UNDERFLOW_LOG_EVERY == 0
-
-
-# バックログ畳み込みで捨てた packet も underflow と同様に間引いてログする
-# (ストール明けは連続 drop しうるので毎 drop は出さない)。telemetry は毎回。
-DROP_LOG_EVERY = 50
-
-
-def should_log_drop(count: int) -> bool:
-    """通算 count 回目の drop をログに出すか(1 回目と以降 N 回ごと)。"""
-    return count == 1 or count % DROP_LOG_EVERY == 0
-
-
-# seq 飛び(gap = 欠落パケット)も drop/underflow と同様に間引いてログする。
-# 網トランスポート導入前は起きない想定だが、恒常的な gap がログを埋めないよう
-# 最初の 1 回と以降 N 回ごとに絞る。telemetry は毎回。
-GAP_LOG_EVERY = 50
-
-
-def should_log_gap(count: int) -> bool:
-    """通算 count 回目の gap をログに出すか(1 回目と以降 N 回ごと)。"""
-    return count == 1 or count % GAP_LOG_EVERY == 0
 
 
 def open_stream_vc_output_stream(
@@ -93,9 +62,12 @@ async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
     """
     stream: sd.RawOutputStream | None = None
     prev_seq: int | None = None
-    underflow_count = 0
-    drop_count = 0
-    gap_count = 0
+    # 条件ごとに 1 つ。出力 underflow も stale drop も seq gap も、起きるときは
+    # 毎ブロック起きる(block_ms=160 なら ~6 回/秒)ので、警告自体がログを埋めない
+    # よう時間で絞る。telemetry は間引きに関係なく毎回記録する(ADR-0062)。
+    underflow_throttle = LogThrottle()
+    drop_throttle = LogThrottle()
+    gap_throttle = LogThrottle()
     # 一度でも open に成功したか(初回 fail-loud と runtime 再 open を区別するため)。
     started = False
     backoff = BACKOFF_START
@@ -111,22 +83,20 @@ async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
                     gap = detect_gap(prev_seq, old.seq)
                     if gap > 0:
                         telemetry.record("stream_vc_gap", float(gap))
-                        gap_count += 1
-                        if should_log_gap(gap_count):
+                        if (n := gap_throttle.hit()) is not None:
                             logger.warning(
                                 "stream_vc playback gap: %d packet(s) missing "
                                 "(total %d)",
                                 gap,
-                                gap_count,
+                                n,
                             )
                     prev_seq = old.seq
                     telemetry.record("stream_vc_playback_drop", 1.0)
-                    drop_count += 1
-                    if should_log_drop(drop_count):
+                    if (n := drop_throttle.hit()) is not None:
                         logger.warning(
                             "stream_vc playback dropped stale packet(s) to bound "
                             "latency (total %d)",
-                            drop_count,
+                            n,
                         )
                 # drain が残した最新(キューに 1 個ある)を非ブロッキングで取り直す。
                 packet = await transport.recv()
@@ -149,12 +119,11 @@ async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
                 gap = detect_gap(prev_seq, packet.seq)
                 if gap > 0:
                     telemetry.record("stream_vc_gap", float(gap))
-                    gap_count += 1
-                    if should_log_gap(gap_count):
+                    if (n := gap_throttle.hit()) is not None:
                         logger.warning(
                             "stream_vc playback gap: %d packet(s) missing (total %d)",
                             gap,
-                            gap_count,
+                            n,
                         )
                 prev_seq = packet.seq
                 # write() の戻り値 = paOutputUnderflowed (capture.py の read() の
@@ -163,11 +132,9 @@ async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
                 underflowed = await to_thread(stream.write, packet.pcm)
                 if underflowed:
                     telemetry.record("stream_vc_playback_underflow", 1.0)
-                    underflow_count += 1
-                    if should_log_underflow(underflow_count):
+                    if (n := underflow_throttle.hit()) is not None:
                         logger.warning(
-                            "stream_vc playback output underflow (total %d)",
-                            underflow_count,
+                            "stream_vc playback output underflow (total %d)", n
                         )
             except (OSError, sd.PortAudioError) as e:
                 # runtime device fault: 出力先が消えた/フォーマットが変わった等。
