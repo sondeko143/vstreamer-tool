@@ -1,6 +1,5 @@
 listen_address = "localhost"
 listen_port = 19827
-template_texts = ["こんにちは！", "お疲れさまでした。失礼します。"]
 log_file = "./log/voice_%%Y_%%m_%%d.log"
 log_level = "INFO"
 [[filters]]

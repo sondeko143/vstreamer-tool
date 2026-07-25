@@ -604,10 +604,6 @@ class Config(BaseSettings):
     listen_port: int = Field(
         default=8080, validation_alias=AliasChoices("listen_port", "PORT")
     )
-    template_texts: list[str] = Field(default_factory=lambda: [""])
-    text_send_operations: RoutesList = Field(
-        default_factory=lambda: [["tts", "playback"]]
-    )
     filters: list[ReplaceFilter] = []
     log_file: str = "./voice_%%Y_%%m_%%d.log"
     log_level: int | str = logging.INFO
