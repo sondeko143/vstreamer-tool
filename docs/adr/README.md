@@ -49,8 +49,8 @@
 | [0029](0029-audioop-lts.md) | audioop を audioop-lts へ置換する | Accepted | 2026-07-12 |
 | [0030](0030-pyworld-lazy-default-rmvpe.md) | pyworld を遅延 import 化し既定 f0 抽出器を rmvpe にして rvc extra から撤去する | Accepted | 2026-07-12 |
 | [0031](0031-audio-pyaudio-to-sounddevice.md) | audio extra を PyAudio から sounddevice へ移行する | Accepted | 2026-07-12 |
-| [0032](0032-gui-multi-pipeline-rewrite.md) | GUI を複数 pipeline マネージャへ全面書き直しする | Accepted | 2026-07-12 |
-| [0033](0033-gui-manifest-versioning.md) | GUI の version/migration を専用マニフェストに隔離し config は純粋 Config 形状を保つ | Accepted | 2026-07-12 |
+| [0032](0032-gui-multi-pipeline-rewrite.md) | GUI を複数 pipeline マネージャへ全面書き直しする | Superseded by [0060](0060-gui-remote-control-panel.md) | 2026-07-12 |
+| [0033](0033-gui-manifest-versioning.md) | GUI の version/migration を専用マニフェストに隔離し config は純粋 Config 形状を保つ | Superseded by [0060](0060-gui-remote-control-panel.md) | 2026-07-12 |
 | [0034](0034-gui-corrupt-file-resilience.md) | 壊れた GUI 入力に対し対象別復旧＋非破壊退避で必ず起動する | Accepted | 2026-07-12 |
 | [0035](0035-bound-sender-reconnect-backoff.md) | sender の永続チャネルの再接続バックオフを有界化する（0004 を refine） | Accepted | 2026-07-15 |
 | [0036](0036-whisper-resample-via-pyav.md) | whisper のリサンプルに PyAV(libswresample) を使い torchaudio/scipy を却下する | Accepted | 2026-07-16 |
@@ -62,8 +62,8 @@
 | [0042](0042-subtitle-obs-failure-tiers.md) | OBS 接続の失敗を「観測できたものだけ即死」で階層化する（0038 を refine） | Accepted | 2026-07-16 |
 | [0043](0043-obs-websocket-client-in-house.md) | obs-websocket クライアントを websockets 上に自前実装する（simpleobsws を却下） | Accepted | 2026-07-16 |
 | [0044](0044-font-size-tk-points-to-obs-lfheight.md) | font_size を Tk の符号規約のまま OBS へ渡し正値だけ 96 DPI でピクセル換算する（0041 を refine） | Accepted (refines 0041) | 2026-07-17 |
-| [0045](0045-gui-readiness-reuses-preflight.md) | GUI の起動前 readiness は vspeech.preflight を単一の権威として再利用する（GUI 側に必須項目マップを持たない、0038 を再利用） | Accepted | 2026-07-17 |
-| [0046](0046-gui-shared-asset-paths-explicit-propagate.md) | マシン共通の素材パスは default.toml で編集し明示 propagate する（pipeline config の自己完結を保つ、0032 を維持） | Accepted | 2026-07-17 |
+| [0045](0045-gui-readiness-reuses-preflight.md) | GUI の起動前 readiness は vspeech.preflight を単一の権威として再利用する（GUI 側に必須項目マップを持たない、0038 を再利用） | Superseded by [0060](0060-gui-remote-control-panel.md) | 2026-07-17 |
+| [0046](0046-gui-shared-asset-paths-explicit-propagate.md) | マシン共通の素材パスは default.toml で編集し明示 propagate する（pipeline config の自己完結を保つ、0032 を維持） | Superseded by [0060](0060-gui-remote-control-panel.md) | 2026-07-17 |
 | [0047](0047-obs-identify-unsubscribes-from-events.md) | Identify で eventSubscriptions=0 を明示し、読まないイベントを OBS に送らせない（0043 を refine） | Accepted (refines 0043) | 2026-07-18 |
 | [0048](0048-gcp-auth-channel-with-retrying-session.md) | GCP のトークン更新を retry 付き session に載せるため認証チャネルを自前で組む | Accepted | 2026-07-18 |
 | [0049](0049-fcpe-baked-waveform-onnx-f0-extractor.md) | FCPE を波形入力 ONNX f0 抽出器としてスパイク先行で追加する | Accepted | 2026-07-21 |
@@ -76,3 +76,4 @@
 | [0056](0056-stream-vc-consumer-jitter-buffer.md) | consumer 側の並べ替え/穴埋め/遅延上限を transport 非依存の jitter buffer に集約する | Accepted | 2026-07-24 |
 | [0057](0057-streaming-input-envelope-rolling-ema.md) | ストリーミング VC の入力エンベロープ追従を rolling-EMA 参照で行う（0053 を extend） | Accepted | 2026-07-24 |
 | [0059](0059-stream-vc-window-resolution-vad-gate.md) | ストリーミング VC の VAD ゲートを 32ms 窓粒度 + emit 遅延補正にする（0053 のゲート部を refine） | Proposed | 2026-07-25 |
+| [0060](0060-gui-remote-control-panel.md) | GUI を走っている pipeline へのリモート操作パネルへ縮小する（起動・設定編集を外す、0032/0033/0045/0046 を supersede） | Accepted | 2026-07-26 |

@@ -12,7 +12,6 @@ config*.toml
 *.wav
 key.json
 .startup-profiles/
-.gui-smoke/
 /tests/assets/voicevox/
 /tests/assets/rvc_golden/
 /download-voicevox.exe

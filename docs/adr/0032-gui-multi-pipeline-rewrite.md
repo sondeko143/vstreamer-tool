@@ -1,6 +1,6 @@
 # 0032. GUI を複数 pipeline マネージャへ全面書き直しする（1 pipeline=1 サブプロセス=1 config=1 port）
 
-- Status: Accepted
+- Status: Superseded by [ADR-0060](0060-gui-remote-control-panel.md)
 - Date: 2026-07-12
 - Related: spec [2026-07-12-gui-multi-pipeline-rewrite-design.md](../superpowers/specs/2026-07-12-gui-multi-pipeline-rewrite-design.md); [ADR-0025](0025-target-python-314-phased.md), [ADR-0033](0033-gui-manifest-versioning.md), [ADR-0034](0034-gui-corrupt-file-resilience.md)
 

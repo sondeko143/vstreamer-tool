@@ -20,7 +20,9 @@ def test_secret_roundtrip_via_model_dump_json():
     assert cfg.gcp.service_account_info["private_key"].get_secret_value() == "gcpsecret"
 
     dumped = cfg.model_dump_json()
-    # field_serializer(when_used="json") により秘密値は平文で出力される（GUI→本体の受け渡しに必須）
+    # field_serializer(when_used="json") により秘密値は平文で出力される。当初の動機
+    # だった GUI→本体の受け渡しは ADR-0060 で無くなったが、JSON config
+    # (`--config x.json`) を書き出して読み直す経路がこれに依存している。
     data = json.loads(dumped)
     assert data["ami"]["appkey"] == "topsecret"
     assert data["gcp"]["service_account_info"]["private_key"] == "gcpsecret"

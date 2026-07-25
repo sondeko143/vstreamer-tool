@@ -1,6 +1,6 @@
 # 0033. GUI の version/migration を専用マニフェストに隔離し config は純粋 Config 形状を保つ
 
-- Status: Accepted
+- Status: Superseded by [ADR-0060](0060-gui-remote-control-panel.md)
 - Date: 2026-07-12
 - Related: spec [2026-07-12-gui-multi-pipeline-rewrite-design.md](../superpowers/specs/2026-07-12-gui-multi-pipeline-rewrite-design.md); [ADR-0032](0032-gui-multi-pipeline-rewrite.md)
 

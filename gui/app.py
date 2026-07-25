@@ -1,4 +1,12 @@
-from collections import deque
+"""走っている pipeline へ ping / pause / resume / reload を送るだけの操作パネル。
+
+pipeline の起動・設定編集は持たない (ADR-0060)。ここが知っているのは宛先
+(host:port と reload 用の config パス) だけで、pipeline がどう構成されている
+かは一切知らない。
+"""
+
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from threading import Thread
 from tkinter import BOTH
@@ -6,363 +14,328 @@ from tkinter import END
 from tkinter import LEFT
 from tkinter import RIGHT
 from tkinter import Listbox
+from tkinter import StringVar
 from tkinter import TclError
+from tkinter import W
+from tkinter import X
 from tkinter import Y
 from typing import Any
-from uuid import uuid4
 
 import click
 from ttkbootstrap import Button
+from ttkbootstrap import Entry
 from ttkbootstrap import Frame
+from ttkbootstrap import Label
+from ttkbootstrap import Labelframe
 from ttkbootstrap import Window
 from ttkbootstrap.themes.standard import STANDARD_THEMES
+from ttkbootstrap.widgets.scrolled import ScrolledText
 
-from gui.dialogs import RecipeDialog
-from gui.migration import quarantine
+from gui.client import DEFAULT_TIMEOUT
+from gui.client import SendResult
+from gui.client import send
 from gui.paths import resolve_paths
-from gui.pipeline_editor import PipelineEditor
-from gui.ports import allocate_free_port
-from gui.ports import is_port_free
-from gui.process import PipelineRunner
-from gui.profile import PipelineEntry
-from gui.profile import load_default_config
-from gui.profile import load_pipeline_config
-from gui.profile import load_profile
-from gui.profile import save_pipeline_config
-from gui.profile import save_profile
-from gui.recipes import RECIPES_BY_KEY
-from gui.shared_dialog import SharedPathsDialog
-from gui.shared_paths import apply_shared
-from vspeech.logger import logger
+from gui.targets import Target
+from gui.targets import load_targets
+from gui.targets import save_targets
+from vspeech.config import EventType
 
-LOG_BUFFER_MAX = 2000
-# これより早く落ちたら「起動に失敗した」とみなす。正常起動なら worker が
-# 走り続けるので、この窓で終わるのは起動失敗だけ。
-QUICK_EXIT_SEC = 10.0
-# 失敗バナーに載せる実出力末尾の行数 (合成の "process exited" 行は含めない)。
-# ADR-0038 の preflight 失敗は「起動中止: 設定不備 N 件」ヘッダ + 問題行ずつを
-# 吐くので、ヘッダと数件の問題が収まる程度に採る (最終的に 400 字で切る)。
-FAILURE_TAIL_LINES = 8
+LOG_MAX_LINES = 500
+
+# 一覧の左端に出す直近の疎通結果。宛先 (host:port) 単位で覚える — 疎通は名前
+# ではなくアドレスの性質なので、同じアドレスを指す 2 エントリは同じ印になる。
+MARK_UNKNOWN = "・"
+MARK_OK = "○"
+MARK_NG = "×"
+
+OPERATION_LABELS: list[tuple[str, EventType]] = [
+    ("疎通確認", EventType.ping),
+    ("pause", EventType.pause),
+    ("resume", EventType.resume),
+    ("reload", EventType.reload),
+]
 
 
 class App(Frame):
-    def __init__(self, master: Any, profile_dir: Path | None):
+    def __init__(self, master: Any, config_dir: Path | None):
         super().__init__(master)
-        self._disable_input_mousewheel()
         self.pack(fill=BOTH, expand=True)
-        self.paths = resolve_paths(profile_dir)
-        self.paths.root.mkdir(parents=True, exist_ok=True)
-        self.default_config = load_default_config(self.paths)
-        self.profile = load_profile(self.paths)
-        # Runners live at the App level, keyed by pipeline id, so a pipeline
-        # keeps running (and stays stoppable) no matter which pipeline the
-        # editor is currently showing. Each pipeline's log is buffered here too
-        # and replayed into the editor when its pipeline is selected.
-        self.runners: dict[str, PipelineRunner] = {}
-        self.logs: dict[str, deque[str]] = {}
+        self.paths = resolve_paths(config_dir)
+        self.targets = load_targets(self.paths)
+        self.status: dict[str, str] = {}
+        self.index: int | None = None
+        self.sending = False
 
         left = Frame(self)
-        left.pack(side=LEFT, fill=Y, padx=(6, 2), pady=6)
-        self.listbox = Listbox(left, width=32)
-        self.listbox.pack(fill=Y, expand=True, pady=(0, 4))
+        left.pack(side=LEFT, fill=Y, padx=(8, 4), pady=8)
+        Label(left, text="宛先").pack(anchor=W)
+        self.listbox = Listbox(left, width=34, exportselection=False)
+        self.listbox.pack(fill=Y, expand=True, pady=(2, 4))
         self.listbox.bind("<<ListboxSelect>>", self._on_select)
-        self.listbox.bind("<Button-1>", self._ignore_empty_click)
-        Button(left, text="+ new", command=self.new_pipeline).pack(fill="x")
-        Button(left, text="del", command=self.delete_pipeline).pack(fill="x")
-        Button(left, text="共有パス", command=self.edit_shared_paths).pack(fill="x")
-
-        self.editor = PipelineEditor(
-            self,
-            self.paths,
-            on_dirty=lambda: None,
-            on_start=self._start_current,
-            on_stop=self._stop_current,
-            on_send=self._send_current,
+        list_buttons = Frame(left)
+        list_buttons.pack(fill=X)
+        Button(list_buttons, text="+ 追加", command=self.add_target).pack(
+            side=LEFT, expand=True, fill=X, padx=(0, 2)
         )
-        self.editor.pack(side=RIGHT, fill=BOTH, expand=True)
+        Button(list_buttons, text="削除", command=self.delete_target).pack(
+            side=LEFT, expand=True, fill=X, padx=(2, 0)
+        )
+
+        right = Frame(self)
+        right.pack(side=RIGHT, fill=BOTH, expand=True, padx=(4, 8), pady=8)
+        self._build_detail(right)
+        self._build_operations(right)
+        self._build_log(right)
 
         self._refresh_list()
+        if self.targets.targets:
+            self._select(0)
+        else:
+            self._set_detail_enabled(False)
+            self._log("宛先がありません。「+ 追加」で登録してください。")
 
-    def _disable_input_mousewheel(self) -> None:
-        # ttk Spinbox/Combobox grab the mouse wheel to change their own value,
-        # so scrolling the form over one silently changes it. Drop the class-
-        # level wheel bindings (app-wide) so the wheel only scrolls the
-        # ScrolledFrame form body instead of mutating whatever is under it.
-        for widget_class in ("TSpinbox", "TCombobox"):
-            for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
-                self.unbind_class(widget_class, sequence)
+    # --- widgets ---------------------------------------------------------
 
-    # --- pipeline list --------------------------------------------------
+    def _build_detail(self, master: Any) -> None:
+        detail = Labelframe(master, text="宛先の設定")
+        detail.pack(fill=X)
+        detail.columnconfigure(1, weight=1)
+        self.vars: dict[str, StringVar] = {}
+        self.entries: list[Entry] = []
+        rows = [
+            ("name", "名前"),
+            ("host", "ホスト"),
+            ("port", "ポート"),
+            ("config_path", "config パス"),
+        ]
+        for row, (key, label) in enumerate(rows):
+            Label(detail, text=label).grid(
+                row=row, column=0, sticky=W, padx=(8, 4), pady=3
+            )
+            var = StringVar()
+            self.vars[key] = var
+            entry = Entry(detail, textvariable=var)
+            entry.grid(row=row, column=1, sticky="ew", padx=(0, 8), pady=3)
+            self.entries.append(entry)
+        # config パスは「対象マシン上の」パス。reload を受けた側が自分で open
+        # するので、こちらに同じファイルがあるかは無関係 — 取り違えやすいので明記する。
+        Label(
+            detail,
+            text="config パスは reload でのみ使用。対象マシン上のパスを入れてください。",
+            bootstyle="secondary",
+        ).grid(row=len(rows), column=0, columnspan=2, sticky=W, padx=8, pady=(0, 4))
+        Button(detail, text="保存", command=self.save_detail).grid(
+            row=len(rows) + 1, column=1, sticky="e", padx=8, pady=(0, 8)
+        )
 
-    def _is_running(self, pipeline_id: str) -> bool:
-        runner = self.runners.get(pipeline_id)
-        return runner is not None and runner.is_running()
+    def _build_operations(self, master: Any) -> None:
+        operations = Frame(master)
+        operations.pack(fill=X, pady=(8, 4))
+        self.operation_buttons: list[Button] = []
+        for label, event in OPERATION_LABELS:
+            button = Button(
+                operations,
+                text=label,
+                command=self._operation_command(event),
+                bootstyle="primary" if event == EventType.ping else "secondary",
+            )
+            button.pack(side=LEFT, expand=True, fill=X, padx=2)
+            self.operation_buttons.append(button)
+
+    def _operation_command(self, event: EventType) -> Callable[[], None]:
+        return lambda: self.send_operation(event)
+
+    def _build_log(self, master: Any) -> None:
+        frame = Labelframe(master, text="結果")
+        frame.pack(fill=BOTH, expand=True)
+        self.logbox = ScrolledText(frame, height=12, autohide=True, state="disabled")
+        self.logbox.pack(fill=BOTH, expand=True, padx=4, pady=4)
+
+    # --- target list -----------------------------------------------------
+
+    def _mark(self, target: Target) -> str:
+        return self.status.get(target.address, MARK_UNKNOWN)
 
     def _refresh_list(self) -> None:
-        # Preserves the current selection INDEX. This is correct only for a
-        # ramp/status refresh where the list order and length are unchanged
-        # (e.g. _start_current / _on_exit). After a STRUCTURAL change
-        # (delete/new shifts indices), the caller must follow with
-        # _select_index(...), which clears this restore and re-syncs the editor
-        # — otherwise a stale index would highlight the wrong pipeline.
-        selection = self.listbox.curselection()
         self.listbox.delete(0, END)
-        for entry in self.profile.pipelines:
-            ramp = "●" if self._is_running(entry.id) else "■"
-            self.listbox.insert(END, f"{ramp} {entry.name}  :{entry.port}")
-        if selection:
-            self.listbox.selection_set(selection[0])
-
-    def _ignore_empty_click(self, event: Any) -> str | None:
-        # A Listbox selects the last item when you click the empty space below
-        # the items. Swallow clicks that land below the last row so that area is
-        # inert (the current selection and editor stay put).
-        if not self.profile.pipelines:
-            return "break"
-        index = self.listbox.nearest(event.y)
-        bbox = self.listbox.bbox(index)
-        if bbox is None or event.y > bbox[1] + bbox[3]:
-            return "break"
-        return None
+        for target in self.targets.targets:
+            self.listbox.insert(END, f"{self._mark(target)} {target.label}")
+        if self.index is not None and 0 <= self.index < len(self.targets.targets):
+            self.listbox.selection_clear(0, END)
+            self.listbox.selection_set(self.index)
 
     def _on_select(self, _event: Any) -> None:
         selection = self.listbox.curselection()
         if not selection:
             return
-        entry = self.profile.pipelines[selection[0]]
-        # <<ListboxSelect>> fires on every click (sometimes twice), so
-        # re-clicking the already-shown pipeline would rebuild the whole form
-        # and flicker. Skip when the selection hasn't actually changed.
-        if self.editor.entry is not None and self.editor.entry.id == entry.id:
+        self._select(selection[0])
+
+    def _select(self, index: int) -> None:
+        if not 0 <= index < len(self.targets.targets):
+            self.index = None
+            self._set_detail_enabled(False)
             return
-        self._load_selected(selection[0])
-
-    def _load_selected(self, index: int) -> None:
-        entry = self.profile.pipelines[index]
-        self.editor.load_entry(entry)
-        self.editor.set_running(self._is_running(entry.id))
-        self.editor.set_log(list(self.logs.get(entry.id, [])))
-
-    def _select_index(self, index: int) -> None:
-        # Programmatic selection does NOT fire <<ListboxSelect>>, so re-sync the
-        # editor explicitly. Used after a structural change (delete/new) where a
-        # raw index restore would otherwise leave the editor showing one pipeline
-        # while the listbox highlights a different (shifted-up) one.
+        self.index = index
         self.listbox.selection_clear(0, END)
-        if 0 <= index < len(self.profile.pipelines):
-            self.listbox.selection_set(index)
-            self.listbox.activate(index)
-            self._load_selected(index)
-        else:
-            self.editor.clear()
+        self.listbox.selection_set(index)
+        target = self.targets.targets[index]
+        self.vars["name"].set(target.name)
+        self.vars["host"].set(target.host)
+        self.vars["port"].set(str(target.port))
+        self.vars["config_path"].set(target.config_path)
+        self._set_detail_enabled(True)
 
-    # --- runner lifecycle (per pipeline, App-owned) ---------------------
+    def _set_detail_enabled(self, enabled: bool) -> None:
+        # 選択が無いときは入力欄も閉じる。開けたままだと、どこにも書き戻らない
+        # 欄へ打ち込めてしまう (save_detail は選択が無ければ何もしない)。
+        if not enabled:
+            for var in self.vars.values():
+                var.set("")
+        for entry in self.entries:
+            entry.configure(state="normal" if enabled else "disabled")
+        self._set_operations_enabled(enabled)
 
-    def _start_current(self) -> None:
-        entry = self.editor.entry
-        if entry is None or not self.editor.save():
-            return
-        if self._is_running(entry.id):
-            return
-        if not is_port_free(entry.port):
-            self.editor.append_log(f"port {entry.port} is busy; cannot start")
-            return
-        pipeline_id = entry.id
-        # 新しい run はログを最初から始める。持ち越すと前 run の残骸
-        # (前回の "process exited" 行など) が失敗バナーの failure_tail に
-        # 混じりうる (_on_exit)。表示中なら pane も空にして揃える。
-        self.logs[pipeline_id] = deque(maxlen=LOG_BUFFER_MAX)
-        if self.editor.entry is not None and self.editor.entry.id == pipeline_id:
-            self.editor.set_log([])
-        runner = PipelineRunner(
-            config_path=self.paths.pipeline_config(pipeline_id),
-            port=entry.port,
-            on_log=lambda line: self._schedule_log(pipeline_id, line),
-            on_exit=lambda code: self._schedule_exit(pipeline_id, code),
-        )
-        self.runners[pipeline_id] = runner
-        runner.start()
-        self.editor.set_running(True)
+    def add_target(self) -> None:
+        target = Target(name=f"target {len(self.targets.targets) + 1}")
+        self.targets.targets.append(target)
+        save_targets(self.paths, self.targets)
+        # 行を作ってから選ぶ。逆順だと _select が「まだ無い行」を選ぼうとする。
         self._refresh_list()
+        self._select(len(self.targets.targets) - 1)
 
-    def _stop_current(self) -> None:
-        entry = self.editor.entry
-        if entry is not None and entry.id in self.runners:
-            # stop() blocks (terminate → wait → kill); run it off the Tk thread
-            # so the UI stays responsive. The ramp/log update when the process
-            # actually dies, via _pump → on_exit → after.
-            Thread(target=self.runners[entry.id].stop, daemon=True).start()
-
-    def _send_current(self, text: str) -> None:
-        entry = self.editor.entry
-        if entry is None:
+    def delete_target(self) -> None:
+        if self.index is None:
             return
-        runner = self.runners.get(entry.id)
-        config = self.editor.config
-        if runner is not None and runner.is_running() and config is not None:
-            runner.send_text(text, config.text_send_operations)
-
-    def _schedule_log(self, pipeline_id: str, line: str) -> None:
-        # Fired from the runner's reader thread. after() raises once the root is
-        # gone (window closed while a child is still terminating) — swallow it.
-        try:
-            self.after(0, self._on_log, pipeline_id, line)
-        except TclError, RuntimeError:
-            pass
-
-    def _schedule_exit(self, pipeline_id: str, code: int) -> None:
-        try:
-            self.after(0, self._on_exit, pipeline_id, code)
-        except TclError, RuntimeError:
-            pass
-
-    def _on_log(self, pipeline_id: str, line: str) -> None:
-        if pipeline_id not in self.runners:
-            return  # pipeline was deleted; drop its late in-flight output
-        self.logs.setdefault(pipeline_id, deque(maxlen=LOG_BUFFER_MAX)).append(line)
-        if self.editor.entry is not None and self.editor.entry.id == pipeline_id:
-            self.editor.append_log(line)
-
-    def _on_exit(self, pipeline_id: str, code: int) -> None:
-        runner = self.runners.get(pipeline_id)
-        if runner is None:
-            return  # deleted while its process was terminating — nothing to show
-        log = self.logs.setdefault(pipeline_id, deque(maxlen=LOG_BUFFER_MAX))
-        # 意図的な停止 (runner.stopping) は即死とみなさない。terminate の
-        # exit code は非 0 なので、これが無いと Stop 直後に誤って失敗バナーが出る。
-        quick = code != 0 and not runner.stopping and runner.ran_for() < QUICK_EXIT_SEC
-        # 失敗理由は "process exited" の合成行を足す前の実出力末尾から採る。
-        # 先に足すと、合成行が末尾枠を 1 つ食って preflight の件数ヘッダ
-        # (「起動中止: 設定不備 N 件」) を押し出してしまう。
-        failure_tail = list(log)[-FAILURE_TAIL_LINES:] if quick else []
-        message = f"process exited: {code}"
-        log.append(message)
-        if self.editor.entry is not None and self.editor.entry.id == pipeline_id:
-            self.editor.append_log(message)
-            self.editor.set_running(False)
-            if quick:
-                self.editor.show_launch_failure(failure_tail)
+        target = self.targets.targets.pop(self.index)
+        save_targets(self.paths, self.targets)
+        self._log(f"削除しました: {target.label}")
         self._refresh_list()
+        # 詰めた後の同じ位置 (末尾を消したら 1 つ前) を選び直す。空になったら
+        # index が -1 になり、_select が選択なし + 操作ボタン無効へ落とす。
+        self._select(min(self.index, len(self.targets.targets) - 1))
 
-    # --- shared asset paths (ADR-0046) -----------------------------------
+    # --- editing ---------------------------------------------------------
 
-    def edit_shared_paths(self) -> None:
-        dialog = SharedPathsDialog(self, self.paths, self.default_config)
-        if not dialog.saved:
-            return
-        changed_ids: set[str] = set()
-        if dialog.propagate_requested:
-            changed_ids = self._propagate_shared_paths()
-        # propagate で現在表示中の pipeline が実際に書き換わった時だけ読み直す。
-        # 無関係な保存で編集中の未保存変更を捨てないため。load_entry が末尾で
-        # refresh_readiness まで呼ぶので別途は呼ばない。
-        entry = self.editor.entry
-        if entry is not None and entry.id in changed_ids:
-            self.editor.load_entry(entry)
-
-    def _propagate_shared_paths(self) -> set[str]:
-        """共有素材パスを既存の全 pipeline へ書き込み、実際に書き換えた
-        pipeline の id 集合を返す (ADR-0046)。
-
-        pipeline config は自己完結を保つので、値は実際に各ファイルへ書く。
-        壊れて読めない pipeline は飛ばして名指しで報告する — 黙って捨てない。
-        """
-        skipped: list[str] = []
-        changed_ids: set[str] = set()
-        for entry in self.profile.pipelines:
-            result = load_pipeline_config(self.paths, entry)
-            if not result.ok or result.value is None:
-                # ユーザー向けバナーには読みやすい name、ログには相関用に安定な id。
-                skipped.append(entry.name)
-                continue
-            changed = apply_shared(self.default_config, result.value)
-            if changed:
-                save_pipeline_config(self.paths, entry, result.value)
-                changed_ids.add(entry.id)
-                logger.info(
-                    "propagated %s to pipeline %s", ", ".join(changed), entry.id
-                )
-        # save_pipeline_config は entry.config_version を CURRENT に更新する
-        # (旧版から migrate された pipeline があり得る) ので manifest にも永続化する。
-        # 省くと次回ロードで stale な from_version から二重 migration になり得る。
-        save_profile(self.paths, self.profile)
-        if skipped:
-            self.editor.banner.configure(
-                text=f"⚠ 読めない pipeline へは反映できませんでした: {', '.join(skipped)}"
+    def _read_form(self) -> Target | None:
+        """フォームの内容を Target にする。不正なら理由を出して None。"""
+        port_text = self.vars["port"].get().strip()
+        try:
+            port = int(port_text)
+        except ValueError:
+            self._log(f"ポートが数値ではありません: {port_text!r}")
+            return None
+        host = self.vars["host"].get().strip()
+        if not host:
+            self._log("ホストが空です")
+            return None
+        try:
+            return Target(
+                name=self.vars["name"].get().strip() or "(no name)",
+                host=host,
+                port=port,
+                config_path=self.vars["config_path"].get().strip(),
             )
-        return changed_ids
+        except ValueError as e:
+            self._log(f"設定が不正です: {e}")
+            return None
 
-    # --- new / delete ---------------------------------------------------
+    def save_detail(self) -> Target | None:
+        """フォームを選択中のエントリへ書き戻して永続化し、その Target を返す。
 
-    def new_pipeline(self) -> None:
-        dialog = RecipeDialog(self)
-        if dialog.result is None:
+        操作ボタンもこれを通す。押す直前の編集が黙って捨てられ「直したはずの
+        ホストへ送られない」状態を作らないため。
+        """
+        if self.index is None:
+            return None
+        target = self._read_form()
+        if target is None:
+            return None
+        if self.targets.targets[self.index] != target:
+            self.targets.targets[self.index] = target
+            save_targets(self.paths, self.targets)
+            self._refresh_list()
+        return target
+
+    # --- operations ------------------------------------------------------
+
+    def send_operation(self, event: EventType) -> None:
+        if self.sending:
             return
-        recipe = RECIPES_BY_KEY[dialog.result]
-        claimed = {entry.port for entry in self.profile.pipelines}
-        port = allocate_free_port(claimed)
-        entry = PipelineEntry(
-            id=uuid4().hex[:8],
-            name=recipe.label,
-            port=port,
-            recipe=recipe.key,
+        target = self.save_detail()
+        if target is None:
+            return
+        if event == EventType.reload and not target.config_path:
+            # 受け側は file_path 必須 (WorkerInput の validation)。空のまま
+            # 送ると相手側の例外として返ってくるだけなので、ここで止める。
+            self._log("reload には対象マシン上の config パスが必要です")
+            return
+        self._set_operations_enabled(False)
+        self.sending = True
+        self._log(f"{target.name} へ {event.value} を送信中…")
+        Thread(target=self._send_blocking, args=(target, event), daemon=True).start()
+
+    def _send_blocking(self, target: Target, event: EventType) -> None:
+        try:
+            result = send(
+                target.address,
+                event,
+                config_path=target.config_path,
+                timeout=DEFAULT_TIMEOUT,
+            )
+        except Exception as e:  # noqa: BLE001 - UI へ必ず結果を返す
+            result = SendResult(
+                ok=False, elapsed_ms=0.0, detail=f"{type(e).__name__}: {e}"
+            )
+        self._schedule(self._on_result, target, event, result)
+
+    def _schedule(self, callback: Callable[..., None], *args: Any) -> None:
+        # 送信スレッドから呼ばれる。root が消えた後 (送信中に窓を閉じた) の
+        # after() は例外になるので握る。
+        try:
+            self.after(0, callback, *args)
+        except TclError, RuntimeError:
+            pass
+
+    def _on_result(self, target: Target, event: EventType, result: SendResult) -> None:
+        self.status[target.address] = MARK_OK if result.ok else MARK_NG
+        outcome = "OK" if result.ok else "NG"
+        detail = f" {result.detail}" if result.detail else ""
+        self._log(
+            f"{target.name} {event.value} {outcome} ({result.elapsed_ms:.0f}ms){detail}"
         )
-        config = recipe.apply(self.default_config)
-        save_pipeline_config(self.paths, entry, config)
-        self.profile.pipelines.append(entry)
-        save_profile(self.paths, self.profile)
+        self.sending = False
+        self._set_operations_enabled(self.index is not None)
         self._refresh_list()
-        self._select_index(len(self.profile.pipelines) - 1)
 
-    def delete_pipeline(self) -> None:
-        selection = self.listbox.curselection()
-        if not selection:
-            return
-        index = selection[0]
-        entry = self.profile.pipelines.pop(index)
-        if entry.id in self.runners:
-            # Stop off-thread (same as _stop_current) so deleting a RUNNING
-            # pipeline doesn't freeze the UI for stop()'s terminate→wait→kill.
-            # The thread keeps its own reference, so we can drop it from the
-            # dict immediately.
-            runner = self.runners.pop(entry.id)
-            Thread(target=runner.stop, daemon=True).start()
-        self.logs.pop(entry.id, None)
-        config_path = self.paths.pipeline_config(entry.id)
-        if config_path.exists():
-            quarantine(config_path)
-            config_path.unlink()
-        save_profile(self.paths, self.profile)
-        if self.editor.entry is not None and self.editor.entry.id == entry.id:
-            self.editor.clear()
-        self._refresh_list()
-        # Re-select by position (clamped) and re-sync the editor, so a stale
-        # old-list index can never leave a shifted-up pipeline highlighted.
-        self._select_index(min(index, len(self.profile.pipelines) - 1))
-        logger.info("deleted pipeline %s", entry.id)
+    def _set_operations_enabled(self, enabled: bool) -> None:
+        for button in self.operation_buttons:
+            button.configure(state="normal" if enabled else "disabled")
 
-    def on_close(self) -> None:
-        # Signal every runner to terminate WITHOUT waiting, then close
-        # immediately — waiting serially on each Popen.wait() would freeze the
-        # window for the sum of all shutdown times. The children get the
-        # terminate signal synchronously (fast) before the process exits.
-        for runner in self.runners.values():
-            runner.request_stop()
-        self.master.destroy()
+    # --- log -------------------------------------------------------------
+
+    def _log(self, message: str) -> None:
+        stamp = datetime.now().strftime("%H:%M:%S")
+        self.logbox.text.configure(state="normal")
+        self.logbox.text.insert(END, f"{stamp} {message}\n")
+        # 無限に伸ばさない。古い行から落として直近だけ残す。
+        excess = int(self.logbox.text.index("end-1c").split(".")[0]) - LOG_MAX_LINES
+        if excess > 0:
+            self.logbox.text.delete("1.0", f"{excess + 1}.0")
+        self.logbox.text.see(END)
+        self.logbox.text.configure(state="disabled")
 
 
 @click.command()
 @click.option(
-    "--profile-dir", "profile_dir", type=click.Path(path_type=Path), default=None
+    "--config-dir", "config_dir", type=click.Path(path_type=Path), default=None
 )
 @click.option(
     "-t", "--theme", default="cosmo", type=click.Choice(list(STANDARD_THEMES.keys()))
 )
-def main(profile_dir: Path | None, theme: str):
+def main(config_dir: Path | None, theme: str):
     root = Window(themename=theme)
-    root.title("vspeech pipelines")
-    root.geometry("900x760")
-    root.minsize(760, 640)
-    app = App(root, profile_dir)
-    root.protocol("WM_DELETE_WINDOW", app.on_close)
+    root.title("vspeech remote")
+    root.geometry("720x520")
+    root.minsize(640, 460)
+    App(root, config_dir)
     root.mainloop()

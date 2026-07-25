@@ -42,7 +42,7 @@ uv sync --extra audio --extra whisper
 | `voicevox` | VOICEVOX 音声合成 |
 | `rvc` | RVC ボイスチェンジャー |
 | `mozc` | AmiVoice の結果をかな漢字変換する (`transcription.transliterate_with_mozc`) |
-| `gui` | ttkbootstrap の GUI |
+| `gui` | ttkbootstrap の GUI（走っている pipeline への操作パネル） |
 
 設定項目は `config.toml.example` や `vspeech/config.py` を参照してください。ごめんなさい。
 
@@ -71,8 +71,15 @@ whisper, RVC は CUDA 12.8 (`torch 2.10.0+cu128`) がインストールされて
 uv run python -m vspeech --config ./config.toml
 ```
 
-GUI
+GUI（**すでに走っている** pipeline へ疎通確認 / pause / resume / reload を送るだけの
+操作パネル。pipeline の起動・設定編集はしないので config 引数を取らない。宛先一覧は
+OS の設定ディレクトリの `targets.toml` に保存される。[ADR-0060](docs/adr/0060-gui-remote-control-panel.md)）
 
 ```sh
-uv run python -m gui -c config.toml
+uv run python -m gui
+uv run python -m gui --config-dir ./mydir -t darkly   # 保存先とテーマの上書き
 ```
+
+宛先には名前・ホスト・ポート（対象 pipeline の `listen_port`）と、reload 用の config
+パスを登録する。**この config パスは対象マシン上のパス**で、reload を受けた側が自分で
+開く。

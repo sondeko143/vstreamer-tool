@@ -11,24 +11,13 @@ def default_root() -> Path:
 
 
 @dataclass(frozen=True)
-class ProfilePaths:
+class GuiPaths:
     root: Path
 
     @property
-    def default_config(self) -> Path:
-        return self.root / "default.toml"
-
-    @property
-    def manifest(self) -> Path:
-        return self.root / "pipelines.toml"
-
-    @property
-    def pipelines_dir(self) -> Path:
-        return self.root / "pipelines"
-
-    def pipeline_config(self, pipeline_id: str) -> Path:
-        return self.pipelines_dir / f"{pipeline_id}.toml"
+    def targets(self) -> Path:
+        return self.root / "targets.toml"
 
 
-def resolve_paths(root: Path | None = None) -> ProfilePaths:
-    return ProfilePaths(root=root if root is not None else default_root())
+def resolve_paths(root: Path | None = None) -> GuiPaths:
+    return GuiPaths(root=root if root is not None else default_root())
