@@ -1,6 +1,6 @@
 # 0062. ログ間引きを回数ベースから時間ベース + エピソード境界へ統一する
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-26
 - Related: [0050](0050-streaming-vc-separate-subsystem.md), [0051](0051-stream-transport-swappable-tiered.md), [0056](0056-stream-vc-consumer-jitter-buffer.md), spec `docs/superpowers/specs/2026-07-26-log-throttle-design.md`
 
