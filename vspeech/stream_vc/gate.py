@@ -82,16 +82,22 @@ class StreamingVadGate:
         self._prev_gains: NDArray[np.float64] | None = None
 
     def reset(self) -> None:
-        """閉じた状態(hangover 空・前ブロックのマスク無し・VAD 状態も新品)へ戻す。
+        """閉じた状態(hangover 空・前ブロックのマスク無し)へ戻す。
 
         pause/resume や capture 再 open で実時間が飛んだあと、古い hangover 残量や
-        マスク、飛ぶ前の音で育った VAD の再帰状態が漏れて直後のブロックを妙に
-        開放/減衰させないため、runner が遷移で呼ぶ。`warned`(fail-open 警告の
-        重複抑止)は障害状態なので触らない。
+        マスクが漏れて直後のブロックを妙に開放/減衰させないため、runner が遷移で
+        呼ぶ。`warned`(fail-open 警告の重複抑止)は障害状態なので触らない。
+
+        **`vad_carry` は捨てない**。実時間が飛んだのだから新品にするのが素直に見えるが、
+        実測するとコストが非対称だった(実録音・全ブロック境界で reset を模擬):
+        直後 1 ブロック目で真値の発話窓の **42%**、2 ブロック目でも 16% を落とす
+        (持ち越せば 0%)。resume 直後に発話が続いていると語頭が欠ける = この ADR が
+        消そうとしているのと同種の症状になる。残す側のコストは「飛ぶ前の音で育った
+        状態が最初の 1〜2 窓を余計に開けるかもしれない」程度で、hangover 予算とマスクは
+        ここで閉じているので高々 1 窓ぶん。Silero の状態は短期記憶なので数窓で減衰する。
         """
         self._since_speech = self._hangover_windows + 1
         self._prev_gains = None
-        self.vad_carry = VadCarry()
 
     def window_gains(self, probs: NDArray[np.float64]) -> NDArray[np.float64]:
         """窓確率列からこのブロックの窓ごとのゲインを返す(後方 dilation のみ)。
@@ -141,17 +147,19 @@ class StreamingVadGate:
         n = int(out_i16.shape[0])
         if n == 0 or gains.shape[0] == 0:
             return out_i16
+        # 窓 1 つぶんの出力サンプル数。窓中心をこの格子に並べて線形補間する。
+        step = VAD_WINDOW_SAMPLES * sample_rate / VAD_SAMPLE_RATE
         prev = self._prev_gains
         self._prev_gains = gains
         if prev is None:
             # 直前の情報が無い(起動直後 / reset 直後)。emit の頭は「実時間が飛ぶ前」
             # または zeros 文脈から描かれた音なので、閉じた状態(min_gain)から始める
-            # ── `_since_speech` の初期値と揃える。
-            prev = np.full(1, self.min_gain, dtype=np.float64)
+            # ── `_since_speech` の初期値と揃える。**1 窓ではなく hop ぶんの窓数**を
+            # 置くこと: 1 要素だとその中心が hop まるごと手前(既定で -144ms)に来て、
+            # 立ち上がりが 32ms でなく 160ms かけて渡り、頭が閉じきらない(実測 -4.6dB)。
+            prev = np.full(max(1, round(n / step)), self.min_gain, dtype=np.float64)
         if float(gains.min()) == 1.0 and float(prev.min()) == 1.0:
             return out_i16
-        # 窓 1 つぶんの出力サンプル数。窓中心をこの格子に並べて線形補間する。
-        step = VAD_WINDOW_SAMPLES * sample_rate / VAD_SAMPLE_RATE
         n_prev = int(prev.shape[0])
         # 前ブロックの原点は「窓数 x 窓長」ではなく **emit 長(= hop) ぶん手前**。
         # speech_probs は ceil(block_len/512) 窓へゼロパディングするので、block_len が
@@ -164,6 +172,10 @@ class StreamingVadGate:
             ]
         )
         all_gains = np.concatenate([prev, gains])
+        # `prev` は 1 ブロックぶんしか持たないので、`delay_samples` が hop を超える
+        # 設定(例: block_ms=80 かつ crossfade_ms=70)では emit の頭が最初の窓中心より
+        # 左に出て `prev[0]` へ clamp される。連続なので click にはならないが、その
+        # 区間のマスクは 2 ブロック前の情報を持たない。
         gain = np.interp(
             np.arange(n, dtype=np.float64) - delay_samples, centers, all_gains
         )

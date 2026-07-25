@@ -127,7 +127,17 @@ async def gate_window_gains(
         if not gate.warned:
             gate.warned = True
             logger.warning("stream_vc vad gate failed; passing audio ungated: %s", e)
-        return np.ones(1, dtype=np.float64)
+        # window_gains を通さないので hangover 予算(`_since_speech`)は据え置き。
+        # fail-open 中はどのみち全開なので害は無く、回復したら直前の予算から続く。
+        # 長さは**本来の窓数**に揃える。1 要素で返すと、次の成功ブロックがそれを
+        # 「前ブロックのマスク」として hop ぶん手前へ置くので窓中心が -144ms まで
+        # ずれ、継ぎ目に 0.59 のゲイン段差(= クリック)が出る。
+        from math import ceil
+
+        from vspeech.lib.vad import VAD_WINDOW_SAMPLES
+
+        n_windows = max(1, ceil(int(block.shape[0]) / VAD_WINDOW_SAMPLES))
+        return np.ones(n_windows, dtype=np.float64)
 
 
 def build_stream_vc_runtime(sv_config: StreamVcConfig) -> dict[str, Any]:
@@ -374,8 +384,9 @@ async def vc_loop(
             if envelope is not None:
                 out_i16 = envelope.apply(out_i16, raw_block)
             if gate is not None and gains is not None:
-                # マスクは emit 遅延を補正して重ねる(ADR-0059)。遅延は SOLA の lag で
-                # tick ごとに変わるので、直近 emit の実測値を StreamingVc から取る。
+                # マスクは emit 遅延を補正して重ねる(ADR-0059)。遅延は公称の読み出し
+                # 位置から導いた値で tick 間一定(SOLA の lag は載せない — 載せると
+                # マスクの時刻軸が tick ごとに再アンカーされ継ぎ目でゲインが跳ぶ)。
                 out_i16 = gate.apply(out_i16, gains, sv.emit_delay_samples, sample_rate)
                 if float(gains.min()) < 1.0:
                     telemetry.record("stream_vc_vad_gated", 1.0)

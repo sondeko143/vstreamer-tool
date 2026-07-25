@@ -210,9 +210,10 @@ class StreamingVc:
         ) = None
         self._output_tail = None  # 初回 crossfade で zeros(out_xf) を遅延生成
         # 直近 emit の内容が入力ブロック先頭より何サンプル手前から始まるか(出力
-        # レート)。crossfade/SOLA/HuBERT 受容野の切り詰めぶん emit は遅れて出るので、
+        # レート)。crossfade/HuBERT 受容野の切り詰めぶん emit は遅れて出るので、
         # 出力へ何かを時刻整合で重ねる側(VAD ゲートのマスク, ADR-0059)はこれで補正
-        # する。SOLA の lag ぶん tick ごとに変わるので毎 emit 更新する。
+        # する。値は**公称の読み出し位置**由来なので tick 間で一定 — SOLA の lag は
+        # 載せない(理由は `_emit_with_crossfade` の該当箇所)。
         self.emit_delay_samples = 0
         if crossfade_len > 0 and context_len < crossfade_len:
             raise ValueError(

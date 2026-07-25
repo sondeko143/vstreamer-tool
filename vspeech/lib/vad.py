@@ -133,8 +133,16 @@ class VadCarry:
     below 0.3, where a state-carrying run scores them 0.969-1.000 (mean 0.996).
 
     Pass one of these to `speech_probs` to thread the state; carrying it makes
-    the per-block calls bit-exact with a single whole-signal call. Drop it (or
-    make a fresh one) whenever real time jumps -- pause/resume, device re-open.
+    the per-block calls bit-exact with a single whole-signal call **when the
+    block length is a multiple of VAD_WINDOW_SAMPLES** (the streaming default,
+    160ms at 16kHz = 5 windows, is). Otherwise each block's tail window is
+    zero-padded and that padding is both fed to the RNN and written into the
+    carried context, so the split result drifts from the whole-signal one. A
+    proper fix would buffer the sub-window remainder here instead of padding it;
+    left undone because the validated block sizes are multiples of 32ms.
+
+    Drop it (or make a fresh one) whenever real time jumps -- pause/resume,
+    device re-open.
     """
 
     __slots__ = ("state", "context")

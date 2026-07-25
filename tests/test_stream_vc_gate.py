@@ -31,8 +31,9 @@ def test_window_gains_duck_non_speech_windows_inside_a_speech_block():
     """発話を含むブロックでも、その中の非音声窓は個別に落とす。
 
     実録音の語頭ブロック(t=3.52s)で実測した確率列。ブロック粒度(窓確率の max)
-    判定だと 1 窓 (0.868) のせいでブロック全体が 1.0 で通り、HuBERT の窓正規化が
-    持ち上げた発声直前の微小入力がブレスとして出ていた(batch 経路比 +41dB)。
+    判定だと 1 窓 (0.868) のせいでブロック全体が 1.0 で通り、解析窓の中身に依存して
+    増幅された発声直前の微小入力(batch 経路比 +43dB、機序の内訳は ADR-0059)が
+    ブレスとして出ていた。
     """
     g = _gate(threshold=0.3, hangover_ms=0.0, min_gain=0.0)
     probs = np.array([0.030, 0.222, 0.140, 0.082, 0.868])
@@ -80,14 +81,19 @@ def test_probability_equal_to_the_threshold_counts_as_speech():
     assert list(g.window_gains(np.array([0.499999]))) == [0.0]
 
 
-def test_reset_gives_a_fresh_vad_carry():
-    """VAD の再帰状態も reset 対象(実時間が飛んだあとに持ち越さない)。"""
+def test_reset_keeps_the_vad_carry():
+    """VAD の再帰状態は reset しても捨てない。
+
+    新品にすると直後 1 ブロックの発話窓の 42% を落とす(実録音で実測)。resume 直後に
+    発話が続いていると語頭が欠ける。hangover とマスクは閉じるので、状態を残しても
+    余計に開くのは高々 1 窓ぶん。
+    """
     g = _gate()
     g.vad_carry.state += 1.0
-    old = g.vad_carry
+    kept = g.vad_carry
     g.reset()
-    assert g.vad_carry is not old
-    assert not g.vad_carry.state.any()
+    assert g.vad_carry is kept
+    assert g.vad_carry.state.any()
 
 
 # --- emit への適用 ----------------------------------------------------------
@@ -116,7 +122,7 @@ def test_apply_keeps_the_head_closed_on_the_first_block_after_reset():
     block = np.full(5 * _STEP, amp, dtype=np.int16)
     g = _gate(min_gain=0.0)
     out = g.apply(block, np.ones(5), _STEP, _RATE).astype(np.float64)
-    assert out[0] < amp * 0.95  # 頭は閉から立ち上がる
+    assert out[0] == pytest.approx(0.0, abs=1.0)  # 頭は本当に閉じている
     assert out[-1] == pytest.approx(amp, abs=1.0)  # 本体は素通し
 
 
@@ -397,6 +403,30 @@ async def test_vc_loop_forwards_the_emit_delay_and_the_output_sample_rate(monkey
     assert [(a[1], a[2]) for a in applied] == [(1234, 40000), (1234, 40000)]
 
 
+async def test_vc_loop_threads_the_vad_carry_into_speech_probs(monkeypatch):
+    """runner が gate.vad_carry を speech_probs へ渡している(同じ物を毎ブロック)。
+
+    第 3 引数を落とすと Silero が毎ブロックコールドスタートに戻り、実録音で
+    検出できる発話窓が 56 -> 23 に落ちる。渡していることを見ていないと、その
+    退行がテスト緑のまま入る。
+    """
+    from vspeech.config import StreamVcConfig
+    from vspeech.lib.vad import VadCarry
+
+    sv = StreamVcConfig(vad_gate=True)
+    seen: list[object] = []
+
+    def spy_probs(_session, _audio, carry=None):
+        seen.append(carry)
+        return np.zeros(5)
+
+    monkeypatch.setattr("vspeech.lib.vad.speech_probs", spy_probs)
+    await _run_vc_loop(monkeypatch, sv, object(), 2)
+    assert len(seen) == 2
+    assert isinstance(seen[0], VadCarry)  # None ではない = 引数が渡っている
+    assert seen[0] is seen[1]  # 毎ブロック同じ carry = 状態が持ち越される
+
+
 async def test_gate_open_on_speech_is_bit_identical(monkeypatch):
     """speech 判定が続くあいだは恒等路で無ゲート出力と一致する。
 
@@ -423,17 +453,24 @@ async def test_gate_failure_is_fail_open_and_warns_once(monkeypatch, caplog):
 
     sv = StreamVcConfig(vad_gate=True)
 
-    def boom(_session, _audio):
+    def boom(_session, _audio, _carry=None):
+        # 引数の数を本物(session, audio, carry)に合わせること。合っていないと
+        # TypeError の方が先に出て、fail-open ではなく arity ミスを見るテストになる。
         raise RuntimeError("vad exploded")
 
     monkeypatch.setattr("vspeech.lib.vad.speech_probs", boom)
     with caplog.at_level(logging.WARNING):
         transport, applied = await _run_vc_loop(monkeypatch, sv, object(), 3)
-    assert [a[0] for a in applied] == [[1.0], [1.0], [1.0]]  # fail-open: 全開のマスク
+    # fail-open は**本来の窓数**で全開マスクを返す(2560 サンプル = 5 窓)。1 要素だと
+    # 次ブロックがそれを hop ぶん手前へ置いて継ぎ目に段差が出る。
+    assert [a[0] for a in applied] == [[1.0] * 5] * 3
     for p in transport.packets[1:]:
         assert p.pcm == _VC_OUT.tobytes()  # 素通し(恒等の高速路)
     warnings = [r for r in caplog.records if "vad gate failed" in r.getMessage()]
     assert len(warnings) == 1
+    # 意図した例外を見ていることまで確かめる(スタブの引数不一致で TypeError が
+    # 先に出ていても、上の assert だけなら緑のまま通ってしまう)。
+    assert "vad exploded" in warnings[0].getMessage()
 
 
 # --- pause/resume ゲート ----------------------------------------------------
