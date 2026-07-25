@@ -81,19 +81,19 @@ def test_probability_equal_to_the_threshold_counts_as_speech():
     assert list(g.window_gains(np.array([0.499999]))) == [0.0]
 
 
-def test_reset_keeps_the_vad_carry():
-    """VAD の再帰状態は reset しても捨てない。
+def test_reset_gives_a_fresh_vad_carry():
+    """VAD の再帰状態も reset 対象(実時間が飛んだあとに持ち越さない)。
 
-    新品にすると直後 1 ブロックの発話窓の 42% を落とす(実録音で実測)。resume 直後に
-    発話が続いていると語頭が欠ける。hangover とマスクは閉じるので、状態を残しても
-    余計に開くのは高々 1 窓ぶん。
+    残すと「発話中に pause -> 無音へ resume」で古い状態が最初の窓を speech と誤判定
+    しうる。1 窓でも誤ると _since_speech が 0 に戻って hangover が満額で再武装される
+    ので、漏れは 1 窓では止まらない(実測 104 通り中 8 回、最大 320ms)。
     """
     g = _gate()
     g.vad_carry.state += 1.0
-    kept = g.vad_carry
+    old = g.vad_carry
     g.reset()
-    assert g.vad_carry is kept
-    assert g.vad_carry.state.any()
+    assert g.vad_carry is not old
+    assert not g.vad_carry.state.any()
 
 
 # --- emit への適用 ----------------------------------------------------------

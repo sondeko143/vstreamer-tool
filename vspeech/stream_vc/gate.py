@@ -30,9 +30,9 @@ content encoder が同じ音を左文脈次第で別物として符号化する�
   まで後退)。語尾・語間の保護に要るのは後方だけなので、`hangover_ms` を
   **後方 dilation** として使う。
 - **emit 遅延を補正して重ねる**。emit の内容は入力ブロックより手前から始まる
-  (crossfade + SOLA + HuBERT 受容野の切り詰めで実測 ~52ms)。補正しないとマスクが
-  ずれた音声に当たり、同じ実測で抑圧が -26dB から -8dB まで落ちる。遅延量は
-  `StreamingVc.emit_delay_samples` が tick ごとに公開する。
+  (crossfade + HuBERT 受容野の切り詰めで既定 50ms)。補正しないとマスクがずれた
+  音声に当たり、実測で抑圧が -26dB から -8dB まで落ちる。遅延量は
+  `StreamingVc.emit_delay_samples` が公開する(公称位置由来なので tick 間で一定)。
 - **ゲインは窓中心のあいだを線形補間する**。境界でゲインを階段状に変えること自体が
   クリックを生むので、32ms かけて渡す(前ブロックのマスク末尾から連続させる)。
 
@@ -42,6 +42,7 @@ numpy は `vspeech/lib/stream_vc.py` と同様にメソッド内 import に留�
 
 from __future__ import annotations
 
+from math import ceil
 from typing import TYPE_CHECKING
 
 from vspeech.lib.vad import VAD_SAMPLE_RATE
@@ -82,22 +83,23 @@ class StreamingVadGate:
         self._prev_gains: NDArray[np.float64] | None = None
 
     def reset(self) -> None:
-        """閉じた状態(hangover 空・前ブロックのマスク無し)へ戻す。
+        """閉じた状態(hangover 空・前ブロックのマスク無し・VAD 状態も新品)へ戻す。
 
         pause/resume や capture 再 open で実時間が飛んだあと、古い hangover 残量や
-        マスクが漏れて直後のブロックを妙に開放/減衰させないため、runner が遷移で
-        呼ぶ。`warned`(fail-open 警告の重複抑止)は障害状態なので触らない。
+        マスク、飛ぶ前の音で育った VAD の再帰状態が漏れて直後のブロックを妙に
+        開放/減衰させないため、runner が遷移で呼ぶ。`warned`(fail-open 警告の
+        重複抑止)は障害状態なので触らない。
 
-        **`vad_carry` は捨てない**。実時間が飛んだのだから新品にするのが素直に見えるが、
-        実測するとコストが非対称だった(実録音・全ブロック境界で reset を模擬):
-        直後 1 ブロック目で真値の発話窓の **42%**、2 ブロック目でも 16% を落とす
-        (持ち越せば 0%)。resume 直後に発話が続いていると語頭が欠ける = この ADR が
-        消そうとしているのと同種の症状になる。残す側のコストは「飛ぶ前の音で育った
-        状態が最初の 1〜2 窓を余計に開けるかもしれない」程度で、hangover 予算とマスクは
-        ここで閉じているので高々 1 窓ぶん。Silero の状態は短期記憶なので数窓で減衰する。
+        `vad_carry` を残す案は実測して**却下**した(ADR-0059 の Alternatives 参照)。
+        発話中に pause して無音へ resume すると、古い「発話中」の状態が最初の窓を
+        誤って speech と判定しうる。1 窓でも誤ると `_since_speech` が 0 に戻って
+        hangover 予算が満額で再武装されるので、漏れは 1 窓では止まらない
+        (実測: 104 通り中 8 回漏れ、最大 320ms)。それはこの ADR が消そうとしている
+        「増幅された微小入力が鳴る」そのものなので、精度と引き換えにはできない。
         """
         self._since_speech = self._hangover_windows + 1
         self._prev_gains = None
+        self.vad_carry = VadCarry()
 
     def window_gains(self, probs: NDArray[np.float64]) -> NDArray[np.float64]:
         """窓確率列からこのブロックの窓ごとのゲインを返す(後方 dilation のみ)。
@@ -157,7 +159,10 @@ class StreamingVadGate:
             # ── `_since_speech` の初期値と揃える。**1 窓ではなく hop ぶんの窓数**を
             # 置くこと: 1 要素だとその中心が hop まるごと手前(既定で -144ms)に来て、
             # 立ち上がりが 32ms でなく 160ms かけて渡り、頭が閉じきらない(実測 -4.6dB)。
-            prev = np.full(max(1, round(n / step)), self.min_gain, dtype=np.float64)
+            # 窓数は実マスクと同じ数え方(ceil)にする。round だとブロック長が窓長の
+            # 倍数でない設定(block_ms=80)で 1 窓少なくなり、最後の seed 中心が
+            # 手前へずれて頭が閉じきらない。
+            prev = np.full(max(1, ceil(n / step)), self.min_gain, dtype=np.float64)
         if float(gains.min()) == 1.0 and float(prev.min()) == 1.0:
             return out_i16
         n_prev = int(prev.shape[0])
