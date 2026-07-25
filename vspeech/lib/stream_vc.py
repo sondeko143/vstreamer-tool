@@ -302,11 +302,23 @@ class StreamingVc:
         self._context = next_context(seq, self.context_len).detach()
         if self.crossfade_len > 0:
             return self._emit_with_crossfade(out)
-        # crossfade 無効時も長さは実時間クロック由来。描画長からの比率導出は
-        # HuBERT の受容野ぶん(約 320 入力サンプル)短く出て sink を飢えさせる。
-        # 位置は末尾アンカーのままなので、切り詰められた末尾は避けられる。
+        return self._emit_no_crossfade(out)
+
+    def _emit_no_crossfade(self, out: NDArray[np.int16]) -> NDArray[np.int16]:
+        """crossfade 無効時の emit(末尾アンカーで hop ちょうどを出す)。
+
+        長さは実時間クロック由来。描画長からの比率導出は HuBERT の受容野ぶん
+        (約 320 入力サンプル)短く出て sink を飢えさせる。位置は末尾アンカーの
+        ままなので、切り詰められた末尾は避けられる。
+        """
         out_hop = round(self.block_len * self.target_sample_rate / 16000)
         if out.shape[0] < out_hop:
+            # 描画が 1 hop に満たない = context_ms が短すぎる壊れた設定(crossfade 経路は
+            # ここで ValueError を投げる)。この分岐は emit 長がそもそも hop に足りず
+            # レートロックが崩れているので、報告する遅延も意味を持たない
+            # (ctx_out = 文脈まるごと分になり、ゲートのマスクは全域が前ブロックの値へ
+            # clamp される)。ここを直すなら crossfade 経路と同じく fail-loud にする
+            # のが筋だが、crossfade_ms=0 の既存設定の挙動を変えるので別件として残す。
             self.emit_delay_samples = self._emit_delay(0)
             return out
         self.emit_delay_samples = self._emit_delay(out.shape[0] - out_hop)
@@ -415,7 +427,13 @@ class StreamingVc:
             start = (nominal - out_sola) + sola_offset(self._output_tail, region)
         else:
             start = nominal
-        self.emit_delay_samples = self._emit_delay(start)
+        # 公開する遅延は SOLA の lag を含めない(`start` ではなく `nominal` から導く)。
+        # lag は tick ごとに ±out_sola 動くので、それを時刻軸に載せると、これを使って
+        # 出力へ何かを重ねる側(VAD ゲートのマスク)の時刻軸が tick ごとに再アンカーされ、
+        # emit の継ぎ目でゲインが跳ぶ(実機で最大 0.06、構造上の上限は 2*out_sola/窓長 =
+        # 0.31 = クリック)。残る内容ずれは高々 out_sola(既定 5ms)で、マスクの分解能
+        # 32ms より十分小さい。SOLA は出力の時間基準の微修正であって内容の遅延ではない。
+        self.emit_delay_samples = self._emit_delay(nominal)
         head = out_f[start : start + out_xf]
         blended = overlap_add(self._output_tail, head, fade_in, fade_out)
         middle = out_f[start + out_xf : start + out_hop]

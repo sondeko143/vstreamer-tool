@@ -95,6 +95,12 @@ class StreamingEnvelope:
         if ref < 1e-8:  # 実質デジタル無音 (init 直後の完全無音等) → 素通し
             return out_i16
         # 相対形状 (mean~1 ではなく参照相対) を出力サンプル格子へ線形補間。
+        # 【未対応・別件】この写像は入力ブロックと emit が同じ時刻を占める前提 (0..1 の
+        # 正規化軸) だが、実際の emit は入力より遅れて出る (crossfade + SOLA + HuBERT
+        # 受容野で実測 ~50ms)。ADR-0059 でゲート側は StreamingVc.emit_delay_samples で
+        # 補正したが、こちらは ADR-0057 の範囲なので手を付けていない。影響は
+        # envelope_min/max_gain (既定 0.1/1.0、実機設定 0.6/0.9) に挟まれた整形の
+        # 時刻ずれに限られる。直すなら delay_samples を受け取って dst_x をずらす。
         src_x = (np.arange(n_frames) + 0.5) / n_frames
         dst_x = (np.arange(out_len) + 0.5) / out_len
         shape = np.interp(dst_x, src_x, frame_rms / ref)

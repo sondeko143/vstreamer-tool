@@ -1,13 +1,14 @@
 """streaming VC の窓単位 VAD ノイズゲート(ADR-0059 / ADR-0053 / ADR-0019)。
 
 streaming 経路は無音でも止まらず回り続けるので、ゲートが無いと**部屋のノイズ
-フロアがそのまま RVC を通り、しかも増幅されて**鳴り続ける。さらに語頭では
-HuBERT 特徴抽出器の第1層 GroupNorm が解析窓全体の時間軸統計で正規化する結果、
-発声直前の微小入力(実測 RMS 0.002)が音声レベルまで持ち上げられ、気音として
-合成される(実測: 同一音声・同一モデルで batch 経路の **+41dB**)。モデル側の
-正規化は動かせないので、**バッチ経路と同じ 32ms 窓の粒度でゲートする**ことで
-可聴成分を落とす(実録音の e2e 実測で語頭のブレス -20.5dB / -12.4dB、本物の語頭と
-定常は保持)。
+フロアがそのまま RVC を通り、しかも増幅されて**鳴り続ける。さらに語頭では、
+発声直前の微小入力(実測 RMS 0.002)が音として合成されて出る(実測: 同一音声・
+同一モデルで batch 経路の **+43dB**)。これは解析窓の中身に依存する現象で、
+content encoder が同じ音を左文脈次第で別物として符号化するために起きる
+(f0 経路ではないことは実測で確認済み。窓のどの性質が効いているかまでは
+切り分けていない — ADR-0059 参照)。モデル側は動かせないので、**バッチ経路と
+同じ 32ms 窓の粒度でゲートする**ことで可聴成分を落とす(実録音の e2e 実測で
+語頭のブレス -24.8dB / -6.9dB、本物の語頭と定常は保持)。
 
 ここは判定と適用だけを持つモデル非依存の純ロジックで、Silero VAD 本体は
 `vspeech/lib/vad.py`(発話系 `[vc]` と共有)をそのまま読み取り専用で再利用する。
@@ -45,6 +46,7 @@ from typing import TYPE_CHECKING
 
 from vspeech.lib.vad import VAD_SAMPLE_RATE
 from vspeech.lib.vad import VAD_WINDOW_SAMPLES
+from vspeech.lib.vad import VadCarry
 
 if TYPE_CHECKING:
     import numpy as np
@@ -64,11 +66,14 @@ class StreamingVadGate:
 
     def __init__(self, threshold: float, hangover_ms: float, min_gain: float) -> None:
         self.threshold = threshold
-        self.hangover_ms = hangover_ms
         self.min_gain = min_gain
         # fail-open 警告の重複抑止フラグ(runner が使う)。streaming は 6.25Hz で
         # 回るので、VAD が壊れたときに毎ブロック警告するとログが埋まる。
         self.warned = False
+        # Silero の再帰状態。ブロックごとに作り直すと RNN が毎回コールドスタートし、
+        # 明確な有声窓の確率まで壊れる(lib/vad.py の VadCarry 参照)。runner が
+        # speech_probs へ渡す。
+        self.vad_carry = VadCarry()
         self._hangover_windows = max(0, round(hangover_ms / _WINDOW_MS))
         # 最後の speech からの窓数。予算超えで頭打ちにして単調増加を止める。
         # 初期値は「閉じた状態」: 窓単位なら speech の窓がそのまま開くので、
@@ -77,14 +82,16 @@ class StreamingVadGate:
         self._prev_gains: NDArray[np.float64] | None = None
 
     def reset(self) -> None:
-        """閉じた状態(hangover 空・前ブロックのマスク無し)へ戻す。
+        """閉じた状態(hangover 空・前ブロックのマスク無し・VAD 状態も新品)へ戻す。
 
         pause/resume や capture 再 open で実時間が飛んだあと、古い hangover 残量や
-        マスクが漏れて直後のブロックを妙に開放/減衰させないため、runner が遷移で
-        呼ぶ。`warned`(fail-open 警告の重複抑止)は障害状態なので触らない。
+        マスク、飛ぶ前の音で育った VAD の再帰状態が漏れて直後のブロックを妙に
+        開放/減衰させないため、runner が遷移で呼ぶ。`warned`(fail-open 警告の
+        重複抑止)は障害状態なので触らない。
         """
         self._since_speech = self._hangover_windows + 1
         self._prev_gains = None
+        self.vad_carry = VadCarry()
 
     def window_gains(self, probs: NDArray[np.float64]) -> NDArray[np.float64]:
         """窓確率列からこのブロックの窓ごとのゲインを返す(後方 dilation のみ)。
@@ -122,9 +129,12 @@ class StreamingVadGate:
         ずらして重ねる。emit の先頭 `delay_samples` は**前ブロック**の入力に対応
         するので、前ブロックのマスク(`_prev_gains`)を左へ連結してから補間する
         — これがブロック境界のゲイン連続性(段差=クリック無し)も同時に担保する。
+        ただし連続性が成り立つのは `delay_samples` が tick 間で一定のときだけなので、
+        `StreamingVc` は SOLA の lag を含まない**公称**遅延を公開する(ADR-0059)。
 
         全窓 1.0(かつ直前も 1.0)は恒等の高速路で、入力オブジェクトをそのまま返す:
-        常時 speech / 既定 off のとき出力は無ゲート時とビット単位で一致する。
+        常時 speech / 既定 off のとき出力は無ゲート時とビット単位で一致する
+        (起動直後・reset 直後の 1 ブロックだけは閉じた状態から開くので例外)。
         """
         import numpy as np
 
@@ -134,18 +144,26 @@ class StreamingVadGate:
         prev = self._prev_gains
         self._prev_gains = gains
         if prev is None:
-            # 直前の情報が無い(起動直後 / reset 直後)。頭を今ブロック先頭窓の
-            # ゲインで保持する = 余計な遷移を作らない。
-            prev = gains[:1]
+            # 直前の情報が無い(起動直後 / reset 直後)。emit の頭は「実時間が飛ぶ前」
+            # または zeros 文脈から描かれた音なので、閉じた状態(min_gain)から始める
+            # ── `_since_speech` の初期値と揃える。
+            prev = np.full(1, self.min_gain, dtype=np.float64)
         if float(gains.min()) == 1.0 and float(prev.min()) == 1.0:
             return out_i16
         # 窓 1 つぶんの出力サンプル数。窓中心をこの格子に並べて線形補間する。
         step = VAD_WINDOW_SAMPLES * sample_rate / VAD_SAMPLE_RATE
-        all_gains = np.concatenate([prev, gains])
         n_prev = int(prev.shape[0])
-        centers = (
-            np.arange(all_gains.shape[0], dtype=np.float64) + 0.5 - n_prev
-        ) * step
+        # 前ブロックの原点は「窓数 x 窓長」ではなく **emit 長(= hop) ぶん手前**。
+        # speech_probs は ceil(block_len/512) 窓へゼロパディングするので、block_len が
+        # 512 の倍数でないと窓の総長がブロック長を超える(例: block_ms=80 で 96ms)。
+        # n_prev*step でずらすとその差だけマスクが早まる(80ms 設定で 16ms)。
+        centers = np.concatenate(
+            [
+                (np.arange(n_prev, dtype=np.float64) + 0.5) * step - n,
+                (np.arange(gains.shape[0], dtype=np.float64) + 0.5) * step,
+            ]
+        )
+        all_gains = np.concatenate([prev, gains])
         gain = np.interp(
             np.arange(n, dtype=np.float64) - delay_samples, centers, all_gains
         )

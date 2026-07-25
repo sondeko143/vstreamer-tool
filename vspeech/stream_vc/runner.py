@@ -107,6 +107,11 @@ async def gate_window_gains(
     rolling 左文脈とクロスフェード tail を持つので、ブロックを飛ばすと文脈に
     穴が開き発話再開時の seam が壊れる(GPU 余力は実測 RTF 0.24 で十分)。
 
+    Silero は RNN なので、再帰状態はブロックをまたいで持ち越す(`gate.vad_carry`)。
+    ブロックごとに作り直すと毎回コールドスタートし、明確な有声窓まで低い確率を
+    返す(実測で 34 窓中 15 窓が 0.3 を割る)。窓単位ゲートはその確率を 1 窓ずつ
+    直接使うので、持ち越しは必須(lib/vad.py の VadCarry 参照)。
+
     ONNX 推論はブロッキングなので、発話系 worker/vc.py と同じく `to_thread`
     へ逃がす。失敗しても音は素通し(fail-open = 全開の 1 窓マスク)で、警告は
     最初の 1 回だけ。
@@ -116,7 +121,7 @@ async def gate_window_gains(
     from vspeech.lib.vad import speech_probs
 
     try:
-        probs = await to_thread(speech_probs, vad_session, block)
+        probs = await to_thread(speech_probs, vad_session, block, gate.vad_carry)
         return gate.window_gains(probs)
     except Exception as e:
         if not gate.warned:
@@ -324,6 +329,15 @@ async def vc_loop(
             #     不連続が残りうる(crossfade はこれを透明に隠すわけではない)。ただ
             #     OOM は稀で、ここで reset しても改善はしないので許容する。seq も
             #     進めない(欠落を playback に偽装しない)。
+            #   - **VAD ゲートの `_prev_gains` も更新しない**(apply を通らないので
+            #     自動的にそうなる)。これは意図どおり: process_block は infer で
+            #     raise すると self._context を更新しないので、次の成功ブロックの
+            #     emit 先頭(遅延ぶん)は drop したブロックではなく **最後に成功した
+            #     ブロックの尾**の再描画になる。実測(f0 マーカ付き合成入力で block 4
+            #     を drop): 次 emit 先頭 45ms の f0 は 522Hz = block 3 の期待値
+            #     530Hz であって、drop した block 4 の 699Hz ではない。つまり据え置き
+            #     の `_prev_gains`(= block 3 のマスク)が正しい相手に当たる。ここで
+            #     マスクだけ進めると drop したブロックのマスクを別の音に当てる。
             # ただし連続失敗が続くなら黙って spin せず落とす(下 _MAX_...)。
             # ORT ネイティブ例外(onnxruntime の Fail/RuntimeException)は RuntimeError
             # 派生ではないので **捕えない** — あれは大抵グラフ/モデルの恒久的な不備で
