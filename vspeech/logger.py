@@ -40,10 +40,12 @@ class TaskFileHandler(logging.FileHandler):
 
 
 def configure_logger(config: Config):
-    # stdout/stderr がコンソール以外 (GUI サブプロセスの pipe, リダイレクト) だと
-    # encoding が cp1252 等になり、日本語ログで UnicodeEncodeError を投げて emit が
-    # 落ちる → preflight の失敗理由が stdout に出ない (ADR-0038 Goal 1 を潰す)。
-    # UTF-8 + backslashreplace で「読める UTF-8 を出す」かつ「絶対に落ちない」を両立。
+    # stdout/stderr がコンソール以外 (ファイルへのリダイレクト、パイプ、タスク
+    # スケジューラ等からの非対話起動) だと encoding が cp1252 等になり、日本語ログで
+    # UnicodeEncodeError を投げて emit が落ちる → preflight の失敗理由が stdout に
+    # 出ない (ADR-0038 Goal 1 を潰す)。UTF-8 + backslashreplace で「読める UTF-8 を
+    # 出す」かつ「絶対に落ちない」を両立。cli/main.py も同じ理由で同じ手当てを持つ
+    # (あちらは click の help/エラーが対象なので、この関数より前に効かせる必要がある)。
     for _stream in (stdout, stderr):
         try:
             _stream.reconfigure(  # ty: ignore[unresolved-attribute]
@@ -54,9 +56,9 @@ def configure_logger(config: Config):
     log_file_format = logging.Formatter(
         "%(asctime)s %(thread)s[%(task)s] %(levelname)s : %(message)s"
     )
-    # stdout がパイプ/リダイレクト (GUI サブプロセス) だと ColoredFormatter の
-    # ANSI エスケープがそのまま読み手に出てゴミになる。TTY のときだけ色を付け、
-    # 非 TTY では色コードを含まない素のフォーマッタにする。
+    # stdout がパイプ/リダイレクト (ログファイルへの保存、非対話起動) だと
+    # ColoredFormatter の ANSI エスケープがそのまま読み手に出てゴミになる。TTY の
+    # ときだけ色を付け、非 TTY では色コードを含まない素のフォーマッタにする。
     if stdout.isatty():
         log_sout_format: logging.Formatter = ColoredFormatter(
             "%(asctime)s %(log_color)s%(levelname).4s%(reset)s %(thread)s[%(task)s]  : %(message)s"
