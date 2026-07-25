@@ -80,6 +80,83 @@ def test_emit_with_crossfade_hop_is_realtime_clock_not_render_ratio():
     assert lengths == [expected, expected]
 
 
+def test_emit_delay_is_the_offset_from_the_block_start():
+    """emit の内容は入力ブロック先頭より `emit_delay_samples` だけ手前から始まる。
+
+    デコーダ描画は解析窓の先頭に揃い(切り詰めは末尾)、読み出しは末尾アンカーなので、
+    emit は crossfade + SOLA + 受容野の切り詰めぶん手前を鳴らす。VAD ゲートはこの値で
+    マスクをずらして重ねる(ADR-0059)ので、値の契約を CPU で固定する。
+    """
+    block_len, ctx_len, sr = 2560, 8000, 48000
+    xf_len, sola_len = 400, 0
+    sv = _bare_streaming_vc(
+        block_len=block_len,
+        context_len=ctx_len,
+        crossfade_len=xf_len,
+        sola_search_len=sola_len,
+        target_sample_rate=sr,
+    )
+    # 実機同様に受容野ぶん(320 入力サンプル)短い描画長。
+    out_total = round((ctx_len + block_len - 320) * sr / 16000)
+    sv._emit_with_crossfade(np.arange(out_total, dtype=np.int16))
+
+    out_hop = round(block_len * sr / 16000)
+    out_xf = round(xf_len * sr / 16000)
+    ctx_out = round(ctx_len * sr / 16000)
+    assert sv.emit_delay_samples == ctx_out - (out_total - out_hop - out_xf)
+    # 切り詰め(20ms)+ crossfade(25ms) 相当。実測の ~52ms(SOLA 込み)と整合する。
+    assert sv.emit_delay_samples == round(0.045 * sr)
+
+
+def test_emit_delay_does_not_move_with_the_sola_lag():
+    """emit 遅延は SOLA が選ぶ lag では動かない(公称の読み出し位置から導く)。
+
+    lag を時刻軸に載せると、これを使って出力へ重ねる側(VAD ゲートのマスク)の
+    時刻軸が tick ごとに再アンカーされ、emit の継ぎ目でゲインが跳ぶ(クリック)。
+    """
+    block_len, ctx_len, sr = 2560, 8000, 48000
+    xf_len, sola_len = 400, 80
+    sv = _bare_streaming_vc(
+        block_len=block_len,
+        context_len=ctx_len,
+        crossfade_len=xf_len,
+        sola_search_len=sola_len,
+        target_sample_rate=sr,
+    )
+    out_total = round((ctx_len + block_len - 320) * sr / 16000)
+    out_hop = round(block_len * sr / 16000)
+    out_xf = round(xf_len * sr / 16000)
+    out_sola = round(sola_len * sr / 16000)
+    expected = round(ctx_len * sr / 16000) - (out_total - out_hop - out_xf - out_sola)
+
+    rng = np.random.default_rng(0)
+    delays = []
+    for _ in range(5):
+        # tick ごとに違う内容 -> SOLA は毎回違う lag を選ぶ
+        out = (rng.standard_normal(out_total) * 8000).astype(np.int16)
+        sv._emit_with_crossfade(out)
+        delays.append(sv.emit_delay_samples)
+    assert delays == [expected] * 5
+
+
+def test_emit_delay_without_crossfade_is_the_receptive_field_truncation():
+    """crossfade 無効時の emit 遅延は受容野の切り詰めぶんちょうど。"""
+    block_len, ctx_len, sr = 2560, 8000, 48000
+    sv = _bare_streaming_vc(
+        block_len=block_len,
+        context_len=ctx_len,
+        crossfade_len=0,
+        sola_search_len=0,
+        target_sample_rate=sr,
+    )
+    trunc_in = 320
+    out_total = round((ctx_len + block_len - trunc_in) * sr / 16000)
+    out = np.arange(out_total, dtype=np.int16)
+    emitted = sv._emit_no_crossfade(out)
+    assert emitted.shape[0] == round(block_len * sr / 16000)
+    assert sv.emit_delay_samples == round(trunc_in * sr / 16000)
+
+
 def test_emit_with_crossfade_raises_when_output_shorter_than_hop():
     """描画長が 1 hop に満たないときは黙って短く出さず、原因を言って落ちる。"""
     sv = _bare_streaming_vc()

@@ -97,29 +97,47 @@ def make_stream_envelope(sv_config: StreamVcConfig) -> StreamingEnvelope | None:
     )
 
 
-async def gate_target_gain(
+async def gate_window_gains(
     gate: StreamingVadGate, vad_session: Any, block: NDArray[np.float32]
-) -> float:
-    """**入力**ブロックの VAD 判定からこのブロックの目標ゲインを返す。
+) -> NDArray[np.float64]:
+    """**入力**ブロックの VAD 判定から 32ms 窓ごとのゲインを返す(ADR-0059)。
 
     判定は入力側(素のマイクレベル。input_boost をかける前 = 実際の S/N で
     判定する)、適用は出力側。推論そのものはスキップしない: `StreamingVc` は
     rolling 左文脈とクロスフェード tail を持つので、ブロックを飛ばすと文脈に
     穴が開き発話再開時の seam が壊れる(GPU 余力は実測 RTF 0.24 で十分)。
 
+    Silero は RNN なので、再帰状態はブロックをまたいで持ち越す(`gate.vad_carry`)。
+    ブロックごとに作り直すと毎回コールドスタートし、明確な有声窓まで低い確率を
+    返す(実測で 34 窓中 15 窓が 0.3 を割る)。窓単位ゲートはその確率を 1 窓ずつ
+    直接使うので、持ち越しは必須(lib/vad.py の VadCarry 参照)。
+
     ONNX 推論はブロッキングなので、発話系 worker/vc.py と同じく `to_thread`
-    へ逃がす。失敗しても音は素通し(fail-open)で、警告は最初の 1 回だけ。
+    へ逃がす。失敗しても音は素通し(fail-open = 全開の 1 窓マスク)で、警告は
+    最初の 1 回だけ。
     """
+    import numpy as np
+
     from vspeech.lib.vad import speech_probs
 
     try:
-        probs = await to_thread(speech_probs, vad_session, block)
-        return gate.update(gate.speech_from_probs(probs))
+        probs = await to_thread(speech_probs, vad_session, block, gate.vad_carry)
+        return gate.window_gains(probs)
     except Exception as e:
         if not gate.warned:
             gate.warned = True
             logger.warning("stream_vc vad gate failed; passing audio ungated: %s", e)
-        return 1.0
+        # window_gains を通さないので hangover 予算(`_since_speech`)は据え置き。
+        # fail-open 中はどのみち全開なので害は無く、回復したら直前の予算から続く。
+        # 長さは**本来の窓数**に揃える。1 要素で返すと、次の成功ブロックがそれを
+        # 「前ブロックのマスク」として hop ぶん手前へ置くので窓中心が -144ms まで
+        # ずれ、継ぎ目に 0.59 のゲイン段差(= クリック)が出る。
+        from math import ceil
+
+        from vspeech.lib.vad import VAD_WINDOW_SAMPLES
+
+        n_windows = max(1, ceil(int(block.shape[0]) / VAD_WINDOW_SAMPLES))
+        return np.ones(n_windows, dtype=np.float64)
 
 
 def build_stream_vc_runtime(sv_config: StreamVcConfig) -> dict[str, Any]:
@@ -257,7 +275,6 @@ async def vc_loop(
             threshold=sv_config.vad_threshold,
             hangover_ms=sv_config.vad_hangover_ms,
             min_gain=sv_config.vad_min_gain,
-            block_ms=sv_config.block_ms,
         )
     envelope = make_stream_envelope(sv_config)
     seq = 0
@@ -300,9 +317,9 @@ async def vc_loop(
             # (ブースト後の見かけのレベルではなく実際のマイクレベルで判定/整形する)。
             # raw を保持してから boost する (boost==1.0 の identity fast-path でも安全)。
             raw_block = block
-            target_gain = 1.0
+            gains = None
             if gate is not None:
-                target_gain = await gate_target_gain(gate, vad_session, raw_block)
+                gains = await gate_window_gains(gate, vad_session, raw_block)
             block = apply_input_boost(raw_block, sv_config.rvc.input_boost)
             t0 = perf_counter()
             # transient GPU error(CUDA error / OOM 等)は torch/CUDA 由来の
@@ -322,6 +339,15 @@ async def vc_loop(
             #     不連続が残りうる(crossfade はこれを透明に隠すわけではない)。ただ
             #     OOM は稀で、ここで reset しても改善はしないので許容する。seq も
             #     進めない(欠落を playback に偽装しない)。
+            #   - **VAD ゲートの `_prev_gains` も更新しない**(apply を通らないので
+            #     自動的にそうなる)。これは意図どおり: process_block は infer で
+            #     raise すると self._context を更新しないので、次の成功ブロックの
+            #     emit 先頭(遅延ぶん)は drop したブロックではなく **最後に成功した
+            #     ブロックの尾**の再描画になる。実測(f0 マーカ付き合成入力で block 4
+            #     を drop): 次 emit 先頭 45ms の f0 は 522Hz = block 3 の期待値
+            #     530Hz であって、drop した block 4 の 699Hz ではない。つまり据え置き
+            #     の `_prev_gains`(= block 3 のマスク)が正しい相手に当たる。ここで
+            #     マスクだけ進めると drop したブロックのマスクを別の音に当てる。
             # ただし連続失敗が続くなら黙って spin せず落とす(下 _MAX_...)。
             # ORT ネイティブ例外(onnxruntime の Fail/RuntimeException)は RuntimeError
             # 派生ではないので **捕えない** — あれは大抵グラフ/モデルの恒久的な不備で
@@ -357,9 +383,12 @@ async def vc_loop(
             # と同じ順)。envelope は安価な numpy 演算なので inline (to_thread 不要)。
             if envelope is not None:
                 out_i16 = envelope.apply(out_i16, raw_block)
-            if gate is not None:
-                out_i16 = gate.ramp(out_i16, target_gain)
-                if target_gain != 1.0:
+            if gate is not None and gains is not None:
+                # マスクは emit 遅延を補正して重ねる(ADR-0059)。遅延は公称の読み出し
+                # 位置から導いた値で tick 間一定(SOLA の lag は載せない — 載せると
+                # マスクの時刻軸が tick ごとに再アンカーされ継ぎ目でゲインが跳ぶ)。
+                out_i16 = gate.apply(out_i16, gains, sv.emit_delay_samples, sample_rate)
+                if float(gains.min()) < 1.0:
                     telemetry.record("stream_vc_vad_gated", 1.0)
             packet = make_stream_packet(
                 session_id, seq, hop_seconds, out_i16.tobytes(), sample_rate

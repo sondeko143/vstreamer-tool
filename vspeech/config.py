@@ -482,13 +482,15 @@ class StreamVcConfig(BaseModel):
         default=0.5,
         ge=0.0,
         le=1.0,
-        description="speech と判定する窓確率の閾値。ブロック内の最大値と比較する",
+        description="speech と判定する窓確率の閾値。判定も適用も 32ms 窓ごと。"
+        "VAD の再帰状態を持ち越すので発話窓はほぼ 1.0 に張り付く = 下げる必要は無い",
     )
     vad_hangover_ms: float = Field(
         default=300.0,
         ge=0,
-        description="最後の speech からゲートを開けたまま保つ時間 ms。"
-        "語間の短い無音でゲートがバタつくのを防ぐ",
+        description="最後に speech と判定した窓からゲートを開けたまま保つ時間 ms "
+        "(後方 dilation のみ)。語間の短い無音でゲートがバタつくのを防ぐ。前方へは "
+        "広げない — 語頭直前のブレスを開けてしまうため",
     )
     vad_min_gain: float = Field(
         default=0.0,

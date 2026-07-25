@@ -112,6 +112,72 @@ def test_speech_probs_empty_audio_returns_empty():
     assert not session.feeds
 
 
+class _StateDependentStub:
+    """確率が再帰状態に依存するスタブ。
+
+    本物の Silero も RNN なので確率は履歴に依存する。状態の持ち越しが確率に効く
+    ことを見るには、状態を無視するスタブでは不十分。
+    """
+
+    def run(self, output_names, input_feed):
+        state = input_feed["state"] + 1.0
+        return np.array([[float(state[0, 0, 0]) / 100.0]], dtype=np.float32), state
+
+
+def test_speech_probs_without_carry_restarts_cold_each_call():
+    """carry を渡さない呼び出しは毎回ゼロ状態から始まる(chunk 単位の既存挙動)。"""
+    session = _StubSession()
+    audio = np.arange(1024, dtype=np.float32)
+    speech_probs(session, audio[:512])
+    speech_probs(session, audio[512:])
+    second = session.feeds[1]
+    np.testing.assert_array_equal(second["state"], np.zeros((2, 1, 128)))
+    np.testing.assert_array_equal(
+        second["input"][0, :64], np.zeros(64, dtype=np.float32)
+    )
+
+
+def test_speech_probs_with_carry_threads_state_and_context_across_calls():
+    from vspeech.lib.vad import VadCarry
+
+    session = _StubSession()
+    audio = np.arange(1024, dtype=np.float32)
+    carry = VadCarry()
+    speech_probs(session, audio[:512], carry)
+    speech_probs(session, audio[512:], carry)
+    second = session.feeds[1]
+    # 2 回目には 1 回目が返した state(スタブは +1)が届く
+    np.testing.assert_array_equal(second["state"], np.ones((2, 1, 128)))
+    # context も 1 回目の窓末尾 64 サンプルが渡る = 単一呼び出しと同じ
+    np.testing.assert_array_equal(
+        second["input"][0, :64], np.arange(448, 512, dtype=np.float32)
+    )
+
+
+def test_speech_probs_block_by_block_with_carry_equals_one_whole_call():
+    """carry 付きのブロック分割は、信号を丸ごと 1 回で渡すのと同じ確率を返す。
+
+    streaming は 160ms ブロックごとに呼ぶので、これが成り立たないと RNN が毎回
+    コールドスタートし、明確な有声窓でも低い確率が返る(実録音で 34 窓中 15 窓が
+    threshold 0.3 を割った)。窓単位ゲートはその確率を 1 窓ずつ直接使う。
+    """
+    from vspeech.lib.vad import VadCarry
+
+    audio = np.arange(512 * 6, dtype=np.float32)
+    whole = speech_probs(_StateDependentStub(), audio)
+
+    session = _StateDependentStub()
+    carry = VadCarry()
+    blocks = [
+        speech_probs(session, audio[i * 1024 : (i + 1) * 1024], carry) for i in range(3)
+    ]
+    np.testing.assert_allclose(np.concatenate(blocks), whole)
+    # 持ち越さないと確率は別物になる(このテストが本物の差を見ている証拠)
+    session2 = _StateDependentStub()
+    cold = [speech_probs(session2, audio[i * 1024 : (i + 1) * 1024]) for i in range(3)]
+    assert not np.allclose(np.concatenate(cold), whole)
+
+
 _VAD_MODEL_ENV = "VSPEECH_VAD_MODEL"
 _vad_model = os.environ.get(_VAD_MODEL_ENV)
 VAD_MODEL = Path(_vad_model) if _vad_model else None
