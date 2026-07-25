@@ -97,10 +97,10 @@ def make_stream_envelope(sv_config: StreamVcConfig) -> StreamingEnvelope | None:
     )
 
 
-async def gate_target_gain(
+async def gate_window_gains(
     gate: StreamingVadGate, vad_session: Any, block: NDArray[np.float32]
-) -> float:
-    """**入力**ブロックの VAD 判定からこのブロックの目標ゲインを返す。
+) -> NDArray[np.float64]:
+    """**入力**ブロックの VAD 判定から 32ms 窓ごとのゲインを返す(ADR-0059)。
 
     判定は入力側(素のマイクレベル。input_boost をかける前 = 実際の S/N で
     判定する)、適用は出力側。推論そのものはスキップしない: `StreamingVc` は
@@ -108,18 +108,21 @@ async def gate_target_gain(
     穴が開き発話再開時の seam が壊れる(GPU 余力は実測 RTF 0.24 で十分)。
 
     ONNX 推論はブロッキングなので、発話系 worker/vc.py と同じく `to_thread`
-    へ逃がす。失敗しても音は素通し(fail-open)で、警告は最初の 1 回だけ。
+    へ逃がす。失敗しても音は素通し(fail-open = 全開の 1 窓マスク)で、警告は
+    最初の 1 回だけ。
     """
+    import numpy as np
+
     from vspeech.lib.vad import speech_probs
 
     try:
         probs = await to_thread(speech_probs, vad_session, block)
-        return gate.update(gate.speech_from_probs(probs))
+        return gate.window_gains(probs)
     except Exception as e:
         if not gate.warned:
             gate.warned = True
             logger.warning("stream_vc vad gate failed; passing audio ungated: %s", e)
-        return 1.0
+        return np.ones(1, dtype=np.float64)
 
 
 def build_stream_vc_runtime(sv_config: StreamVcConfig) -> dict[str, Any]:
@@ -257,7 +260,6 @@ async def vc_loop(
             threshold=sv_config.vad_threshold,
             hangover_ms=sv_config.vad_hangover_ms,
             min_gain=sv_config.vad_min_gain,
-            block_ms=sv_config.block_ms,
         )
     envelope = make_stream_envelope(sv_config)
     seq = 0
@@ -300,9 +302,9 @@ async def vc_loop(
             # (ブースト後の見かけのレベルではなく実際のマイクレベルで判定/整形する)。
             # raw を保持してから boost する (boost==1.0 の identity fast-path でも安全)。
             raw_block = block
-            target_gain = 1.0
+            gains = None
             if gate is not None:
-                target_gain = await gate_target_gain(gate, vad_session, raw_block)
+                gains = await gate_window_gains(gate, vad_session, raw_block)
             block = apply_input_boost(raw_block, sv_config.rvc.input_boost)
             t0 = perf_counter()
             # transient GPU error(CUDA error / OOM 等)は torch/CUDA 由来の
@@ -357,9 +359,11 @@ async def vc_loop(
             # と同じ順)。envelope は安価な numpy 演算なので inline (to_thread 不要)。
             if envelope is not None:
                 out_i16 = envelope.apply(out_i16, raw_block)
-            if gate is not None:
-                out_i16 = gate.ramp(out_i16, target_gain)
-                if target_gain != 1.0:
+            if gate is not None and gains is not None:
+                # マスクは emit 遅延を補正して重ねる(ADR-0059)。遅延は SOLA の lag で
+                # tick ごとに変わるので、直近 emit の実測値を StreamingVc から取る。
+                out_i16 = gate.apply(out_i16, gains, sv.emit_delay_samples, sample_rate)
+                if float(gains.min()) < 1.0:
                     telemetry.record("stream_vc_vad_gated", 1.0)
             packet = make_stream_packet(
                 session_id, seq, hop_seconds, out_i16.tobytes(), sample_rate

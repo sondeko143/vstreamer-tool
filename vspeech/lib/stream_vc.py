@@ -209,6 +209,11 @@ class StreamingVc:
             tuple[int, int, int, NDArray[np.float32], NDArray[np.float32]] | None
         ) = None
         self._output_tail = None  # 初回 crossfade で zeros(out_xf) を遅延生成
+        # 直近 emit の内容が入力ブロック先頭より何サンプル手前から始まるか(出力
+        # レート)。crossfade/SOLA/HuBERT 受容野の切り詰めぶん emit は遅れて出るので、
+        # 出力へ何かを時刻整合で重ねる側(VAD ゲートのマスク, ADR-0059)はこれで補正
+        # する。SOLA の lag ぶん tick ごとに変わるので毎 emit 更新する。
+        self.emit_delay_samples = 0
         if crossfade_len > 0 and context_len < crossfade_len:
             raise ValueError(
                 "context_len must be >= crossfade_len for context-overlap crossfade"
@@ -301,7 +306,22 @@ class StreamingVc:
         # HuBERT の受容野ぶん(約 320 入力サンプル)短く出て sink を飢えさせる。
         # 位置は末尾アンカーのままなので、切り詰められた末尾は避けられる。
         out_hop = round(self.block_len * self.target_sample_rate / 16000)
-        return out[-out_hop:] if out.shape[0] >= out_hop else out
+        if out.shape[0] < out_hop:
+            self.emit_delay_samples = self._emit_delay(0)
+            return out
+        self.emit_delay_samples = self._emit_delay(out.shape[0] - out_hop)
+        return out[-out_hop:]
+
+    def _emit_delay(self, start: int) -> int:
+        """emit 先頭が入力ブロック先頭より何サンプル手前かを返す(出力レート)。
+
+        デコーダ描画は解析窓 `[context | block]` の先頭に揃っている(切り詰められる
+        のは末尾)ので、描画の index はそのまま窓内位置。ブロック先頭は窓内
+        `context_len` サンプル目 = 出力レートで `context_len * rate / 16000`。
+        したがって読み出し開始 `start` との差が「emit がどれだけ手前から鳴るか」。
+        """
+        ctx_out = round(self.context_len * self.target_sample_rate / 16000)
+        return ctx_out - start
 
     def _emit_with_crossfade(self, out: NDArray[np.int16]) -> NDArray[np.int16]:
         """SOLA で位相を合わせてから overlap-add し、実時間 hop ちょうどを返す。
@@ -395,6 +415,7 @@ class StreamingVc:
             start = (nominal - out_sola) + sola_offset(self._output_tail, region)
         else:
             start = nominal
+        self.emit_delay_samples = self._emit_delay(start)
         head = out_f[start : start + out_xf]
         blended = overlap_add(self._output_tail, head, fade_in, fade_out)
         middle = out_f[start + out_xf : start + out_hop]
