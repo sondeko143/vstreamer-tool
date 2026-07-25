@@ -27,8 +27,8 @@ _LOG_EVERY = 50
 
 def _should_log(count: int) -> bool:
     """first occurrence + every _LOG_EVERY-th. UDP protocol callbacks can fire at
-    packet rate (peer down → ICMP per datagram); unthrottled logs flood the GUI
-    stdout pipe. telemetry still records every event, so observability is unchanged."""
+    packet rate (peer down → ICMP per datagram); unthrottled logs flood the log.
+    telemetry still records every event, so observability is unchanged."""
     return count == 1 or count % _LOG_EVERY == 0
 
 

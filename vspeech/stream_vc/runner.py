@@ -45,8 +45,8 @@ _ORT_LOG_ERROR = 3
 _MAX_CONSECUTIVE_VC_ERRORS = 10
 
 # transient な process_block drop の警告も underflow/drop 同様に間引く。fail/success が
-# 交互だと reset-on-success 方式では毎 drop 警告が出て stdout(GUI の読むパイプ)を
-# 埋める。連続失敗の tear-down 判定(_MAX_CONSECUTIVE_VC_ERRORS)とは別の通算カウンタで
+# 交互だと reset-on-success 方式では毎 drop 警告が出てログを埋める。
+# 連続失敗の tear-down 判定(_MAX_CONSECUTIVE_VC_ERRORS)とは別の通算カウンタで
 # 絞る。telemetry(stream_vc_process_error)は毎 drop 記録する。
 VC_ERROR_LOG_EVERY = 50
 
@@ -161,8 +161,8 @@ def build_stream_vc_runtime(sv_config: StreamVcConfig) -> dict[str, Any]:
     # f0 セッションだけ ORT の警告を落とす。fcpe.onnx (poe export-fcpe-onnx, ADR-0049) は
     # torchfcpe を dynamic_axes 付きでトレースした都合で中間ノード /bundled/Squeeze_1 の
     # 推論 rank が実際と食い違い、ORT が VerifyOutputSizes 警告を **毎推論** stdout に出す。
-    # 良性(実 shape で確保され f0 は正しい)だが streaming では ~6 行/秒になり、ログと
-    # GUI が読む stdout パイプを埋める。グラフ側の修正は torchfcpe のトレース由来なので
+    # 良性(実 shape で確保され f0 は正しい)だが streaming では ~6 行/秒になり、
+    # ログを埋める。グラフ側の修正は torchfcpe のトレース由来なので
     # graph surgery か上流パッチが要り、割に合わない(過去に ONNX graph surgery を
     # 試して徒労に終わっている)。
     # 代償: この f0 セッション固有の ORT 警告 (provider fallback 等) も見えなくなる。

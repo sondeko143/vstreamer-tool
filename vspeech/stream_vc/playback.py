@@ -37,7 +37,7 @@ def detect_gap(prev_seq: int | None, seq: int) -> int:
 
 # 出力 underflow は VC が間に合わなければ毎ブロック (block_ms=160 なら ~6 回/秒)
 # 起きうる。telemetry は毎回記録するが、ログは最初の 1 回と以降 N 回ごとに間引く
-# — 警告自体が GUI の読む stdout パイプを埋めては本末転倒なので。
+# — 警告自体がログを埋めては本末転倒なので。
 UNDERFLOW_LOG_EVERY = 50
 
 
@@ -57,8 +57,8 @@ def should_log_drop(count: int) -> bool:
 
 
 # seq 飛び(gap = 欠落パケット)も drop/underflow と同様に間引いてログする。
-# 網トランスポート導入前は起きない想定だが、恒常的な gap がログ(= GUI の読む
-# stdout パイプ)を埋めないよう最初の 1 回と以降 N 回ごとに絞る。telemetry は毎回。
+# 網トランスポート導入前は起きない想定だが、恒常的な gap がログを埋めないよう
+# 最初の 1 回と以降 N 回ごとに絞る。telemetry は毎回。
 GAP_LOG_EVERY = 50
 
 

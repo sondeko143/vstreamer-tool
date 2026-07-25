@@ -32,7 +32,10 @@ def shutdown_worker(e: BaseException):
 class ConfigProblem:
     worker: str
     detail: str
-    # 問題の設定箇所のドット path (例 "rvc.model_file")。GUI がそこへ移動するために使う (ADR-0045)。
+    # 問題の設定箇所のドット path (例 "rvc.model_file")。どの設定が悪いのかを散文の
+    # detail と別に名指す。現在の読み手は tests/test_preflight.py だけ (GUI がここへ
+    # ジャンプするのに使っていた: ADR-0045 → ADR-0061 で撤去)。テストが prose ではなく
+    # field で表明できるので残している。
     field: str | None = None
 
     def __str__(self) -> str:

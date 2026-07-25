@@ -419,8 +419,10 @@ _CHECKERS: list[Checker] = [
 def collect_problems(config: Config) -> list[ConfigProblem]:
     """enable 済み worker の設定不備を集約して返す（送出しない）。
 
-    GUI の起動前 readiness がこれを単一の権威として再利用する (ADR-0045)。
-    「何が必須か」の判断をこの module の外に複製しないこと。
+    「何が必須か」の権威はこの module 一つで、起動時の fail-loud (ADR-0038) が
+    唯一の読み手。判断をこの module の外に複製しないこと — かつて GUI が起動前
+    readiness としてこれを再利用していたのは、複製する代わりに呼ぶためだった
+    (ADR-0045、GUI ごと ADR-0061 で撤去)。
     """
     problems: list[ConfigProblem] = []
     for checker in _CHECKERS:
