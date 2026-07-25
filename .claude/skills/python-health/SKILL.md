@@ -54,7 +54,7 @@ The extras must ride on the `uv run` itself (a bare `uv run` re-syncs to the def
 
 ## Task block (canonical `[tool.poe.tasks]`)
 
-Add this to the target project's `pyproject.toml`, replacing `<pkg>` with the detected package (use `vspeech` in this repo). `<pkg2>` rows are optional (e.g. a `gui` package for bandit):
+Add this to the target project's `pyproject.toml`, replacing `<pkg>` with the detected package (use `vspeech` in this repo). `<pkg2>` rows are optional (e.g. this repo's `cli` package for bandit):
 
 ```toml
 [tool.poe.tasks]

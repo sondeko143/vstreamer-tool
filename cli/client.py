@@ -1,7 +1,7 @@
 """走っている pipeline へ制御 Command を 1 本送る gRPC クライアント。
 
 送るのは制御イベント (ping / pause / resume / reload) だけ。データイベント
-(transcription や tts) は送らない — このパネルは pipeline を操作するもので、
+(transcription や tts) は送らない — この CLI は pipeline を操作するもので、
 pipeline に仕事を流し込むものではない。
 
 Command の組み立ては vspeech 側の変換 (EventAddress.to_pb) をそのまま使う。
@@ -21,7 +21,7 @@ from vstreamer_protos.commander.commander_pb2_grpc import CommanderStub
 from vspeech.config import EventType
 from vspeech.shared_context import EventAddress
 
-# このパネルが送れる操作。ping は「疎通確認」— 受け側は log を 1 行出すだけ
+# この CLI が送れる操作。ping は「疎通確認」— 受け側は log を 1 行出すだけ
 # なので、RPC が返ったこと自体が到達の証拠になる。
 OPERATIONS: tuple[EventType, ...] = (
     EventType.ping,

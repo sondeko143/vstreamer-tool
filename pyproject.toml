@@ -62,17 +62,15 @@ vroid2 = ["pyvcroid2 ; sys_platform == 'win32'"]
 # sounddevice: PortAudio 同梱の py3-none wheel (ABI 非依存) なので cp314 でも wheel が入る。
 # PyAudio は cp314 wheel が無く sdist ビルドに PortAudio が要る (roadmap フェーズ3 で移行)。
 audio = ["sounddevice>=0.5,<0.6"]
-gui = [
-    "ttkbootstrap>=1.10.1,<2",
-    "pillow>=12.1.1,<13",
-    "platformdirs>=4,<5",
-]
 
 [project.urls]
 Repository = "https://github.com/sondeko143/vstreamer-tool"
 
 [project.scripts]
 vspeech = "vspeech.main:cmd"
+# 走っている pipeline への制御コマンド (ADR-0061)。追加依存は無い — click と
+# grpc は既にコア依存で、vspeech から EventType/EventAddress だけを借りる。
+vsctl = "cli.main:main"
 
 [dependency-groups]
 dev = [
@@ -122,7 +120,8 @@ torchaudio = { index = "pytorch-cu130" }
 pyvcroid2 = { git = "https://github.com/Nkyoku/pyvcroid2" }
 
 [tool.uv.build-backend]
-module-name = ["vspeech"]
+# cli も同梱する。`vsctl` の entry point (cli.main:main) が解決できなくなるため。
+module-name = ["vspeech", "cli"]
 module-root = ""
 
 [build-system]

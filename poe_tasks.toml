@@ -18,7 +18,7 @@ type = { cmd = "ty check", help = "Type-check (ty)" }
 test = { cmd = "pytest --cov=vspeech --cov-report=term-missing", help = "Tests + coverage (honors addopts)" }
 lock-check = { cmd = "uv lock --check", help = "Lockfile is in sync with pyproject" }
 audit = { cmd = "uv audit", help = "Dependency vulnerability audit" }
-security = { cmd = "uv run --with bandit bandit -q -r vspeech gui", help = "Security lint (bandit, project interpreter)" }
+security = { cmd = "uv run --with bandit bandit -q -r vspeech cli", help = "Security lint (bandit, project interpreter)" }
 deadcode = { cmd = "uv run --with vulture vulture vspeech --min-confidence 80", help = "Dead-code scan (advisory)" }
 
 # Docker デプロイ用の requirements-pod.txt を uv.lock から再生成する（旧 Makefile の

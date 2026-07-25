@@ -1,6 +1,6 @@
 # Third-Party Notices / サードパーティ ライセンス表示
 
-本リポジトリ（`voicerecog` / `vspeech` パッケージ + `gui`）のソースコードは
+本リポジトリ（`voicerecog` / `vspeech` パッケージ + `cli`）のソースコードは
 MIT License（同梱の [`LICENSE`](LICENSE)）で配布します。
 
 ## このファイルの対象

@@ -1,8 +1,8 @@
 # 0060. GUI を走っている pipeline へのリモート操作パネルへ縮小する（起動・設定編集を GUI から外す）
 
-- Status: Accepted
+- Status: Superseded by [ADR-0061](0061-remote-control-as-cli.md)
 - Date: 2026-07-26
-- Related: spec [2026-07-26-gui-remote-control-panel-design.md](../superpowers/specs/2026-07-26-gui-remote-control-panel-design.md); [ADR-0032](0032-gui-multi-pipeline-rewrite.md) / [ADR-0033](0033-gui-manifest-versioning.md) / [ADR-0045](0045-gui-readiness-reuses-preflight.md) / [ADR-0046](0046-gui-shared-asset-paths-explicit-propagate.md)（本 ADR が supersede する）; [ADR-0034](0034-gui-corrupt-file-resilience.md)（壊れた入力でも起動する方針は維持）; [ADR-0038](0038-worker-config-preflight-fail-loud.md)（起動時 preflight は vspeech 側にそのまま残る）
+- Related: spec [2026-07-26-pipeline-remote-control-design.md](../superpowers/specs/2026-07-26-pipeline-remote-control-design.md); [ADR-0032](0032-gui-multi-pipeline-rewrite.md) / [ADR-0033](0033-gui-manifest-versioning.md) / [ADR-0045](0045-gui-readiness-reuses-preflight.md) / [ADR-0046](0046-gui-shared-asset-paths-explicit-propagate.md)（本 ADR が supersede する）; [ADR-0034](0034-gui-corrupt-file-resilience.md)（壊れた入力でも起動する方針は維持）; [ADR-0038](0038-worker-config-preflight-fail-loud.md)（起動時 preflight は vspeech 側にそのまま残る）
 
 ## Context
 

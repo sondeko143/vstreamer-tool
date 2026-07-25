@@ -1,6 +1,6 @@
-"""GUI が送る Command が、受け側で意図した制御イベントになることの検証。
+"""CLI が送る Command が、受け側で意図した制御イベントになることの検証。
 
-ここが本当の契約 — GUI 側で Command を組むだけのテストは、受け側の
+ここが本当の契約 — 送信側で Command を組むだけのテストは、受け側の
 WorkerInput 変換や validation とずれても気付けない。build_command の出力を
 実際に vspeech.lib.command.process_command まで通して効果を見る。
 """
@@ -8,10 +8,10 @@ WorkerInput 変換や validation とずれても気付けない。build_command 
 import grpc
 import pytest
 
-from gui import client
-from gui.client import SendResult
-from gui.client import build_command
-from gui.client import send
+from cli import client
+from cli.client import SendResult
+from cli.client import build_command
+from cli.client import send
 from vspeech.config import Config
 from vspeech.config import EventType
 from vspeech.config import RecordingConfig
@@ -60,7 +60,7 @@ def test_reload_reads_the_config_path_from_the_command(tmp_path):
 
 
 def test_reload_without_a_config_path_is_rejected_by_the_receiver():
-    # GUI 側で空パスを止める理由 (app.send_operation) の裏付け。
+    # CLI 側で空パスを弾く理由 (main.reload の BadParameter) の裏付け。
     with pytest.raises(ValueError):
         WorkerInput.from_command(build_command(EventType.reload))
 

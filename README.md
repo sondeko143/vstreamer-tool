@@ -31,7 +31,7 @@ uv sync --extra audio --extra whisper
 
 **`uv sync` は指定した extras の集合に環境を合わせます。**あとから
 `uv sync --extra rvc` と単独で叩くと、それ以外の extras (`voicevox`, `whisper`,
-`audio`, `gui` …) は**アンインストールされます**。機能を「足す」つもりで実行すると壊れます。
+`audio` …) は**アンインストールされます**。機能を「足す」つもりで実行すると壊れます。
 
 | extra | 内容 |
 | --- | --- |
@@ -42,7 +42,6 @@ uv sync --extra audio --extra whisper
 | `voicevox` | VOICEVOX 音声合成 |
 | `rvc` | RVC ボイスチェンジャー |
 | `mozc` | AmiVoice の結果をかな漢字変換する (`transcription.transliterate_with_mozc`) |
-| `gui` | ttkbootstrap の GUI（走っている pipeline への操作パネル） |
 
 設定項目は `config.toml.example` や `vspeech/config.py` を参照してください。ごめんなさい。
 
@@ -71,15 +70,26 @@ whisper, RVC は CUDA 12.8 (`torch 2.10.0+cu128`) がインストールされて
 uv run python -m vspeech --config ./config.toml
 ```
 
-GUI（**すでに走っている** pipeline へ疎通確認 / pause / resume / reload を送るだけの
-操作パネル。pipeline の起動・設定編集はしないので config 引数を取らない。宛先一覧は
-OS の設定ディレクトリの `targets.toml` に保存される。[ADR-0060](docs/adr/0060-gui-remote-control-panel.md)）
+走っている pipeline の操作（**すでに走っている** pipeline へ疎通確認 / pause /
+resume / reload を送る。起動・設定編集はしない。extra 不要 — 追加依存はゼロ。
+[ADR-0061](docs/adr/0061-remote-control-as-cli.md)）
 
 ```sh
-uv run python -m gui
-uv run python -m gui --config-dir ./mydir -t darkly   # 保存先とテーマの上書き
+uv run vsctl ping   --to 192.0.2.10:8080     # 疎通確認 (exit 0 = 届いた)
+uv run vsctl pause  --to 192.0.2.10:8080
+uv run vsctl resume --to 192.0.2.10:8080
+uv run vsctl reload --to 192.0.2.10:8080 --config-path D:/vstreamer/config.toml
+
+# 毎回打ちたくなければ環境変数へ (--to の既定値)
+export VSPEECH_TARGET=192.0.2.10:8080
+uv run vsctl pause
+
+uv run python -m cli --help                  # vsctl と同じもの
 ```
 
-宛先には名前・ホスト・ポート（対象 pipeline の `listen_port`）と、reload 用の config
-パスを登録する。**この config パスは対象マシン上のパス**で、reload を受けた側が自分で
+宛先は操作対象 pipeline の `listen_address:listen_port`。終了コードは操作の成否
+そのもの（0 = 相手が受け取った / 1 = 失敗 / 2 = 引数の誤り）なので、スクリプトや
+配信ソフトのコマンド実行から繋げられる。
+
+`reload` の `--config-path` は**対象マシン上のパス**で、reload を受けた側が自分で
 開く。
