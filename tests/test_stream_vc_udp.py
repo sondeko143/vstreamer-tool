@@ -44,13 +44,16 @@ async def test_consumer_poll_drains_all_arrived():
         consumer.close()
 
 
-def test_send_protocol_error_received_counts_and_logs():
+def test_send_protocol_error_received_records_telemetry():
+    from unittest.mock import patch
+
     from vspeech.stream_vc.udp import _SendProtocol
 
     proto = _SendProtocol()
-    proto.error_received(OSError("route gone"))
-    proto.error_received(OSError("again"))
-    assert proto.error_count == 2
+    with patch("vspeech.stream_vc.udp.telemetry") as mock_telemetry:
+        proto.error_received(OSError("route gone"))
+        proto.error_received(OSError("again"))
+    assert mock_telemetry.record.call_count == 2
 
 
 def test_send_protocol_error_logging_is_throttled():
@@ -60,8 +63,9 @@ def test_send_protocol_error_logging_is_throttled():
 
     proto = _SendProtocol()
     with patch("vspeech.stream_vc.udp.logger") as mock_logger:
-        for _ in range(120):
-            proto.error_received(OSError("peer down"))
-    assert proto.error_count == 120  # every event counted (telemetry parity)
-    # log is throttled first + every 50th: over 120 events that is counts 1, 50, 100
-    assert mock_logger.warning.call_count == 3
+        with patch("vspeech.stream_vc.udp.telemetry") as mock_telemetry:
+            for _ in range(120):
+                proto.error_received(OSError("peer down"))
+    # telemetry は毎回。ログはエピソード先頭の 1 本だけ(タイトループ = 同一エピソード)。
+    assert mock_telemetry.record.call_count == 120
+    assert mock_logger.warning.call_count == 1

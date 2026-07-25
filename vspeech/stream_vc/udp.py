@@ -13,6 +13,7 @@ from asyncio import QueueEmpty
 from asyncio import get_running_loop
 from typing import Any
 
+from vspeech.lib.log_throttle import LogThrottle
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
 from vspeech.stream_vc.packet import StreamPacket
@@ -21,15 +22,6 @@ from vspeech.stream_vc.transport import drop_oldest_put
 from vspeech.stream_vc.wire import WireError
 from vspeech.stream_vc.wire import decode_packet
 from vspeech.stream_vc.wire import encode_packet
-
-_LOG_EVERY = 50
-
-
-def _should_log(count: int) -> bool:
-    """first occurrence + every _LOG_EVERY-th. UDP protocol callbacks can fire at
-    packet rate (peer down → ICMP per datagram); unthrottled logs flood the log.
-    telemetry still records every event, so observability is unchanged."""
-    return count == 1 or count % _LOG_EVERY == 0
 
 
 class _SendProtocol(DatagramProtocol):
@@ -42,15 +34,15 @@ class _SendProtocol(DatagramProtocol):
     """
 
     def __init__(self) -> None:
-        self.error_count = 0
+        # UDP のプロトコルコールバックはパケットレートで発火しうる(peer down なら
+        # datagram ごとに ICMP)。ログは時間で絞り、telemetry は毎回記録する
+        # (ADR-0062)。
+        self._error_throttle = LogThrottle()
 
     def error_received(self, exc: Exception) -> None:
-        self.error_count += 1
         telemetry.record("stream_vc_send_error", 1.0)
-        if _should_log(self.error_count):
-            logger.warning(
-                "stream_vc udp send error (async, total %d): %r", self.error_count, exc
-            )
+        if (n := self._error_throttle.hit()) is not None:
+            logger.warning("stream_vc udp send error (async, total %d): %r", n, exc)
 
 
 class UdpProducerTransport(Transport):
@@ -81,8 +73,9 @@ class _RecvProtocol:
 
     def __init__(self, queue: Queue[StreamPacket]) -> None:
         self._queue = queue
-        self._malformed_count = 0
-        self._error_count = 0
+        # _SendProtocol と同じ理由の時間ベース間引き(ADR-0062)。
+        self._malformed_throttle = LogThrottle()
+        self._error_throttle = LogThrottle()
 
     def connection_made(self, transport: Any) -> None:
         self._transport = transport
@@ -93,12 +86,11 @@ class _RecvProtocol:
         try:
             packet = decode_packet(data)
         except WireError as e:
-            self._malformed_count += 1
             telemetry.record("stream_vc_malformed_drop", 1.0)
-            if _should_log(self._malformed_count):
+            if (n := self._malformed_throttle.hit()) is not None:
                 logger.warning(
                     "stream_vc udp: dropping malformed datagram (total %d): %r",
-                    self._malformed_count,
+                    n,
                     e,
                 )
             return
@@ -106,12 +98,9 @@ class _RecvProtocol:
             telemetry.record("stream_vc_recv_drop", 1.0)
 
     def error_received(self, exc: Exception) -> None:
-        self._error_count += 1
         telemetry.record("stream_vc_recv_error", 1.0)
-        if _should_log(self._error_count):
-            logger.warning(
-                "stream_vc udp recv error (total %d): %r", self._error_count, exc
-            )
+        if (n := self._error_throttle.hit()) is not None:
+            logger.warning("stream_vc udp recv error (total %d): %r", n, exc)
 
     def connection_lost(self, exc: Exception | None) -> None:
         if exc is not None:
