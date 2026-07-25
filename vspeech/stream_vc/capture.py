@@ -16,6 +16,7 @@ from numpy.typing import NDArray
 
 from vspeech.config import StreamVcConfig
 from vspeech.lib.audio import resolve_stream_vc_input_device
+from vspeech.lib.log_throttle import LogThrottle
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
 from vspeech.stream_vc.retry import run_with_device_retry
@@ -38,17 +39,6 @@ class CaptureSignal(Enum):
 
 # capture_queue が運ぶ要素型:音声ブロック、または帯域内シグナルの番兵。
 type CaptureItem = NDArray[np.float32] | CaptureSignal
-
-
-# running 中の drop は本物のバックプレッシャ(VC が実時間に追いつかない)なので見たいが、
-# 続くと block_ms=160 で ~6 行/秒になる。playback の underflow/drop/gap と同じく
-# 最初の 1 回と以降 N 回ごとに間引く(telemetry は毎回記録する)。
-CAPTURE_DROP_LOG_EVERY = 50
-
-
-def should_log_capture_drop(count: int) -> bool:
-    """通算 count 回目の capture drop をログに出すか(1 回目と以降 N 回ごと)。"""
-    return count == 1 or count % CAPTURE_DROP_LOG_EVERY == 0
 
 
 def ms_to_samples(ms: float, rate: int = CAPTURE_RATE) -> int:
@@ -94,7 +84,8 @@ async def _capture_read_loop(
     これで**止まらない** — pause 中も回り続けて drop_oldest_put が backlog を捨てる
     のが ADR-0050 の決定で、ここではその drop を「異常」と誤報しないためだけに見る。
     """
-    drop_count = 0
+    # running 中の drop = 本物のバックプレッシャ。時間で絞る(ADR-0062)。
+    drop_throttle = LogThrottle()
     while True:
         data, overflowed = await to_thread(stream.read, hop)
         if overflowed:
@@ -112,11 +103,10 @@ async def _capture_read_loop(
                 telemetry.record("stream_vc_capture_drop_paused", 1.0)
                 continue
             telemetry.record("stream_vc_capture_drop", 1.0)
-            drop_count += 1
-            if should_log_capture_drop(drop_count):
+            if (n := drop_throttle.hit()) is not None:
                 logger.warning(
                     "stream_vc capture queue full; dropped oldest block (total %d)",
-                    drop_count,
+                    n,
                 )
 
 

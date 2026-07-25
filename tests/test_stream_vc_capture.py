@@ -6,12 +6,10 @@ import numpy as np
 import pytest
 
 from vspeech.lib.telemetry import telemetry
-from vspeech.stream_vc.capture import CAPTURE_DROP_LOG_EVERY
 from vspeech.stream_vc.capture import CaptureItem
 from vspeech.stream_vc.capture import _capture_read_loop
 from vspeech.stream_vc.capture import ms_to_samples
 from vspeech.stream_vc.capture import pcm16_to_float32
-from vspeech.stream_vc.capture import should_log_capture_drop
 
 
 def test_ms_to_samples():
@@ -32,21 +30,6 @@ def test_pcm16_to_float32_range():
 def test_pcm16_to_float32_empty():
     out = pcm16_to_float32(b"")
     assert out.shape == (0,)
-
-
-def test_capture_drop_logs_first():
-    assert should_log_capture_drop(1)
-
-
-def test_capture_drop_log_is_rate_limited():
-    # 持続 drop (block_ms=160 なら ~6 回/秒) でログを溢れさせない。
-    assert not should_log_capture_drop(2)
-    assert not should_log_capture_drop(CAPTURE_DROP_LOG_EVERY - 1)
-
-
-def test_capture_drop_logs_every_nth():
-    assert should_log_capture_drop(CAPTURE_DROP_LOG_EVERY)
-    assert should_log_capture_drop(CAPTURE_DROP_LOG_EVERY * 3)
 
 
 class _FakeStream:
@@ -108,14 +91,14 @@ async def test_capture_drop_while_paused_does_not_warn(caplog, enabled_telemetry
     assert "stream_vc_capture_drop" not in summary
 
 
-async def test_capture_drop_while_running_warns_and_throttles(
+async def test_capture_drop_while_running_warns_once_per_episode(
     caplog, enabled_telemetry
 ):
-    """running 中の drop は本物のバックプレッシャ。1 回目と N 回ごとだけ出す。"""
+    """running 中の drop は本物のバックプレッシャ。エピソード先頭の 1 本だけ出す。"""
     hop = 4
     running = Event()
     running.set()
-    n = CAPTURE_DROP_LOG_EVERY + 1
+    n = 51
     with caplog.at_level(logging.WARNING):
         with pytest.raises(OSError):
             await _capture_read_loop(
@@ -125,7 +108,8 @@ async def test_capture_drop_while_running_warns_and_throttles(
                 running,
             )
     warnings = [r for r in caplog.records if "capture queue full" in r.getMessage()]
-    assert len(warnings) == 2  # 1 回目と CAPTURE_DROP_LOG_EVERY 回目
+    assert len(warnings) == 1  # タイトループ = すべて min_interval_s 内
+    assert "(total 1)" in warnings[0].getMessage()
     summary = enabled_telemetry.summary()
-    assert summary["stream_vc_capture_drop"]["count"] == n
+    assert summary["stream_vc_capture_drop"]["count"] == n  # telemetry は毎回
     assert "stream_vc_capture_drop_paused" not in summary
