@@ -1,6 +1,6 @@
 # 0059. ストリーミング VC の VAD ゲートを 32ms 窓粒度 + emit 遅延補正にする
 
-- Status: Proposed (refines [0053](0053-streaming-vc-fixed-block-crossfade.md))
+- Status: Accepted (refines [0053](0053-streaming-vc-fixed-block-crossfade.md))
 - Date: 2026-07-25
 - Related: [0019](0019-vc-silero-vad-gate.md), [0037](0037-transcription-vad-skip-gate.md), [0053](0053-streaming-vc-fixed-block-crossfade.md)（この ADR がゲート部分を refine する）, [0057](0057-streaming-input-envelope-rolling-ema.md)
 
@@ -53,6 +53,8 @@ streaming の VAD ゲートを **32ms 窓粒度のマスク + emit 遅延補正*
 | 無音 | 0.00013 | 0.00000 | 0.00000 |
 
 本物の語頭・定常は保持。副次的に、ブロック粒度ゲートが語間を丸ごと落としていた欠陥(実測 0.13942 → 0.08389)も直る。emit 遅延は全 tick で 50.0ms 一定、**継ぎ目のゲイン段差は 74 箇所すべてで 0.0000**(定数信号へ実マスクを適用して測定)。
+
+**実機耳確認 = OK(2026-07-26)**。これを gate に Status を Accepted へ昇格した。
 
 残差は batch 比 +15dB 前後(声より 30〜40dB 下)。マスクの立ち上がりが窓中心間 32ms かけて渡るぶん、ブレス末尾が ramp 帯に残る。**この残差の絶対値は run ごとに数 dB 動く**(RVC デコーダは微小入力に対して非決定的 — [0016](0016-change-voice-decompose-seeded-golden.md))ので、ブレス列の値は代表値として読むこと。ゲートの開閉パターン自体は run 間で同一。可聴なら次の手は「開放だけ短い窓で立ち上げる非対称補間」または下記 dither。
 
