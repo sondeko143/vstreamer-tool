@@ -78,3 +78,4 @@
 | [0059](0059-stream-vc-window-resolution-vad-gate.md) | ストリーミング VC の VAD ゲートを 32ms 窓粒度 + emit 遅延補正にする（0053 のゲート部を refine） | Accepted (refines 0053) | 2026-07-25 |
 | [0060](0060-gui-remote-control-panel.md) | GUI を走っている pipeline へのリモート操作パネルへ縮小する（起動・設定編集を外す、0032/0033/0045/0046 を supersede） | Superseded by [0061](0061-remote-control-as-cli.md) | 2026-07-26 |
 | [0061](0061-remote-control-as-cli.md) | 走っている pipeline の操作を GUI ではなく CLI (`vsctl`) で提供する（gui extra と依存 3 つを削除、0060 を supersede） | Accepted | 2026-07-26 |
+| [0062](0062-log-throttle-time-based-episodes.md) | ログ間引きを回数ベースから時間ベース + エピソード境界へ統一する | Proposed | 2026-07-26 |
