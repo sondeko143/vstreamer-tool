@@ -94,7 +94,12 @@ async def _stream_vc_subsystem(context: SharedContext) -> None:
                 capture_queue: Queue[Any] = Queue(maxsize=sv_config.max_queued_blocks)
                 vc_ready = Event()
                 tg.create_task(
-                    capture_loop(sv_config, capture_queue, hop, vc_ready),
+                    # context.running は capture を止めるためではなく、pause 中の
+                    # 意図的な drop を「バックプレッシャ異常」と誤報しないために渡す
+                    # (capture は pause 中も回り続ける = ADR-0050)。
+                    capture_loop(
+                        sv_config, capture_queue, hop, vc_ready, context.running
+                    ),
                     name="stream_vc_capture",
                 )
                 tg.create_task(
