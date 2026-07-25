@@ -19,6 +19,7 @@ from typing import Any
 from vspeech.config import StreamVcConfig
 from vspeech.exceptions import shutdown_worker
 from vspeech.exceptions import worker_startup
+from vspeech.lib.log_throttle import LogThrottle
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
 from vspeech.stream_vc.capture import CaptureSignal
@@ -43,17 +44,6 @@ _ORT_LOG_ERROR = 3
 # process_block の transient GPU error をこの回数まで連続で許して drop する。
 # 超えたら黙って spin せず落とす(下記 vc_loop の error handling 参照)。
 _MAX_CONSECUTIVE_VC_ERRORS = 10
-
-# transient な process_block drop の警告も underflow/drop 同様に間引く。fail/success が
-# 交互だと reset-on-success 方式では毎 drop 警告が出てログを埋める。
-# 連続失敗の tear-down 判定(_MAX_CONSECUTIVE_VC_ERRORS)とは別の通算カウンタで
-# 絞る。telemetry(stream_vc_process_error)は毎 drop 記録する。
-VC_ERROR_LOG_EVERY = 50
-
-
-def should_log_vc_error(count: int) -> bool:
-    """通算 count 回目の process_block drop をログに出すか(1 回目と以降 N 回ごと)。"""
-    return count == 1 or count % VC_ERROR_LOG_EVERY == 0
 
 
 def make_stream_packet(
@@ -279,7 +269,10 @@ async def vc_loop(
     envelope = make_stream_envelope(sv_config)
     seq = 0
     consecutive_errors = 0
-    vc_error_count = 0
+    # transient な process_block drop の警告を時間で絞る(ADR-0062)。連続失敗の
+    # tear-down 判定(consecutive_errors / _MAX_CONSECUTIVE_VC_ERRORS)とは別物なので
+    # 混ぜない。telemetry(stream_vc_process_error)は毎 drop 記録する。
+    vc_error_throttle = LogThrottle()
     try:
         while True:
             block = await in_queue.get()
@@ -356,12 +349,11 @@ async def vc_loop(
                 out_i16 = await to_thread(sv.process_block, block)
             except RuntimeError as e:
                 consecutive_errors += 1
-                vc_error_count += 1
                 telemetry.record("stream_vc_process_error", 1.0)
-                if should_log_vc_error(vc_error_count):
+                if (n := vc_error_throttle.hit()) is not None:
                     logger.warning(
                         "stream_vc process_block failed; dropping block (total %d): %r",
-                        vc_error_count,
+                        n,
                         e,
                     )
                 if consecutive_errors >= _MAX_CONSECUTIVE_VC_ERRORS:
@@ -375,8 +367,8 @@ async def vc_loop(
                     raise
                 continue
             # 連続失敗カウンタだけ回復でリセットする(tear-down 判定用)。警告の間引きは
-            # 通算カウンタ vc_error_count なので reset しない(fail/success 交互でも
-            # 毎 drop 警告しないため)。
+            # LogThrottle が自前でエピソードを見るので、ここでは触らない(fail/success
+            # 交互でも毎 drop 警告しない)。
             consecutive_errors = 0
             telemetry.record("stream_vc", perf_counter() - t0)
             # 入力エンベロープ追従 (ADR-0057) → VAD ゲートの順 (バッチ apply_input_envelope
