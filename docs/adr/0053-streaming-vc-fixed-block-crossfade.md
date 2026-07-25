@@ -1,6 +1,6 @@
 # 0053. ストリーミング VC を固定ブロック+左文脈+クロスフェードのステートフル変換にする
 
-- Status: Accepted
+- Status: Accepted (VAD ノイズゲートの粒度・ramp は [0059](0059-stream-vc-window-resolution-vad-gate.md) が置き換えた)
 - Date: 2026-07-22
 - Related: [spec](../superpowers/specs/2026-07-22-rvc-streaming-vc-split-machine-design.md), [0016](0016-change-voice-decompose-seeded-golden.md), [0017](0017-rvc-input-envelope-shape-transfer.md), [0019](0019-vc-silero-vad-gate.md), [0050](0050-streaming-vc-separate-subsystem.md)
 

@@ -482,7 +482,8 @@ class StreamVcConfig(BaseModel):
         default=0.5,
         ge=0.0,
         le=1.0,
-        description="speech と判定する窓確率の閾値。判定も適用も 32ms 窓ごと",
+        description="speech と判定する窓確率の閾値。判定も適用も 32ms 窓ごと。"
+        "VAD の再帰状態を持ち越すので発話窓はほぼ 1.0 に張り付く = 下げる必要は無い",
     )
     vad_hangover_ms: float = Field(
         default=300.0,
