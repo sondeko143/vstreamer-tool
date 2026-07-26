@@ -1,33 +1,34 @@
-"""subtitle の OBS バックエンド (ADR-0040 / 0041 / 0042)。
+"""The OBS backend of subtitle (ADR-0040 / 0041 / 0042).
 
-obs-websocket のクライアントとして OBS の Text (GDI+) ソースへ字幕を push
-する。OBS の構造 (シーン・input の存在・配置) には触らず、ユーザーが作った
-input の設定値だけを更新する (ADR-0041)。
+Pushes subtitles into OBS's Text (GDI+) sources as an obs-websocket client. It never
+touches OBS's structure (scenes, the existence of inputs, their placement) and only
+updates the settings of the inputs the user created (ADR-0041).
 
-失敗の扱いは「観測できたものだけ即死」(ADR-0042):
-  - 接続できない / 切断 / タイムアウト / 不正メッセージ -> fail-open
-    (warn once + バックオフ再接続)。字幕は落ちるが音声は生き続ける。
-  - 認証失敗 / ソース不在 -> fail-loud (WorkerStartupError)
-  - 壊れた色設定 (#rrggbb でない Tk 専用色名など) -> DEGRADE (warn +
-    直前のスタイルを維持して継続)。起動時点の値は preflight (層A,
-    `preflight._check_subtitle`) が fail-loud に弾くが、reload はそこを
-    通らないので、reload 後 (または reload 直後の再接続) にだけ壊れた値が
-    残る余地があり、ここで拾う。
-繋がるまでは両者を区別できないので、繋がるまで待つ。
+Failures follow "only die on what we could observe" (ADR-0042):
+  - cannot connect / disconnected / timeout / malformed message -> fail-open
+    (warn once + reconnect with backoff). Subtitles drop but the audio stays alive.
+  - auth failure / missing source -> fail-loud (WorkerStartupError)
+  - a broken color setting (a Tk-only color name that is not #rrggbb, etc.) -> DEGRADE
+    (warn + keep the previous style and continue). The values present at startup are
+    rejected fail-loud by preflight (layer A, `preflight._check_subtitle`), but a reload
+    does not go through there, so a broken value can only survive after a reload (or on
+    the reconnect right after one), and that is what is caught here.
+The first two cannot be told apart until we connect, so we wait until we do.
 
-ADR-0038 の層B は通常 exceptions.worker_startup を使うが、ここでは使わない:
-あれは except Exception で全てを WorkerStartupError に変えるため、identify 中の
-タイムアウト (リトライで直る) まで fail-loud に化ける。回復不能と観測できた
-2 型だけを拾って WorkerStartupError を送出する。
+ADR-0038's layer B normally uses exceptions.worker_startup, which is deliberately not
+used here: its except Exception turns everything into WorkerStartupError, which would
+also make a timeout during identify (which retrying fixes) fail loud. Only the two types
+observed to be unrecoverable are caught and raised as WorkerStartupError.
 
-上記 3 段とは別の軸として、`subtitle.obs.translated_source` は空でもよい
-(`preflight._check_subtitle` は text_source だけを必須にする)。翻訳を使わない
-パイプラインでは "s" パネルの検証・スタイル・テキストいずれも push しない
-(validate_sources / _push_styles_or_warn / _push_text_if_routed)。これは
-「観測できた失敗」ではなく設定として正当な状態なので、上の 3 段のどれにも
-属さない -- ただし p=s のメッセージが実際に届いた (=送るはずの翻訳が消える)
-ときだけ、warn-once で 1 回だけ知らせる (ADR-0041 の「設定を変えて何も
-起きないのは、設定が無いことより悪い」と同じ理由)。
+On an axis separate from those three tiers, `subtitle.obs.translated_source` may be empty
+(`preflight._check_subtitle` requires only text_source). For a pipeline that uses no
+translation, nothing about the "s" panel is pushed -- neither validation, nor style, nor
+text (validate_sources / _push_styles_or_warn / _push_text_if_routed). That is a
+legitimate configuration rather than an observed failure and belongs to none of the three
+tiers above -- except that when a p=s message actually arrives (i.e. a translation that
+should have been shown disappears), it is reported exactly once, warn-once (for the same
+reason as ADR-0041's "changing a setting and having nothing happen is worse than the
+setting not existing").
 """
 
 from asyncio import CancelledError
@@ -60,10 +61,10 @@ from vspeech.shared_context import WorkerInput
 
 INITIAL_BACKOFF_SEC = 0.5
 MAX_BACKOFF_SEC = 5.0
-# セッションがこの秒数以上続けば「健全だった」とみなし backoff/warn を戻す。
-# MAX_BACKOFF_SEC を流用する: どのみち次の再接続
-# までは最大この秒数だけ待つ設計なので、それより長く生きたセッションは
-# 「即座に壊れて再接続ループしている」ものとは質的に別物と判断できる。
+# A session that lasted at least this many seconds counts as "was healthy" and resets the
+# backoff/warn state. MAX_BACKOFF_SEC is reused: the design already waits at most this
+# long before the next reconnect, so a session that outlived it is qualitatively different
+# from one that "breaks instantly and loops on reconnect".
 SESSION_HEALTHY_SEC = MAX_BACKOFF_SEC
 
 
@@ -74,11 +75,11 @@ class ObsRequester(Protocol):
 
 
 def make_panels(config: SubtitleConfig) -> dict[str, Texts]:
-    """tk バックエンドと同じ 2 パネル。
+    """The same two panels as the tk backend.
 
-    bb_width/bb_height は tk の Canvas 実寸のための値で、OBS 側は extents で
-    表現するのでレイアウトには使わない。共有 dataclass の必須項目なので
-    config の窓寸法をそのまま入れておく。
+    bb_width/bb_height exist for tk's real Canvas dimensions; OBS expresses that with
+    extents and does not use them for layout. They are required fields of the shared
+    dataclass, so the config's window dimensions go in as-is.
     """
     return {
         "n": Texts(
@@ -110,20 +111,20 @@ def _panel_key(panels: dict[str, Texts], ts: Texts) -> str:
 
 
 async def validate_sources(client: ObsRequester, obs: SubtitleObsConfig) -> None:
-    """text_source (常に必須) と translated_source (設定されていれば) が
-    OBS に実在することを確かめる。
+    """Verify that text_source (always required) and translated_source (when configured)
+    actually exist in OBS.
 
-    translated_source が空のときは、そもそも push しない相手なので存在確認
-    もしない (`_check_subtitle` は text_source だけを必須にした, ADR-0041) --
-    空文字を GetInputSettings に渡すのは意味のある検査にならないうえ、その
-    ユーザーには存在しない `translated_source` を OBS 側に用意する義理も無い。
+    When translated_source is empty it is never pushed to in the first place, so its
+    existence is not checked either (`_check_subtitle` made only text_source required,
+    ADR-0041) -- passing an empty string to GetInputSettings is not a meaningful check,
+    and such a user has no obligation to prepare a `translated_source` in OBS.
 
-    存在しなければ ObsResourceNotFoundError が上がる。呼び出し側はそれを
-    ObsIdentifyError と並べて名指しで捕まえ、WorkerStartupError へ変える
-    (fail-loud, ADR-0042)。この 2 型だけが「繋がった上で観測できて、かつ
-    リトライしても直らない」失敗であり、他の ObsProtocolError は fail-open
-    の再接続に落ちる。exceptions.worker_startup は使わない — その except
-    Exception はここでは広すぎ、回復可能なタイムアウトまで致命化する。
+    If a source is missing, ObsResourceNotFoundError is raised. The caller catches it by
+    name alongside ObsIdentifyError and converts it into WorkerStartupError (fail-loud,
+    ADR-0042). Those two types are the only failures that are "observable once connected
+    and not fixed by retrying"; every other ObsProtocolError falls into the fail-open
+    reconnect. exceptions.worker_startup is not used -- its except Exception is too broad
+    here and would make a recoverable timeout fatal.
     """
     sources = [obs.text_source]
     if obs.translated_source:
@@ -135,13 +136,13 @@ async def validate_sources(client: ObsRequester, obs: SubtitleObsConfig) -> None
 async def _push_panel_style(
     client: ObsRequester, config: SubtitleConfig, key: str, ts: Texts
 ) -> None:
-    """1 パネル分のスタイルを OBS へ送る (ADR-0041: config が権威)。
+    """Send one panel's style to OBS (ADR-0041: the config is the authority).
 
-    呼び出し側は `_push_styles_or_warn` (guarded path) だけにすること --
-    壊れた色設定 (Tk 専用色名など) は `build_text_settings` が `ValueError`
-    を投げるので、直接呼ぶ側はそれを自分で処理する責任を負う。両パネルを
-    まとめて呼ぶだけの無防備な公開ラッパーを足さないこと -- bare `ValueError`
-    が `TaskGroup` ごと音声パイプラインを道連れにする。
+    Call this only from `_push_styles_or_warn` (the guarded path) -- a broken color
+    setting (a Tk-only color name, etc.) makes `build_text_settings` raise `ValueError`,
+    so anyone calling directly takes on the responsibility of handling it. Do not add an
+    unguarded public wrapper that merely calls it for both panels -- a bare `ValueError`
+    would take the audio pipeline down along with the `TaskGroup`.
     """
     await client.request(
         "SetInputSettings",
@@ -159,46 +160,44 @@ async def _push_styles_or_warn(
     panels: dict[str, Texts],
     style_warned: dict[str, bool],
 ) -> None:
-    """パネルごとに `_push_panel_style` を試すが、色の値が壊れていても
-    プロセスを道連れにしない。
+    """Try `_push_panel_style` per panel without taking the process down when a color
+    value is broken.
 
-    preflight (層A) は起動時点の config しか見ないので、reload で入った壊れた
-    `#rrggbb` (Tk 色名など) はそこで止められない -- 起点は色フィールドだけ
-    TK/OBS 共有かつ preflight は起動時にしか走らないという ADR-0038/0042 の
-    隙間。ここに来る `ValueError` は
-    `hex_color_to_obs_int` が返す「観測できて、かつ config を直せば直る」
-    種類だけで、繋がっている音声パイプラインを落とす理由にはならない --
-    DEGRADE (warn + 直前のスタイルを維持して継続)。ここに来る `ValueError` は
-    OBS が拒否したのではなく、`hex_color_to_obs_int` がリクエスト送信前に
-    ローカルで検出した壊れた入力値なので、OBS ではなく config の値を名指し
-    する。
+    preflight (layer A) only looks at the config as it was at startup, so a broken
+    `#rrggbb` (a Tk color name, etc.) introduced by a reload cannot be stopped there --
+    the gap in ADR-0038/0042 that arises because the color fields alone are shared between
+    TK and OBS while preflight only runs at startup. The `ValueError` reaching here is
+    only the kind `hex_color_to_obs_int` returns -- observable and fixable by correcting
+    the config -- and is no reason to bring down a working audio pipeline: DEGRADE (warn +
+    keep the previous style and continue). It was not OBS that rejected the value: it is a
+    broken input detected locally by `hex_color_to_obs_int` before any request was sent,
+    so the message names the config value rather than OBS.
 
-    パネルごとに個別の try/except でガードする:
-    パネルごとに独立させれば、どちらも「壊れていなければ最新の値を反映・
-    壊れていれば直前の値を維持」をそれぞれ独立に満たせる。まとめて 1 つの
-    try/except で囲うと、先に壊れたパネルより後のパネルは (値が有効でも)
-    一切 push されずに直前のスタイルのまま取り残される。
+    Each panel is guarded by its own try/except: keeping them independent lets each panel
+    satisfy "reflect the newest value if valid, keep the previous value if broken" on its
+    own. Wrapping both in a single try/except would leave every panel after the first
+    broken one unpushed (even with valid values) and stuck on its previous style.
 
-    `style_warned` はパネルキーごとの warn-once フラグ: 同じ壊れた値が
-    push に成功する (= config が直る) まで、
-    何度失敗しても 1 回しか警告しない。OBS が繋がっては切れてを繰り返す
-    (フラップする) 間、再接続のたびに同じ壊れた値を送り直すと、直すまで
-    毎回警告が出ていた (測定: 20 回の再接続で 20 回の警告、対して隣の
-    接続断の warn-once は正しく 1 回)。push が成功したらそのパネルの
-    フラグを戻す -- 直った後に別の値でまた壊れたときは、ちゃんと再度
-    警告するため (二度と警告しなくなるのを防ぐ)。
+    `style_warned` is a per-panel-key warn-once flag: no matter how many times the push
+    fails, only one warning is emitted until the same broken value pushes successfully
+    (i.e. the config is fixed). While OBS flaps (connects and drops repeatedly), the same
+    broken value is re-sent on every reconnect and used to warn every time until it was
+    fixed (measured: 20 warnings across 20 reconnects, versus the neighbouring
+    disconnection warn-once, which correctly emitted once). On a successful push the
+    panel's flag is cleared -- so that if a different value breaks later, it warns again
+    (rather than falling silent forever).
 
-    呼び出し側は 2 箇所 (初回/再接続時の接続直後、reload 時) あり、どちらも
-    同じ理由で ValueError を漏らしてはいけないので 1 箇所にまとめる。
-    `style_warned` は `subtitle_obs_worker` が再接続をまたいで保持する 1 つの
-    辞書を両方の呼び出し site に渡す -- セッションごとに作り直すと、
-    フラップのたびに warn-once がリセットされてしまう。
+    There are two call sites (right after connecting on first connect/reconnect, and on
+    reload) and neither may leak a ValueError for the same reason, so they share this one
+    function. `style_warned` is a single dict held across reconnects by
+    `subtitle_obs_worker` and passed to both call sites -- rebuilding it per session would
+    reset the warn-once on every flap.
 
-    translated_source が空の "s" パネルはそもそも push 先が無いので、丸ごと
-    スキップする (ADR-0041)。push_text 側の欠落 (`_push_text_if_routed`) と
-    違い、こちらは何かを失うわけではない (スタイルは表示するものが無ければ
-    無意味) ので warn-once は無い -- 実際にユーザーに知らせるべき「p=s の
-    字幕本文が消えた」は push_text 側でだけ起きる。
+    The "s" panel with an empty translated_source has nowhere to push at all, so it is
+    skipped entirely (ADR-0041). Unlike the push_text side's skip
+    (`_push_text_if_routed`), nothing is lost here (a style is meaningless with nothing to
+    display), so there is no warn-once -- the thing the user genuinely needs to hear, "a
+    p=s subtitle body disappeared", can only happen on the push_text side.
     """
     for key, ts in panels.items():
         if key == "s" and not config.obs.translated_source:
@@ -230,10 +229,10 @@ async def push_text(
     panels: dict[str, Texts],
     ts: Texts,
 ) -> None:
-    """パネルの現在の文字列を対応するソースへ送る。
+    """Send the panel's current string to the corresponding source.
 
-    `Texts.texts` が区切り文字での結合と "s" アンカーの逆順を済ませているので、
-    ここは送るだけ。空なら空文字を送って消す。
+    `Texts.texts` has already done the separator join and the reversal for the "s" anchor,
+    so this only sends. When empty it sends an empty string, clearing the display.
     """
     await client.request(
         "SetInputSettings",
@@ -309,11 +308,10 @@ async def _apply_reload(
     panels: dict[str, Texts],
     style_warned: dict[str, bool],
 ) -> None:
-    """reload で新しい config を取り込み、スタイルと現在テキストを再 push する。
+    """Take in the new config on reload and re-push the styles and the current text.
 
-    色が壊れていても `_push_styles_or_warn` が
-    ValueError を飲むので、ここは常に最後まで走り、テキストは必ず更新
-    される。
+    Even with a broken color, `_push_styles_or_warn` swallows the ValueError, so this
+    always runs to the end and the text is always updated.
     """
     context.reset_need_reload()
     _refresh_panel_configs(context, panels)
@@ -324,16 +322,16 @@ async def _apply_reload(
 def _age_across_outage(
     panels: dict[str, Texts], last_tick: list[float], now: float
 ) -> None:
-    """接続直後の一斉 push の前に、直前のセッション終了 (または起動) からの
-    経過時間ぶん字幕を老化させる。
+    """Age the subtitles by the time elapsed since the previous session ended (or since
+    startup), before the bulk push that follows a connect.
 
-    `last_tick` は `subtitle_obs_worker` と `_run_session` が共有する 1 要素
-    のリスト。単なるローカル変数だと再接続のたびに失われ、再接続に要した
-    時間 (=OBS が落ちていた時間) がエイジングに反映されず、古い字幕が
-    そのまま復帰直後に再表示されてしまう。
-    `age_panels` は各パネルの `values[0]` しか老化させないが、直後の
-    `_push_all_text` はパネル全部を無条件に再送するので、ここで
-    `age_panels` の戻り値 (変化したパネルの一覧) を使う必要はない。
+    `last_tick` is a one-element list shared by `subtitle_obs_worker` and `_run_session`.
+    As a plain local it would be lost on every reconnect, so the time the reconnect took
+    (i.e. how long OBS was down) would not be reflected in the aging and stale subtitles
+    would reappear as-is right after recovery.
+    `age_panels` only ages each panel's `values[0]`, but the `_push_all_text` right after
+    re-sends every panel unconditionally, so there is no need to use `age_panels`' return
+    value (the list of panels that changed) here.
     """
     age_panels(panels, now - last_tick[0])
     last_tick[0] = now
@@ -348,16 +346,16 @@ async def _run_session(
     style_warned: dict[str, bool],
     dest_warned: list[bool],
 ) -> None:
-    """繋がっている間の本ループ。30fps のビジーループは持たない。
+    """The main loop while connected. There is no 30fps busy loop.
 
-    次に消える字幕の時刻までを timeout にして待つので、何も起きていない間は
-    1 回も起きない。
+    It waits with a timeout set to the moment the next subtitle expires, so while nothing
+    is happening it never wakes up.
 
-    `dest_warned` は「p=s のメッセージが届いたが translated_source が空で
-    送り先が無い」ことを 1 回だけ警告するためのフラグ (1 要素リスト)。
-    `style_warned`/`last_tick` と同じ理由で `subtitle_obs_worker` が
-    再接続をまたいで保持する同じオブジェクトを渡す -- ここで作り直すと
-    フラップのたびにまた警告してしまう。
+    `dest_warned` is the flag (a one-element list) for warning exactly once that "a p=s
+    message arrived but translated_source is empty, so it has nowhere to go". For the same
+    reason as `style_warned`/`last_tick`, `subtitle_obs_worker` holds the object across
+    reconnects and passes the same one in -- rebuilding it here would warn again on every
+    flap.
     """
     while True:
         if context.need_reload:
@@ -417,29 +415,31 @@ async def subtitle_obs_worker(
     panels = make_panels(context.config.subtitle)
     backoff = INITIAL_BACKOFF_SEC
     warned = False
-    # セッション境界をまたいで表示時計を進め続ける。
-    # subtitle_obs_worker と _run_session が同じ 1 要素リストを共有・変更
-    # する — 詳細は _age_across_outage のドキュメント参照。
+    # Keeps the display clock advancing across session boundaries.
+    # subtitle_obs_worker and _run_session share and mutate the same one-element list --
+    # see _age_across_outage's docs for the details.
     last_tick: list[float] = [monotonic()]
-    # パネルキーごとの style warn-once フラグ。
-    # セッション (再接続) をまたいで同じ辞書を使い回す -- フラップのたびに
-    # 作り直すと、同じ壊れた値でも再接続のたびにまた警告してしまう
+    # Per-panel-key style warn-once flags.
+    # The same dict is reused across sessions (reconnects) -- rebuilding it on every flap
+    # would warn again on every reconnect even for the same broken value
     # (see test_style_warn_once_persists_across_reconnects_not_just_within_a_session
     # in tests/test_subtitle_obs.py, which goes RED if this dict is moved
     # inside the loop below).
     style_warned: dict[str, bool] = {}
-    # p=s (translated) メッセージが届いたが translated_source が空で送り先が
-    # 無いときの warn-once フラグ。style_warned と同じ理由でここ (while True
-    # の外) で 1 回だけ作り、再接続をまたいで同じ 1 要素リストを使い回す
+    # The warn-once flag for "a p=s (translated) message arrived but translated_source is
+    # empty, so it has nowhere to go". For the same reason as style_warned it is created
+    # once here (outside the while True) and the same one-element list is reused across
+    # reconnects
     # (see test_missing_translated_source_warn_once_persists_across_reconnects,
     # which goes RED if this list is moved inside the loop below).
     dest_warned: list[bool] = [False]
     try:
         while True:
             obs = context.config.subtitle.obs
-            # そのセッションが「健全だった」と言える継続時間を測るための
-            # 開始時刻。identify+ソース検証が終わるまでは None のままにし、
-            # 「即座に壊れて再接続ループしている」セッションと区別する。
+            # The start time used to measure whether the session lasted long enough to
+            # count as "was healthy". It stays None until identify plus source validation
+            # finish, which distinguishes it from a session that "breaks instantly and
+            # loops on reconnect".
             session_started: float | None = None
             try:
                 async with connect(obs.url) as ws:
@@ -448,9 +448,9 @@ async def subtitle_obs_worker(
                         await client.identify(obs.password.get_secret_value())
                         await validate_sources(client, obs)
                     except (ObsIdentifyError, ObsResourceNotFoundError) as e:
-                        # 繋がった上で観測できて、かつリトライしても直らない。
-                        # ここだけが fail-loud (ADR-0042)。他の ObsProtocolError
-                        # (タイムアウト・不正メッセージ) は下の except へ落ちる。
+                        # Observable once connected and not fixed by retrying. This is the
+                        # only fail-loud path (ADR-0042). Other ObsProtocolErrors
+                        # (timeouts, malformed messages) fall to the except below.
                         raise WorkerStartupError("subtitle", str(e)) from e
                     logger.info("subtitle worker [obs] connected to %s", obs.url)
                     session_started = monotonic()
@@ -470,18 +470,18 @@ async def subtitle_obs_worker(
                         dest_warned,
                     )
             except (OSError, WebSocketException, ObsProtocolError) as e:
-                # OBS 未起動・切断・タイムアウト・不正メッセージ。字幕は落ちるが
-                # 音声パイプラインは巻き込まない。ObsProtocolError を external に
-                # 落とさないこと: 素の TimeoutError/KeyError が worker を貫通すると
-                # TaskGroup ごとプロセスが死ぬ。
+                # OBS not running, a disconnect, a timeout, a malformed message. The
+                # subtitles drop but the audio pipeline is not dragged along. Never let
+                # ObsProtocolError escape outward: a bare TimeoutError/KeyError piercing
+                # the worker kills the process together with the TaskGroup.
                 #
-                # backoff/warned は「identify+ソース検証まで到達した」だけでは
-                # 戻さない -- SetInputSettings が毎回リクエスト直後に失敗する
-                # ような「繋がるが即座に壊れる」ケースが繰り返し起きると、
-                # 接続の瞬間にリセットしてしまい backoff が床に張り付いたまま
-                # 警告だけが毎回出る。セッションが
-                # SESSION_HEALTHY_SEC 以上生きていた場合だけ「健全だった」と
-                # みなして戻す。
+                # backoff/warned are not reset merely because we "got as far as identify
+                # plus source validation" -- with a repeating "connects but breaks
+                # instantly" case, such as SetInputSettings failing right after every
+                # request, resetting at the moment of connection would pin the backoff to
+                # the floor while the warning fires every time. They are reset only when
+                # the session lived at least SESSION_HEALTHY_SEC, which counts as "was
+                # healthy".
                 if (
                     session_started is not None
                     and monotonic() - session_started >= SESSION_HEALTHY_SEC

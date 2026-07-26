@@ -1,16 +1,16 @@
-"""ストリーミング VC の再利用コア(ADR-0053)。
+"""The reusable core of streaming VC (ADR-0053).
 
-固定長ブロックを rolling 左文脈と連結してステートフル変換する。既存の
-`change_voice` の内部部品(HuBERT 特徴量 / f0 / infer / int16化)をそのまま
-再利用し、発話系の `change_voice` 経路は無改変で温存する。ブロック境界は
-クロスフェードで繋ぎ(SOLA on なら振幅保存・和=1、SOLA off なら等電力)、
-混ぜる前に SOLA で位相を合わせる(`_emit_with_crossfade`)。
+Converts statefully by concatenating a fixed-length block with a rolling left context.
+It reuses the internals of the existing `change_voice` (HuBERT features / f0 / infer /
+int16 conversion) as-is and leaves the utterance-path `change_voice` untouched. Block
+boundaries are joined with a crossfade (amplitude-preserving sum=1 with SOLA on,
+equal-power with SOLA off), and SOLA aligns the phase before mixing
+(`_emit_with_crossfade`).
 
-純粋ヘルパ(next_context / crossfade_weights / overlap_add /
-sola_offset)は numpy でも torch tensor でも動くよう `len(seq)` ベースにしてあり(ただし
-sola_offset は numpy 配列専用)、torch 無し・
-rvc extra 無しの CPU でも import できる(重い import は StreamingVc のメソッド内
-でのみ行う)。
+The pure helpers (next_context / crossfade_weights / overlap_add / sola_offset) are
+written in terms of `len(seq)` so they work on numpy arrays and torch tensors alike
+(sola_offset alone is numpy-only), and this module imports fine on a CPU machine with
+neither torch nor the rvc extra (the heavy imports happen inside StreamingVc's methods).
 """
 
 from __future__ import annotations
@@ -33,12 +33,13 @@ if TYPE_CHECKING:
 
 
 def next_context(seq, context_len: int):
-    """`seq` の末尾 `context_len` 要素(次 tick の左文脈)。
+    """The last `context_len` elements of `seq` (the next tick's left context).
 
-    `context_len == 0` のとき `seq[-0:]` は全体を返してしまうので、明示的に
-    空スライスにする。`len(seq)` ベースなので numpy/torch 双方で同じ挙動。
-    `context_len >= len(seq)` のときは全体を返す(clamp — 使える分だけ左文脈を
-    渡す防御的ガード。StreamingVc の呼び出し側は文脈を全長まで事前充填する)。
+    When `context_len == 0`, `seq[-0:]` would return the whole thing, so return an
+    explicit empty slice. Being written in terms of `len(seq)` it behaves identically on
+    numpy and torch. When `context_len >= len(seq)` the whole sequence is returned (a
+    clamp -- a defensive guard that passes as much left context as is available; the
+    StreamingVc caller pre-fills the context to full length).
     """
     if context_len <= 0:
         return seq[:0]
@@ -48,26 +49,28 @@ def next_context(seq, context_len: int):
 def crossfade_weights(
     n: int, *, correlated: bool
 ) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
-    """長さ n のクロスフェード重み `(fade_in, fade_out)`。フェード則は隣接描画の
-    相関(= SOLA の有無)で切り替える。`correlated` は必須のキーワード専用引数。
+    """Crossfade weights `(fade_in, fade_out)` of length n. The fade law is chosen by
+    whether adjacent renders are correlated (i.e. whether SOLA is on). `correlated` is a
+    required keyword-only argument.
 
-    - `correlated=True`(SOLA on): セル中心の sin²/cos²(= `(1-cos)/2` 型)で
-      **振幅保存**(`fade_in + fade_out == 1`)。SOLA が位相を合わせて隣接描画を
-      意図的に相関させる(整列点相関 ρ≈0.82)ので、相関信号どうしは和=1 で
-      混ぜるとユニティ利得になる。ここで等電力(²和=1)を使うと seam が過剰
-      加算される(SOLA on 再測定で +1.14dB, ADR-0053)。w-okada VCClient も
-      SOLA には sum-to-1 を組む。
-    - `correlated=False`(SOLA off, `sola_search_len == 0`): sin/cos で **等電力**
-      (`fade_in² + fade_out² == 1`)。SOLA を切ると隣接描画は無相関(ρ≈0)で、
-      無相関どうしを和=1 で混ぜるとクロスフェード帯に約 -1.25dB のノッチ(=
-      block レートの微小トレモロ)が出る。等電力なら無相関加算でも合成パワーが
-      平坦になり、かつ SOLA 導入前の出力に等電力則として float32 の丸め(~1 ULP,
-      max|Δ|≈1.19e-7)まで一致する。厳密なビット一致ではない — 重みを
-      `theta=0.5πx; sin(theta)` と先に畳むので pre-SOLA の `sin(0.5πx)` 直書きと
-      ~1 ULP ずれる — が、int16 量子化より遥かに下で可聴でない(計算は無害なので
-      変えない)。
+    - `correlated=True` (SOLA on): cell-centred sin²/cos² (the `(1-cos)/2` family), which
+      is **amplitude-preserving** (`fade_in + fade_out == 1`). SOLA aligns the phase and
+      thereby deliberately correlates adjacent renders (correlation at the alignment
+      point rho ~ 0.82), and mixing correlated signals with sum=1 gives unity gain. Using
+      equal power (sum of squares = 1) here over-adds at the seam (+1.14dB on the SOLA-on
+      re-measurement, ADR-0053). w-okada's VCClient also pairs SOLA with sum-to-1.
+    - `correlated=False` (SOLA off, `sola_search_len == 0`): sin/cos, which is **equal
+      power** (`fade_in**2 + fade_out**2 == 1`). With SOLA off adjacent renders are
+      uncorrelated (rho ~ 0), and mixing uncorrelated signals with sum=1 puts an about
+      -1.25dB notch in the crossfade band (a faint tremolo at the block rate). Equal
+      power keeps the summed power flat even for uncorrelated addition, and as the
+      equal-power law it matches the pre-SOLA output down to float32 rounding (~1 ULP,
+      max|delta| ~ 1.19e-7). It is not a strict bit match -- folding the weights first as
+      `theta=0.5*pi*x; sin(theta)` differs by ~1 ULP from pre-SOLA's literal
+      `sin(0.5*pi*x)` -- but that is far below int16 quantization and inaudible (the
+      computation is harmless, so leave it).
 
-    `n <= 0` は空配列を返す。
+    `n <= 0` returns empty arrays.
     """
     import numpy as np
 
@@ -85,54 +88,61 @@ def crossfade_weights(
 
 
 def overlap_add(prev_tail, head, fade_in, fade_out):
-    """`prev_tail` をフェードアウト・`head` をフェードインして加算する。
+    """Fade `prev_tail` out, fade `head` in, and add them.
 
-    クロスフェード overlap-add の 1 行。要素積なので numpy 配列でも torch tensor でも
-    動く(呼び出し側は同じ長さ・同じ域で渡す)。
+    The one line of a crossfade overlap-add. Being elementwise it works on numpy arrays
+    and torch tensors alike (callers pass equal lengths in the same domain).
     """
     return prev_tail * fade_out + head * fade_in
 
 
-# SOLA を諦める tail の RMS 下限(int16 単位のフルスケール 32768 に対する比)。
-# 1e-4 = -80dBFS 相当。従来の絶対値 1e-9 判定は「完全なデジタル無音」でしか発火せず、
-# 現実のノイズフロア(実測 RMS 0.000298 * 32768 ≈ 9.8 int16 単位)ではノイズ同士を
-# 相関させて argmax が事実上ランダムな lag を選んでいた。位相を合わせる相手が
-# そもそも無い領域では探索せず、公称(シフト無し)位置を返すのが正しい。
+# RMS floor of the tail below which SOLA gives up (as a ratio of int16 full scale,
+# 32768). 1e-4 is about -80dBFS. The previous absolute 1e-9 test only fired on "perfect
+# digital silence"; at a realistic noise floor (measured RMS 0.000298 * 32768 ~ 9.8 int16
+# units) it correlated noise against noise and let argmax pick an effectively random lag.
+# In a region where there is no phase to align to at all, the right answer is not to
+# search and to return the nominal (unshifted) position.
 _SOLA_MIN_RMS = 32768.0 * 1e-4
 
-# 相関がほぼ平坦なときに中央(公称 lag)へ寄せるための微小バイアス。正規化相関は
-# [-1, 1] なので、探索半幅で正規化した最大 1e-3 のペナルティは本物のピーク
-# (実測 0.89 vs 0.02)には影響せず、真に同点な面(例: DC 一定領域で全 lag の
-# 正規化相関が 1.0)でだけ効く。無しだと argmax が常に index 0 = 探索窓の
-# 最も手前 = 最大の負シフトを選んでしまう。
+# A tiny bias that pulls toward the centre (the nominal lag) when the correlation surface
+# is nearly flat. Normalized correlation lives in [-1, 1], so a penalty of at most 1e-3
+# normalized by the search half-width cannot affect a real peak (measured 0.89 vs 0.02)
+# and only matters on a genuinely tied surface (e.g. a constant-DC region where the
+# normalized correlation is 1.0 at every lag). Without it argmax always picks index 0 =
+# the earliest point of the search window = the largest negative shift.
 _SOLA_CENTER_BIAS = 1e-3
 
 
 def sola_offset(prev_tail, region):
-    """`region` 内で `prev_tail` と最も相関する開始位置(index)を返す。
+    """Return the start position (index) within `region` that correlates best with
+    `prev_tail`.
 
-    RVC デコーダはステートレスなので、同じ入力区間でも tick ごとに位相が
-    ずれた波形を返す(実測: lag0 の相関 -0.02 に対し最適 lag では 0.89)。
-    固定位置で混ぜると同じ波形を数 ms ずらして足すことになり、櫛形フィルタ
-    (comb)になって「扇風機」的な音になる。混ぜる前に位相を合わせる。
+    The RVC decoder is stateless, so it returns a phase-shifted waveform on every tick
+    even for the same input span (measured: correlation -0.02 at lag 0 versus 0.89 at the
+    best lag). Mixing at a fixed position adds the same waveform to itself a few ms
+    apart, which forms a comb filter and produces that "electric fan" sound. Align the
+    phase before mixing.
 
-    戻り値は `region` 先頭からの index(0 <= i <= len(region)-len(prev_tail))。
-    シフト無し(公称)に相当するのは **index 0 ではなく中央** `(len(region)-n)//2`
-    ── 呼び出し側は探索半幅ぶん手前から region を切り出すため。したがって
-    「探索を諦める」ときは 0 ではなく中央を返す:
+    The return value is an index from the start of `region`
+    (0 <= i <= len(region)-len(prev_tail)). What corresponds to "no shift" (nominal) is
+    **the centre `(len(region)-n)//2`, not index 0** -- the caller cuts region starting
+    one search half-width earlier. So "giving up the search" returns the centre, not 0:
 
-    - `prev_tail` の RMS が `_SOLA_MIN_RMS` 未満(実質無音)→ 中央。合わせるべき
-      位相が無く、ノイズ同士の相関の argmax は任意の lag になるため。
-    - 相関面がほぼ平坦(同点)→ `_SOLA_CENTER_BIAS` で中央寄りが勝つ。
+    - `prev_tail`'s RMS is below `_SOLA_MIN_RMS` (effectively silent) -> the centre.
+      There is no phase to align to, and the argmax of noise against noise is an
+      arbitrary lag.
+    - The correlation surface is nearly flat (tied) -> `_SOLA_CENTER_BIAS` lets the
+      centre win.
 
-    `region` が `prev_tail` より短いときだけは窓が 1 つも取れないので 0。
+    Only when `region` is shorter than `prev_tail` is not a single window available, so
+    that returns 0.
     """
     import numpy as np
 
     n = len(prev_tail)
     if n == 0 or len(region) < n:
         return 0
-    center = (len(region) - n) // 2  # シフト無し(公称)に相当する index
+    center = (len(region) - n) // 2  # the index corresponding to no shift (nominal)
     tail_rms = float(
         np.sqrt(np.mean(np.square(np.asarray(prev_tail, dtype=np.float64))))
     )
@@ -143,23 +153,24 @@ def sola_offset(prev_tail, region):
     num = win @ prev_tail
     den = np.linalg.norm(win, axis=1) * tail_norm + 1e-9
     score = num / den
-    # 中央からの距離に比例した微小ペナルティ。探索半幅で割ってあるので窓長や
-    # サンプルレートに依らず最大 _SOLA_CENTER_BIAS。O(len(region)) で安い。
+    # A tiny penalty proportional to the distance from the centre. Divided by the search
+    # half-width, so it peaks at _SOLA_CENTER_BIAS regardless of window length or sample
+    # rate. O(len(region)) and cheap.
     lags = np.arange(score.shape[0])
     score = score - _SOLA_CENTER_BIAS * np.abs(lags - center) / max(center, 1)
     return int(np.argmax(score))
 
 
 class StreamingVc:
-    """固定ブロック + rolling 左文脈のステートフル VC(ADR-0053)。
+    """Stateful VC over fixed blocks plus a rolling left context (ADR-0053).
 
-    毎 tick `[context | block]`(16kHz)を組み立て、既存 `change_voice` の内部
-    部品で HuBERT 特徴量 -> f0 -> infer -> int16 を通し、ブロック相当の出力だけ
-    採用して context を更新する。block_len / context_len を固定するので入力
-    shape が固定になり、warmup は 1 回で済む(以後 re-autotune なし)。
+    On every tick it assembles `[context | block]` (16kHz), runs it through the existing
+    `change_voice` internals (HuBERT features -> f0 -> infer -> int16), keeps only the
+    block's worth of output and updates the context. Fixing block_len / context_len fixes
+    the input shape, so a single warmup suffices (no re-autotune afterwards).
 
-    重い依存(torch / rvc の内部部品)はここで初めて import する。`rvc_config`
-    の f0_extractor_type は渡す `f0_session` と一致していること。
+    The heavy dependencies (torch, rvc internals) are imported here for the first time.
+    `rvc_config`'s f0_extractor_type must match the `f0_session` that is passed in.
     """
 
     def __init__(
@@ -198,22 +209,29 @@ class StreamingVc:
         self._context = torch.zeros(context_len, device=device, dtype=torch.float32)
 
         self.crossfade_len = crossfade_len
-        # SOLA 探索半幅(16kHz 入力サンプル)。0 で SOLA 無効 = 固定位置の従来挙動。
+        # SOLA search half-width (in 16kHz input samples). 0 disables SOLA = the previous
+        # fixed-position behaviour.
         self.sola_search_len = sola_search_len
-        # crossfade の出力域長(hop / crossfade / SOLA 探索半幅)は実時間クロック
-        # (`* target_sample_rate / 16000`)から導く。描画長 out.shape[0] からの比率
-        # 導出は HuBERT の受容野ぶん(約 320 入力サンプル)短く出て sink を飢えさせる。
-        # 読み出し位置だけは out.shape[0] からの逆算(末尾アンカー)を維持し、
-        # 切り詰められた末尾を避ける。長さは毎tick一定 → 初回 emit で算出しキャッシュ。
+        # The output-domain lengths of the crossfade (hop / crossfade / SOLA search
+        # half-width) are derived from the real-time clock
+        # (`* target_sample_rate / 16000`). Deriving them as a ratio of the render length
+        # out.shape[0] comes out short by HuBERT's receptive field (about 320 input
+        # samples) and starves the sink. Only the read position keeps its derivation from
+        # out.shape[0] (anchored at the tail) so that the truncated tail is avoided. The
+        # lengths are constant across ticks -> computed on the first emit and cached.
         self._xfade_cache: (
             tuple[int, int, int, NDArray[np.float32], NDArray[np.float32]] | None
         ) = None
-        self._output_tail = None  # 初回 crossfade で zeros(out_xf) を遅延生成
-        # 直近 emit の内容が入力ブロック先頭より何サンプル手前から始まるか(出力
-        # レート)。crossfade/HuBERT 受容野の切り詰めぶん emit は遅れて出るので、
-        # 出力へ何かを時刻整合で重ねる側(VAD ゲートのマスク, ADR-0059)はこれで補正
-        # する。値は**公称の読み出し位置**由来なので tick 間で一定 — SOLA の lag は
-        # 載せない(理由は `_emit_with_crossfade` の該当箇所)。
+        self._output_tail = (
+            None  # zeros(out_xf) is created lazily on the first crossfade
+        )
+        # How many samples before the start of the input block the content of the latest
+        # emit begins (at the output rate). The emit comes out late by the crossfade and
+        # by HuBERT's receptive-field truncation, so anything that overlays the output in
+        # time alignment (the VAD gate's mask, ADR-0059) corrects with this. The value is
+        # derived from the **nominal** read position and is therefore constant across
+        # ticks -- SOLA's lag is deliberately not folded in (see the corresponding note in
+        # `_emit_with_crossfade`).
         self.emit_delay_samples = 0
         if crossfade_len > 0 and context_len < crossfade_len:
             raise ValueError(
@@ -223,10 +241,11 @@ class StreamingVc:
             raise ValueError("crossfade_len must be < block_len")
 
     def warmup(self, n: int = 3) -> None:
-        """zeros ブロックで ONNX グラフ / CUDA カーネルを先に構築する。
+        """Build the ONNX graph / CUDA kernels up front using blocks of zeros.
 
-        block_len は固定なので、実値でなく shape さえ通れば以後 stall しない。
-        warmup 後は context を zeros に戻す。
+        block_len is fixed, so pushing the shape through is enough -- the real values do
+        not matter and nothing stalls afterwards. The context is reset to zeros after
+        warmup.
         """
         import numpy as np
 
@@ -241,13 +260,14 @@ class StreamingVc:
         self._context = torch.zeros(
             self.context_len, device=self.device, dtype=torch.float32
         )
-        # crossfade tail も rolling 状態。warmup 後の stale tail が最初の実ブロックの
-        # seam に漏れないようリセット(次 emit で zeros に再初期化 → 無音から fade-in)。
+        # The crossfade tail is rolling state too. Reset it so a stale tail left over from
+        # warmup cannot leak into the seam of the first real block (the next emit
+        # re-initializes it to zeros -> fade in from silence).
         self._output_tail = None
         self._xfade_cache = None
 
     def process_block(self, block: NDArray[np.float32]) -> NDArray[np.int16]:
-        """長さ block_len の 16kHz float32 [-1,1] を変換し int16 ブロックを返す。"""
+        """Convert block_len samples of 16kHz float32 [-1,1] and return an int16 block."""
         import numpy as np
         import torch
 
@@ -260,7 +280,8 @@ class StreamingVc:
         block_t = torch.from_numpy(np.ascontiguousarray(block)).to(
             device=self.device, dtype=torch.float32
         )
-        seq = torch.cat([self._context, block_t])  # 固定長 L = context_len + block_len
+        # fixed length L = context_len + block_len
+        seq = torch.cat([self._context, block_t])
 
         feats = _extract_hubert_feats(
             hubert_model=self.hubert_model,
@@ -306,98 +327,115 @@ class StreamingVc:
         return self._emit_no_crossfade(out)
 
     def _emit_no_crossfade(self, out: NDArray[np.int16]) -> NDArray[np.int16]:
-        """crossfade 無効時の emit(末尾アンカーで hop ちょうどを出す)。
+        """The emit path when crossfade is disabled (exactly one hop, anchored at the
+        tail).
 
-        長さは実時間クロック由来。描画長からの比率導出は HuBERT の受容野ぶん
-        (約 320 入力サンプル)短く出て sink を飢えさせる。位置は末尾アンカーの
-        ままなので、切り詰められた末尾は避けられる。
+        The length comes from the real-time clock. Deriving it as a ratio of the render
+        length comes out short by HuBERT's receptive field (about 320 input samples) and
+        starves the sink. The position stays anchored at the tail, so the truncated tail
+        is avoided.
         """
         out_hop = round(self.block_len * self.target_sample_rate / 16000)
         if out.shape[0] < out_hop:
-            # 描画が 1 hop に満たない = context_ms が短すぎる壊れた設定(crossfade 経路は
-            # ここで ValueError を投げる)。この分岐は emit 長がそもそも hop に足りず
-            # レートロックが崩れているので、報告する遅延も意味を持たない
-            # (ctx_out = 文脈まるごと分になり、ゲートのマスクは全域が前ブロックの値へ
-            # clamp される)。ここを直すなら crossfade 経路と同じく fail-loud にする
-            # のが筋だが、crossfade_ms=0 の既存設定の挙動を変えるので別件として残す。
+            # The render is shorter than one hop = a broken config whose context_ms is too
+            # short (the crossfade path raises ValueError here). In this branch the emit
+            # length already falls short of a hop and the rate lock is broken, so the
+            # delay we report is meaningless too (ctx_out becomes the whole context and
+            # the gate's mask clamps everywhere to the previous block's value). The
+            # principled fix would be to fail loud like the crossfade path, but that
+            # changes the behaviour of existing crossfade_ms=0 configs, so it is left as
+            # separate work.
             self.emit_delay_samples = self._emit_delay(0)
             return out
         self.emit_delay_samples = self._emit_delay(out.shape[0] - out_hop)
         return out[-out_hop:]
 
     def _emit_delay(self, start: int) -> int:
-        """emit 先頭が入力ブロック先頭より何サンプル手前かを返す(出力レート)。
+        """How many samples before the start of the input block the emit starts (at the
+        output rate).
 
-        デコーダ描画は解析窓 `[context | block]` の先頭に揃っている(切り詰められる
-        のは末尾)ので、描画の index はそのまま窓内位置。ブロック先頭は窓内
-        `context_len` サンプル目 = 出力レートで `context_len * rate / 16000`。
-        したがって読み出し開始 `start` との差が「emit がどれだけ手前から鳴るか」。
+        The decoder render is aligned to the start of the analysis window
+        `[context | block]` (only the tail gets truncated), so an index into the render
+        is directly a position within the window. The block starts at sample
+        `context_len` of the window = `context_len * rate / 16000` at the output rate.
+        The difference from the read start `start` is therefore "how much earlier the
+        emit sounds".
         """
         ctx_out = round(self.context_len * self.target_sample_rate / 16000)
         return ctx_out - start
 
     def _emit_with_crossfade(self, out: NDArray[np.int16]) -> NDArray[np.int16]:
-        """SOLA で位相を合わせてから overlap-add し、実時間 hop ちょうどを返す。
+        """Align the phase with SOLA, overlap-add, and return exactly one real-time hop.
 
-        出力域の長さ(hop / crossfade / SOLA 探索半幅)は**実時間クロック**から導く
-        (`block_len * target_sample_rate / 16000` など)。描画長 out.shape[0] からの
-        比率導出は誤りで、HuBERT の受容野が末尾を一定量(約 320 入力サンプル)切り
-        詰めるぶんだけ hop が短くなり、sink を永続的に飢えさせる(実測 3.03% =
-        30.3ms/s)。長さは shape 固定なら毎tick一定なので初回に算出してキャッシュ。
+        The output-domain lengths (hop / crossfade / SOLA search half-width) are derived
+        from the **real-time clock** (`block_len * target_sample_rate / 16000` and so
+        on). Deriving them as a ratio of the render length out.shape[0] is wrong: HuBERT's
+        receptive field truncates a fixed amount off the tail (about 320 input samples),
+        which shortens the hop by that much and permanently starves the sink (measured
+        3.03% = 30.3ms/s). With the shape fixed the lengths are constant across ticks, so
+        they are computed once and cached.
 
-        一方、**読み出し位置は out_total からの逆算(末尾アンカー)**のまま。これに
-        より切り詰められた末尾は自然に避けられる。
+        The **read position, on the other hand, is still derived backwards from out_total
+        (anchored at the tail)**, which naturally avoids the truncated tail.
 
-        前 tick が emit 末尾 out_xf を `_output_tail` に保持しており、今 tick はそれと
-        同じ入力時刻を再描画した区間を振幅保存(和=1)ブレンドして emit 先頭にする(seam の真の
-        overlap-add)。ただし RVC デコーダはステートレスで、同じ入力区間でも tick ごとに
-        数 ms の位相ずれが乗る(実測: lag0 の相関 -0.02 に対し最適 lag では 0.89)。
-        固定位置で混ぜると comb フィルタになるので、混ぜる前に `sola_offset` で
-        `_output_tail` と最も相関する読み出し位置 `start` を ±out_sola の窓で探す
-        (SOLA = Synchronous OverLap-Add)。フェード則は SOLA の有無で切り替える
-        (`crossfade_weights(..., correlated=self.sola_search_len > 0)`)。SOLA on は
-        隣接描画を意図的に相関させる(整列点相関 ρ=0.82)ので振幅保存(和=1、
-        sin²/cos²)でユニティ利得(等電力だと +1.14dB 過剰加算、sum-to-1 は
-        -0.76dB でユニティ寄り。w-okada VCClient も SOLA に sum-to-1)。SOLA off
-        (`sola_search_len == 0`)は隣接描画が無相関(ρ≈0)なので等電力(²和=1、
-        sin/cos)。無相関に和=1 を使うと帯域に約 -1.25dB のノッチ(block レートの
-        トレモロ)が出る。等電力なら pre-SOLA 出力に float32 の丸め(~1 ULP)まで
-        一致する(厳密なビット一致ではない; ADR-0053)。
+        The previous tick kept the last out_xf samples of its emit in `_output_tail`, and
+        this tick blends it (amplitude-preserving, sum=1) with the re-rendered span
+        covering the same input time to form the start of this emit (a true overlap-add
+        at the seam). But the RVC decoder is stateless, so the same input span picks up a
+        phase shift of a few ms on every tick (measured: correlation -0.02 at lag 0 versus
+        0.89 at the best lag). Mixing at a fixed position would form a comb filter, so
+        before mixing `sola_offset` searches a +/-out_sola window for the read position
+        `start` that correlates best with `_output_tail` (SOLA = Synchronous
+        OverLap-Add). The fade law switches on whether SOLA is on
+        (`crossfade_weights(..., correlated=self.sola_search_len > 0)`). With SOLA on
+        adjacent renders are deliberately correlated (correlation at the alignment point
+        rho = 0.82), so amplitude preservation (sum=1, sin²/cos²) gives unity gain (equal
+        power over-adds by +1.14dB, while sum-to-1 sits at -0.76dB, near unity; w-okada's
+        VCClient also pairs SOLA with sum-to-1). With SOLA off (`sola_search_len == 0`)
+        adjacent renders are uncorrelated (rho ~ 0), so equal power (sum of squares = 1,
+        sin/cos) applies. Using sum=1 on uncorrelated signals puts an about -1.25dB notch
+        in the band (a tremolo at the block rate). Equal power matches the pre-SOLA output
+        down to float32 rounding (~1 ULP; not a strict bit match; ADR-0053).
 
-        index 不変量:
+        Index invariants:
 
-        - emit 長は常にちょうど out_hop = `block_len * target_sample_rate / 16000`
-          (= 入力 hop を sink のサンプルレートへ写した実時間長。ドリフト無し)。
-          lag は「どこから読むか」だけを変え、「どれだけ出すか」は変えない。
-        - 触れる最大 index は
+        - The emit length is always exactly out_hop =
+          `block_len * target_sample_rate / 16000` (the input hop mapped onto the sink's
+          sample rate as a real-time length; no drift). The lag changes only *where we
+          read from*, never *how much we emit*.
+        - The largest index touched is
           `start + out_hop + out_xf <= (nominal + out_sola) + out_hop + out_xf
-          == out_total` なので、描画の外へは決して出ない。
-        - `nominal - out_sola >= 0`(探索窓が出力の先頭を割らない)は out_sola の
-          clamp `out_sola <= (out_total - out_hop - out_xf) // 2` で保証する。
-        - `out_sola == 0`(= `sola_search_len == 0`)のときは `start == nominal ==
-          out_total - out_hop - out_xf` で読み出し位置が pre-SOLA と一致し、かつ
-          フェード則も等電力(`correlated=False`)に落ちるので、出すサンプルは
-          pre-SOLA と float32 の丸め(~1 ULP)まで一致する(重みを先に畳んだぶんの
-          ずれで厳密なビット一致ではないが、int16 量子化より下で可聴でない)。
-          読み出し位置だけでなく重みも一致させることでこの不変量が成立する。
-        - `sola_offset` が探索を諦める(tail が実質無音・相関面が平坦)ときは region
-          の**中央** `out_sola` を返すので `start == nominal` になる。すなわち
-          「シフト無し」に落ちる(index 0 = 最大の負シフト、ではない)。
+          == out_total`, so we never read past the render.
+        - `nominal - out_sola >= 0` (the search window never runs off the front of the
+          output) is guaranteed by clamping out_sola to
+          `out_sola <= (out_total - out_hop - out_xf) // 2`.
+        - When `out_sola == 0` (i.e. `sola_search_len == 0`), `start == nominal ==
+          out_total - out_hop - out_xf`, so the read position matches pre-SOLA and the
+          fade law also falls back to equal power (`correlated=False`); the samples
+          emitted therefore match pre-SOLA down to float32 rounding (~1 ULP -- not a
+          strict bit match because the weights are folded first, but below int16
+          quantization and inaudible). The invariant holds precisely because both the
+          read position and the weights match.
+        - When `sola_offset` gives up the search (the tail is effectively silent, or the
+          correlation surface is flat) it returns the **centre** `out_sola` of the region,
+          so `start == nominal`. That is, it falls back to "no shift" (not to index 0 =
+          the largest negative shift).
 
-        アルゴリズム遅延は out_sola サンプル(読み出し位置を探索半幅だけ手前へ
-        ずらすため)に加え、HuBERT の受容野による末尾切り詰めぶん(約 320 入力
-        サンプル = 20ms)が乗る。どちらも emit 長には影響しない。
+        The algorithmic delay is out_sola samples (from moving the read position one
+        search half-width earlier) plus HuBERT's receptive-field truncation of the tail
+        (about 320 input samples = 20ms). Neither affects the emit length.
         """
         import numpy as np
 
         out_total = out.shape[0]
         if self._xfade_cache is None:
             r = self.target_sample_rate
-            # 長さは実時間クロックから導く。out_total からの比率で出すと、HuBERT の
-            # 受容野で末尾が一定量(約 320 入力サンプル)切り詰められるぶんだけ hop が
-            # 短くなり、出力デバイスを永続的に飢えさせる(実測 3.03% = 30.3ms/s)。
-            # 読み出し位置は従来どおり out_total からの逆算(末尾アンカー)なので、
-            # 切り詰められた末尾は自然に避けられる。
+            # Derive the lengths from the real-time clock. Deriving them as a ratio of
+            # out_total shortens the hop by however much HuBERT's receptive field
+            # truncates off the tail (about 320 input samples) and permanently starves
+            # the output device (measured 3.03% = 30.3ms/s). The read position is still
+            # derived backwards from out_total (anchored at the tail), which naturally
+            # avoids the truncated tail.
             out_hop = round(self.block_len * r / 16000)
             out_xf = round(self.crossfade_len * r / 16000)
             out_sola = round(self.sola_search_len * r / 16000)
@@ -407,12 +445,15 @@ class StreamingVc:
                     "context_ms が短すぎる(HuBERT の受容野ぶん実効長が縮む)。"
                     "context_ms を増やすこと。"
                 )
-            # crossfade 帯は hop 以下 かつ context 区間(out_total-out_hop)以下に抑える
+            # Keep the crossfade band at or below the hop and at or below the context
+            # span (out_total-out_hop)
             out_xf = min(out_xf, out_hop, out_total - out_hop)
-            # nominal - out_sola >= 0 を保証(探索窓が出力の先頭を割らない)
+            # guarantee nominal - out_sola >= 0 (the search window never runs off the
+            # front of the output)
             out_sola = max(0, min(out_sola, (out_total - out_hop - out_xf) // 2))
-            # フェード則は SOLA の有無で決まる。SOLA on は隣接描画が相関する(和=1)、
-            # SOLA off は無相関(等電力)。sola_search_len==0 で pre-SOLA と ~1 ULP 一致。
+            # The fade law follows whether SOLA is on: with SOLA the adjacent renders are
+            # correlated (sum=1), without it they are uncorrelated (equal power). At
+            # sola_search_len==0 this matches pre-SOLA to within ~1 ULP.
             fade_in, fade_out = crossfade_weights(
                 out_xf, correlated=self.sola_search_len > 0
             )
@@ -421,19 +462,22 @@ class StreamingVc:
         out_f = out.astype(np.float32)
         if self._output_tail is None:
             self._output_tail = np.zeros(out_xf, dtype=np.float32)
-        # 読み出し開始位置。out_sola=0 なら従来と同一 (= out_total-out_hop-out_xf)。
+        # The read start. With out_sola=0 this is identical to before
+        # (= out_total-out_hop-out_xf).
         nominal = out_total - out_hop - out_xf - out_sola
         if out_sola > 0:
             region = out_f[nominal - out_sola : nominal + out_sola + out_xf]
             start = (nominal - out_sola) + sola_offset(self._output_tail, region)
         else:
             start = nominal
-        # 公開する遅延は SOLA の lag を含めない(`start` ではなく `nominal` から導く)。
-        # lag は tick ごとに ±out_sola 動くので、それを時刻軸に載せると、これを使って
-        # 出力へ何かを重ねる側(VAD ゲートのマスク)の時刻軸が tick ごとに再アンカーされ、
-        # emit の継ぎ目でゲインが跳ぶ(実機で最大 0.06、構造上の上限は 2*out_sola/窓長 =
-        # 0.31 = クリック)。残る内容ずれは高々 out_sola(既定 5ms)で、マスクの分解能
-        # 32ms より十分小さい。SOLA は出力の時間基準の微修正であって内容の遅延ではない。
+        # The published delay excludes SOLA's lag (it is derived from `nominal`, not from
+        # `start`). The lag moves by +/-out_sola every tick, and folding that into the
+        # time axis would re-anchor the time axis of whoever overlays the output with it
+        # (the VAD gate's mask) on every tick, making the gain jump at the emit seam
+        # (measured up to 0.06 on hardware; the structural bound is 2*out_sola/window =
+        # 0.31 = a click). The residual content offset is at most out_sola (5ms by
+        # default), comfortably below the mask's 32ms resolution. SOLA is a fine
+        # adjustment of the output's time reference, not a delay of the content.
         self.emit_delay_samples = self._emit_delay(nominal)
         head = out_f[start : start + out_xf]
         blended = overlap_add(self._output_tail, head, fade_in, fade_out)

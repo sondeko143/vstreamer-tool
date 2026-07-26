@@ -1,10 +1,11 @@
-"""HuBERT 置換の等価判定に使うメトリクス（純関数）。
+"""Metrics used to judge the equivalence of the HuBERT replacement (pure functions).
 
-変換ツール（scripts/convert_hubert.py）と等価テスト（tests/test_hubert_equivalence.py、
-tests/test_change_voice_golden.py）が同じ数式・同じしきい値で合否を出せるよう、判定
-ロジックとしきい値をここに一本化する。値をコピーせず必ず import すること。
+The decision logic and the thresholds live here alone, so that the conversion tool
+(scripts/convert_hubert.py) and the equivalence tests (tests/test_hubert_equivalence.py,
+tests/test_change_voice_golden.py) reach a verdict from the same formulas and the same
+thresholds. Always import the values; never copy them.
 
-設計方針: いずれの指標も **壊れた入力に「満点」を返してはならない**（fail-closed）。
+Design rule: no metric may ever return a "perfect score" for broken input (fail-closed).
 """
 
 import math
@@ -12,28 +13,34 @@ import math
 import numpy as np
 from numpy.typing import NDArray
 
-# --- 合格しきい値（単一情報源） ---
-# HuBERT 特徴量の等価判定（fp32）。
+# --- Pass thresholds (single source of truth) ---
+# Equivalence of the HuBERT features (fp32).
 COSINE_MIN = 0.9999
 MAX_ABS_MAX = 1e-4
-# change_voice 出力音声の回帰判定。golden は **fairseq 由来** で、fp16 の HuBERT で捕獲されている。
-# したがってこのゲートは HuBERT の実行エンジンに敏感である。実測 (2026-07-10, RTX 5060, 実 RVC モデル):
-#   transformers fp16 (spec ①)  corr 0.99998675  SNR 44.59 dB
-#   ONNX fp16 (spec ②)          corr 0.99995400  SNR 39.52 dB
-# 差は ORT と torch の fp16 カーネルの丸め違いであって、グラフの欠陥ではない。同じ ONNX を fp32 で
-# 走らせると特徴量は fairseq を max_abs 1.010e-05 で再現する（tests/test_hubert_equivalence.py）。
-# 感度の裏取り: fp16↔fp32 の特徴量差 max_abs 0.43 は SNR 3.03 dB まで落ちる。誤差比 ~30 倍に対し
-# 20*log10(30) ≈ 29.5 dB で、39.52 → 3.03 の落差と整合する。
-# 40.0 → 35.0 に緩めた根拠は上の実測 39.52 dB（余裕 ~4.5 dB。spec ① が 44.59/40 で持っていた余裕と同じ）。
-# golden は再ベースラインしない。fairseq 実装を跨いだ保証をここで失いたくないため。
+# Regression check on the change_voice output audio. The golden comes **from fairseq** and
+# was captured with an fp16 HuBERT, so this gate is sensitive to HuBERT's execution engine.
+# Measured (2026-07-10, RTX 5060, a real RVC model):
+#   transformers fp16 (spec 1)  corr 0.99998675  SNR 44.59 dB
+#   ONNX fp16 (spec 2)          corr 0.99995400  SNR 39.52 dB
+# The difference is rounding between ORT's and torch's fp16 kernels, not a defect in the
+# graph. Running the same ONNX in fp32 reproduces fairseq's features to max_abs 1.010e-05
+# (tests/test_hubert_equivalence.py).
+# Sensitivity cross-check: the fp16-vs-fp32 feature difference of max_abs 0.43 drops SNR to
+# 3.03 dB. For an error ratio of about 30x, 20*log10(30) ~ 29.5 dB, which is consistent
+# with the 39.52 -> 3.03 drop.
+# The basis for relaxing 40.0 -> 35.0 is the 39.52 dB measured above (about 4.5 dB of
+# margin -- the same margin spec 1 had at 44.59/40).
+# The golden is not re-baselined: we do not want to lose the guarantee that spans the
+# fairseq implementation here.
 CORR_MIN = 0.999
 SNR_MIN_DB = 35.0
-# fp16 ONNX グラフ vs **torch fp16 参照**（fp32 golden ではない）。
-# hidden state は O(1)-O(2.5) あり、半精度の絶対誤差はもともと 1e-1 オーダー。fp32 golden に
-# 対しては現行 runtime の HubertModel.half() 自身が cosine 0.987 / max_abs 0.435 を出すので、
-# fp32 golden を fp16 の参照にすること自体が誤り。問うべきは「ONNX 化で fp16 の振る舞いが
-# 変わっていないか」であり、参照は置き換え対象の torch fp16 である。
-# 実測 (2026-07-10, RTX 4060, ONNX fp16 vs torch fp16):
+# The fp16 ONNX graph vs **a torch fp16 reference** (not the fp32 golden).
+# Hidden states are O(1)-O(2.5) and half precision's absolute error is inherently on the
+# order of 1e-1. Against the fp32 golden, the current runtime's own HubertModel.half()
+# produces cosine 0.987 / max_abs 0.435, so using the fp32 golden as an fp16 reference is
+# itself wrong. The question to ask is "did going to ONNX change the fp16 behaviour", and
+# the reference for that is the torch fp16 being replaced.
+# Measured (2026-07-10, RTX 4060, ONNX fp16 vs torch fp16):
 #   l9_proj  cosine=0.99999010 max_abs=1.379e-02
 #   l12_raw  cosine=0.99997235 max_abs=1.074e-02
 COSINE_MIN_FP16 = 0.9999
@@ -46,11 +53,13 @@ def _as_2d(x: NDArray) -> NDArray[np.float64]:
 
 
 def feature_cosine(a: NDArray, b: NDArray) -> float:
-    """最終軸を特徴次元とみなしたフレーム毎 cosine 類似度の平均。
+    """The mean per-frame cosine similarity, treating the last axis as the feature
+    dimension.
 
-    **両方**のノルムが 0 のフレームだけを一致 (1.0) とみなす。片方だけが 0 のフレームは
-    不一致 (0.0)。ゼロノルムのフレームを一律除外すると `feature_cosine(非ゼロ, 全ゼロ)` が
-    1.0 を返し、主ゲートがゴミに満点を出してしまう。
+    Only frames where **both** norms are 0 count as a match (1.0). A frame where just one
+    is 0 counts as a mismatch (0.0). Excluding zero-norm frames wholesale would make
+    `feature_cosine(nonzero, all zeros)` return 1.0, i.e. the main gate would award a
+    perfect score to garbage.
     """
     if np.asarray(a).shape != np.asarray(b).shape:
         raise ValueError(
@@ -71,7 +80,7 @@ def feature_cosine(a: NDArray, b: NDArray) -> float:
 
 
 def feature_max_abs_diff(a: NDArray, b: NDArray) -> float:
-    """要素毎の絶対差の最大値。"""
+    """The maximum elementwise absolute difference."""
     x = np.asarray(a, dtype=np.float64)
     y = np.asarray(b, dtype=np.float64)
     if x.shape != y.shape:
@@ -82,7 +91,7 @@ def feature_max_abs_diff(a: NDArray, b: NDArray) -> float:
 
 
 def waveform_correlation(a: NDArray, b: NDArray) -> float:
-    """零ラグの正規化相互相関（-1..1）。"""
+    """Zero-lag normalized cross-correlation (-1..1)."""
     x = np.asarray(a, dtype=np.float64)
     y = np.asarray(b, dtype=np.float64)
     if x.shape != y.shape:
@@ -96,22 +105,27 @@ def waveform_correlation(a: NDArray, b: NDArray) -> float:
 
 
 def waveform_snr(reference: NDArray, test: NDArray) -> float:
-    """`reference` に対する `test` の全体 SNR(dB)。`10*log10(Σref² / Σnoise²)`。
+    """Overall SNR (dB) of `test` against `reference`: `10*log10(sum(ref^2) /
+    sum(noise^2))`.
 
-    **フレーム分割も中央値も使わない。** セグメンタル中央値版を廃した理由: 中央値は外れ値に
-    頑健なので少数フレームの破損に原理的に鈍感で、回帰検出という目的に寄与しない。一方で
-    フレーム分割 + マスク + 中央値の組み合わせは「壊れた信号に inf（完璧）を返す」経路を
-    5 通り生んだ（tiny 除算 overflow / 中央値の上方飽和 / 無音参照フレームの除外 /
-    `NaN > 0` が False / 末尾端数の破棄）。局所破損は相関ゲートが捕らえる。
+    **No framing and no median.** The segmental-median version was dropped because a
+    median is robust to outliers and therefore inherently insensitive to corruption in a
+    handful of frames, which does not serve regression detection. Meanwhile the
+    framing + mask + median combination created five separate paths that "return inf
+    (perfect) for a broken signal" (tiny-divisor overflow / upward saturation of the
+    median / excluding silent reference frames / `NaN > 0` being False / discarding the
+    trailing partial frame). Local corruption is caught by the correlation gate.
 
-    戻り値:
-      - 完全一致（noise == 0）→ `inf`（両方とも無音の場合も含む）
-      - 参照が全無音（signal == 0）でテストにエネルギーがある → `-inf`（破損）
-      - それ以外 → 有限の dB
+    Return value:
+      - exact match (noise == 0) -> `inf` (including when both are silent)
+      - the reference is entirely silent (signal == 0) while the test has energy ->
+        `-inf` (corrupt)
+      - otherwise -> a finite dB value
 
-    非有限入力（NaN / inf）は破損なので ValueError。エネルギー和が float64 で overflow した
-    場合も ValueError（inf を「完璧」と誤報告させない）。
-    商を取らず log 空間で引くため、極端なダイナミックレンジでも比が overflow しない。
+    Non-finite input (NaN / inf) is corruption, hence ValueError. An energy sum
+    overflowing float64 is also a ValueError (never let inf be misreported as "perfect").
+    The subtraction happens in log space rather than as a quotient, so the ratio cannot
+    overflow even with extreme dynamic range.
     """
     ref = np.asarray(reference, dtype=np.float64).ravel()
     tst = np.asarray(test, dtype=np.float64).ravel()
@@ -119,7 +133,8 @@ def waveform_snr(reference: NDArray, test: NDArray) -> float:
         raise ValueError(f"shape mismatch: {ref.shape} vs {tst.shape}")
     if not np.isfinite(ref).all() or not np.isfinite(tst).all():
         raise ValueError("waveform_snr: inputs must be finite (got NaN or inf)")
-    # errstate: overflow は下の isfinite で ValueError にするので警告は出させない。
+    # errstate: overflow is turned into a ValueError by the isfinite check below, so
+    # suppress the warning here.
     with np.errstate(over="ignore"):
         signal = float((ref**2).sum())
         noise = float(((ref - tst) ** 2).sum())

@@ -1,10 +1,10 @@
-"""streaming VC サブシステムの配線(ADR-0050)。
+"""Wiring of the streaming VC subsystem (ADR-0050).
 
-Command/routing の外の自己完結サブシステム。capture(独立マイク)→ 変換 →
-transport → 連続再生 を内側 TaskGroup で束ね、1 タスクとして起動する。
-`context.add_worker`/`sender_queue` は使わない(発話系 routing に一切載らない)。
-重い import(sounddevice/torch を引く capture/runner/playback)は起動時に遅延
-させ、このモジュール自体は CPU から import できるようにする。
+A self-contained subsystem outside Command/routing. capture (its own mic) -> conversion
+-> transport -> continuous playback are bundled in an inner TaskGroup and started as a
+single task. It uses neither `context.add_worker` nor `sender_queue` (it never rides on
+the utterance-path routing). The heavy imports (capture/runner/playback, which pull in
+sounddevice/torch) are deferred to startup so this module itself can be imported on CPU.
 """
 
 from asyncio import CancelledError
@@ -26,7 +26,7 @@ from vspeech.stream_vc.transport import Transport
 
 
 def _iter_leaves(exc: BaseException):
-    """(ネストした)例外グループを葉の例外へ平坦化する。"""
+    """Flatten a (possibly nested) exception group into its leaf exceptions."""
     if isinstance(exc, BaseExceptionGroup):
         for sub in exc.exceptions:
             yield from _iter_leaves(sub)
@@ -35,7 +35,8 @@ def _iter_leaves(exc: BaseException):
 
 
 def loops_for_role(role: StreamVcRole) -> frozenset[str]:
-    """role が起動するループ名の集合(純関数=分岐の唯一の権威, ADR-0055)。"""
+    """The set of loop names a role starts (a pure function = the single authority on
+    this branch, ADR-0055)."""
     if role is StreamVcRole.producer:
         return frozenset({"capture", "vc"})
     if role is StreamVcRole.consumer:
@@ -44,12 +45,13 @@ def loops_for_role(role: StreamVcRole) -> frozenset[str]:
 
 
 async def _build_transport(sv_config: StreamVcConfig) -> Transport:
-    """role から transport を作る。UDP endpoint 生成は async。
+    """Build the transport from the role. Creating a UDP endpoint is async.
 
-    bind/接続失敗は worker_startup で fail-loud(設定不備を隠さない, ADR-0038)。
-    role=producer/consumer で transport_type が udp でない設定は preflight で弾く
-    (role≠local ⇒ udp 必須)。2 つ目の網 transport(TCP/bidi)が来たら、下の
-    producer/consumer の中で transport_type を見て分岐する。
+    A bind/connect failure is fail-loud through worker_startup (never hide a config
+    problem, ADR-0038). A config with role=producer/consumer whose transport_type is not
+    udp is rejected by preflight (role != local implies udp). When a second network
+    transport (TCP/bidi) arrives, branch on transport_type inside the producer/consumer
+    arms below.
     """
     role = sv_config.role
     if role is StreamVcRole.local:
@@ -94,9 +96,10 @@ async def _stream_vc_subsystem(context: SharedContext) -> None:
                 capture_queue: Queue[Any] = Queue(maxsize=sv_config.max_queued_blocks)
                 vc_ready = Event()
                 tg.create_task(
-                    # context.running は capture を止めるためではなく、pause 中の
-                    # 意図的な drop を「バックプレッシャ異常」と誤報しないために渡す
-                    # (capture は pause 中も回り続ける = ADR-0050)。
+                    # context.running is passed not to stop capture but to keep the
+                    # deliberate drops during a pause from being misreported as a
+                    # backpressure anomaly (capture keeps running while paused =
+                    # ADR-0050).
                     capture_loop(
                         sv_config, capture_queue, hop, vc_ready, context.running
                     ),
@@ -129,16 +132,17 @@ async def _stream_vc_subsystem(context: SharedContext) -> None:
     except CancelledError as e:
         raise shutdown_worker(e)
     except BaseExceptionGroup as eg:
-        # 子タスク(capture/vc/playback)の失敗で内側 TaskGroup が abort した。
-        # ストリーミングは opt-in で有効化する機能なので、その unrecoverable な
-        # 障害は握らずプロセスごと落とす(fail-loud → daemon 再起動; ADR-0050)。
-        # ただし TaskGroup は原因を BaseExceptionGroup に畳み、そこには cancel され
-        # た兄弟の WorkerShutdown も混じる。真の原因(RuntimeError / ORT の Fail /
-        # WorkerStartupError 等)が集約ノイズに埋もれないよう、ここで一度だけ明示
-        # ログしてから **そのまま再送出** する(swallow も restart もしない)。
-        # 兄弟の WorkerShutdown は cancel の産物であって原因ではないので除外する。
-        # 純粋な shutdown(全部 WorkerShutdown)なら causes は空 = 追加ログ無しで、
-        # main の except* WorkerShutdown が通常どおり処理する。
+        # A child task (capture/vc/playback) failed and aborted the inner TaskGroup.
+        # Streaming is an opt-in feature, so an unrecoverable fault in it is not
+        # swallowed: take the whole process down (fail-loud -> a daemon restarts it;
+        # ADR-0050). TaskGroup, however, folds the cause into a BaseExceptionGroup that
+        # also contains the WorkerShutdown of cancelled siblings. To keep the real cause
+        # (RuntimeError / an ORT Fail / WorkerStartupError, ...) from drowning in that
+        # aggregation noise, log it explicitly once here and then **re-raise as-is**
+        # (neither swallow nor restart). Sibling WorkerShutdowns are excluded: they are a
+        # product of the cancel, not the cause. On a pure shutdown (all WorkerShutdown)
+        # causes is empty = no extra logging, and main's except* WorkerShutdown handles
+        # it as usual.
         causes = [e for e in _iter_leaves(eg) if not isinstance(e, WorkerShutdown)]
         for cause in causes:
             logger.error(

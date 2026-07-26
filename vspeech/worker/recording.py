@@ -95,8 +95,8 @@ async def sd_recording_worker(
             while stream.active:
                 chunk_data, overflowed = await to_thread(stream.read, config.chunk)
                 if overflowed:
-                    # sounddevice は overflow で例外を投げず flag で返すので、
-                    # 最低限ログは残す。
+                    # sounddevice reports an overflow with a flag rather than an
+                    # exception, so at least leave a log line.
                     logger.warning("recording input overflow: samples were dropped")
                 in_data = bytes(chunk_data)
                 interval_frame_count += config.chunk

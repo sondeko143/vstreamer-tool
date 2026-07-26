@@ -1,8 +1,8 @@
-"""ONNX ベース HuBERT runtime の単体テスト。
+"""Unit tests for the ONNX-based HuBERT runtime.
 
-実物の HuBERT も transformers も使わない。`onnx` のグラフ API で 2 出力の極小
-グラフをその場で組み、runtime の契約（出力名の引き当て・エラー経路・ファイル選択）
-だけを固定する。
+Uses neither the real HuBERT nor transformers. It builds a tiny two-output graph on the
+spot through `onnx`'s graph API and pins only the runtime's contract (resolving output
+names, the error paths, and file selection).
 """
 
 import json
@@ -21,8 +21,8 @@ L12_DIM = 3
 def _tiny_graph(elem_type: int):
     """source (1,N) -> feats_l9_proj (1,N,2), feats_l12_raw (1,N,3)。
 
-    値は入力の複製なので、テスト側で中身を検算できる。次元を 2 / 3 と変えてあるので
-    どちらの出力を引いたかが shape から一意に分かる。
+    The values are copies of the input, so the test can verify the contents. The
+    dimensions differ (2 vs 3), so the shape uniquely reveals which output was taken.
     """
     source = helper.make_tensor_value_info("source", elem_type, [1, "N"])
     out9 = helper.make_tensor_value_info("feats_l9_proj", elem_type, [1, "N", L9_DIM])
@@ -41,7 +41,7 @@ def _tiny_graph(elem_type: int):
 
 
 def _write_asset(path, *, fp16: bool = False):
-    """scripts/export_hubert_onnx.py が書き出すのと同じレイアウトの合成資産。"""
+    """A synthetic asset with the same layout scripts/export_hubert_onnx.py writes."""
     onnx.save(_tiny_graph(TensorProto.FLOAT), str(path / "hubert_fp32.onnx"))
     if fp16:
         onnx.save(_tiny_graph(TensorProto.FLOAT16), str(path / "hubert_fp16.onnx"))
@@ -93,7 +93,8 @@ def test_select_onnx_file_prefers_fp16_on_cuda(tmp_path):
 
 
 def test_select_onnx_file_uses_fp32_on_cpu_even_when_half_requested(tmp_path):
-    """fp16 グラフは CPUExecutionProvider で実質動かない。CPU では必ず fp32。"""
+    """An fp16 graph is effectively unusable on CPUExecutionProvider. CPU always gets
+    fp32."""
     from vspeech.lib.rvc import _select_onnx_file
 
     asset = _write_asset(tmp_path, fp16=True)
@@ -142,7 +143,7 @@ def test_extract_features_picks_the_raw_output(asset_dir):
 
 
 def test_extract_features_returns_the_graph_values(asset_dir):
-    """出力名を引き当てるだけでなく、その出力の中身が返ること。"""
+    """Not only is the output name resolved -- the contents of that output are returned."""
     from vspeech.lib.rvc import extract_features
     from vspeech.lib.rvc import load_hubert_model
 
@@ -156,7 +157,8 @@ def test_extract_features_returns_the_graph_values(asset_dir):
 
 
 def test_extract_features_rejects_an_unsupported_combination(asset_dir):
-    """(9, False) は export されていない。推測せず、対応表を添えて落ちること。"""
+    """(9, False) was never exported. Fail with the mapping table attached, never
+    guess."""
     from vspeech.lib.rvc import extract_features
     from vspeech.lib.rvc import load_hubert_model
 
@@ -167,7 +169,7 @@ def test_extract_features_rejects_an_unsupported_combination(asset_dir):
         )
     message = str(excinfo.value)
     assert "(9, False)" in message
-    assert "(9, True)" in message  # 対応表が示されること
+    assert "(9, True)" in message  # the mapping table is shown
     assert "(12, False)" in message
 
 
@@ -197,7 +199,8 @@ def test_parse_output_names_rejects_an_empty_table():
 
 
 def test_parse_output_names_rejects_a_missing_outputs_key():
-    """今の実物 mapping.json (scripts/convert_hubert.py 出力) には 'outputs' 自体がない。"""
+    """Today's real mapping.json (written by scripts/convert_hubert.py) has no 'outputs'
+    key at all."""
     import pytest
 
     from vspeech.lib.rvc import parse_output_names
@@ -227,7 +230,8 @@ def test_parse_output_names_rejects_a_duplicate_key():
 
 
 def test_parse_output_names_rejects_a_string_use_final_proj():
-    """JSON の文字列 "false" は bool("false") == True になるので黙って通してはいけない。"""
+    """The JSON string "false" gives bool("false") == True, so it must not pass
+    silently."""
     import pytest
 
     from vspeech.lib.rvc import parse_output_names
@@ -247,7 +251,7 @@ def test_parse_output_names_rejects_a_string_use_final_proj():
 
 
 def test_parse_output_names_rejects_a_bool_layer():
-    """isinstance(True, int) は True なので JSON の true を層番号 1 として読んではいけない。"""
+    """isinstance(True, int) is True, so JSON's true must not be read as layer number 1."""
     import pytest
 
     from vspeech.lib.rvc import parse_output_names

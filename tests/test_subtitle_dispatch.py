@@ -8,7 +8,7 @@ from vspeech.config import SubtitleWorkerType
 
 
 def test_subtitle_worker_type_defaults_to_tk():
-    # 既存 config (worker_type 未指定) の挙動を変えない。
+    # Does not change the behaviour of an existing config (worker_type unspecified).
     assert Config().subtitle.worker_type == SubtitleWorkerType.TK
 
 
@@ -23,12 +23,12 @@ def test_subtitle_worker_type_round_trips_through_toml():
 
 
 def test_importing_the_subtitle_dispatcher_does_not_import_tkinter():
-    """ヘッドレス目的の要。ディスパッチャ経由で tkinter が引き込まれないこと (ADR-0040)。
+    """The crux of the headless goal: tkinter must not be pulled in through the dispatcher
+    (ADR-0040).
 
-    tkinter は stdlib なので他経路で既に入っていることがある。ここでは
-    「subtitle が tkinter に依存していないこと」ではなく「subtitle を import
-    しても tkinter が新たに読み込まれないこと」を見たいので、一度落として
-    から確かめる。
+    tkinter is stdlib, so it may already be loaded via another path. What we want to check
+    is not "subtitle does not depend on tkinter" but "importing subtitle does not newly
+    load tkinter", so it is dropped first and then verified.
     """
     for name in list(sys.modules):
         if name == "tkinter" or name.startswith("tkinter."):
@@ -43,8 +43,8 @@ def test_importing_the_subtitle_dispatcher_does_not_import_tkinter():
 
 
 def test_obs_password_survives_a_toml_round_trip():
-    """export_to_toml は SecretStr をハードコードで展開している。新しい secret を
-    足したらここも足さないと、GUI の保存が config を壊す。"""
+    """export_to_toml expands SecretStr from a hard-coded list. Add a new secret without
+    adding it here and the saving path corrupts the config."""
     config = Config()
     config.subtitle.enable = True
     config.subtitle.worker_type = SubtitleWorkerType.OBS

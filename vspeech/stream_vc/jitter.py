@@ -1,10 +1,11 @@
-"""consumer 側ジッタバッファ(ADR-0056)。
+"""The consumer-side jitter buffer (ADR-0056).
 
-並べ替え・prebuffer・穴埋め・遅延上限を transport 非依存に持つ純ロジック。
-prebuffer 深さがそのまま並べ替え耐性になる: pop 時点で newest から depth ブロック
-遅れて読むので、単に順序が入れ替わっただけの packet は既にバッファにある。pop 時に
-本当に無い = 実 loss として直前ブロックをフェードした concealment を出して advance する。
-numpy は concealment のときだけメソッド内 import する(module を import 軽量に保つ)。
+Pure logic holding reordering, prebuffering, concealment and the delay ceiling,
+independent of the transport. The prebuffer depth is directly the reordering tolerance:
+at pop time we read `depth` blocks behind the newest, so a packet that was merely
+reordered is already in the buffer. A packet genuinely absent at pop time is real loss,
+and we emit a concealment that fades the previous block and advance. numpy is imported
+inside the method only for concealment (to keep importing this module cheap).
 """
 
 from __future__ import annotations
@@ -14,22 +15,22 @@ from enum import Enum
 
 from vspeech.stream_vc.packet import StreamPacket
 
-# overflow: newest_seq - next_seq がこの余裕を超えたら near-live へ fast-forward。
+# overflow: fast-forward to near-live once newest_seq - next_seq exceeds this slack.
 _OVERFLOW_SLACK = 4
 
 
 class PopKind(Enum):
-    PREBUFFER = 0  # まだ primed でない(起動時)。silence を出す。
-    NORMAL = 1  # 期待 seq が在って再生した。
-    CONCEAL = 2  # 期待 seq が欠落。直前ブロックをフェードして穴埋めした。
+    PREBUFFER = 0  # not primed yet (startup). Emits silence.
+    NORMAL = 1  # the expected seq was present and played.
+    CONCEAL = 2  # the expected seq was missing; concealed by fading the previous block.
 
 
 @dataclass
 class PopResult:
     pcm: bytes
     kind: PopKind
-    gap: int  # このpopで欠落と確定した packet 数(telemetry 用)
-    dropped: int  # overflow fast-forward で捨てた packet 数
+    gap: int  # packets confirmed lost by this pop (for telemetry)
+    dropped: int  # packets discarded by the overflow fast-forward
 
 
 class JitterBuffer:
@@ -39,7 +40,7 @@ class JitterBuffer:
         self._next_seq: int | None = None  # None = not primed
         self._last_good: bytes | None = None
         self._concealed_since_good = 0
-        self._block_bytes = 0  # 最初の push で確定
+        self._block_bytes = 0  # settled by the first push
 
     @property
     def depth(self) -> int:
@@ -56,9 +57,9 @@ class JitterBuffer:
         if not self._block_bytes:
             self._block_bytes = len(packet.pcm)
         if self._next_seq is not None and packet.seq < self._next_seq:
-            return False  # 再生済みより古い = late。捨てる(呼び出しが記録)。
+            return False  # older than what we played = late. Discard (the caller logs).
         if packet.seq in self._buf:
-            return False  # 重複
+            return False  # duplicate
         self._buf[packet.seq] = packet.pcm
         return True
 
@@ -66,7 +67,8 @@ class JitterBuffer:
         return bytes(self._block_bytes)
 
     def _conceal(self) -> bytes:
-        # 初回の欠落は直前 good ブロックを無音へフェード、以降連続の欠落は無音。
+        # The first miss fades the last good block into silence; consecutive misses after
+        # that are plain silence.
         if self._last_good is None or self._concealed_since_good > 0:
             self._concealed_since_good += 1
             return self._silence()
@@ -86,7 +88,8 @@ class JitterBuffer:
         dropped = 0
         # never-arrived packets skipped by fast-forward = real loss (observable)
         gap = 0
-        # 遅延上限: backlog が余裕を超えたら near-live へ飛ばす(捨てた分を記録)。
+        # Delay ceiling: jump to near-live once the backlog exceeds the slack (recording
+        # what was discarded).
         if self._buf:
             newest = max(self._buf)
             if newest - self._next_seq > self.target_depth + _OVERFLOW_SLACK:
@@ -97,7 +100,8 @@ class JitterBuffer:
                         dropped += 1
                 # of the skipped [next_seq, target) range: dropped = arrived-but-stale
                 # (drained for latency), the rest never arrived = real loss. The spec
-                # requires loss be observable (無音の穴を黙って作らない), so surface it.
+                # requires loss be observable (never punch a silent hole quietly), so
+                # surface it.
                 gap = (target - self._next_seq) - dropped
                 self._next_seq = target
         pcm = self._buf.pop(self._next_seq, None)
@@ -106,12 +110,14 @@ class JitterBuffer:
             self._last_good = pcm
             self._concealed_since_good = 0
             return PopResult(pcm, PopKind.NORMAL, gap=gap, dropped=dropped)
-        # 期待 seq が無い。**新しい seq がバッファにある**ときだけ実 loss と確定
-        # (期待 seq を飛び越えた)→ conceal して advance。バッファが空なら starvation
-        # (まだ届いていないだけ)なので **advance しない**: cursor を進めると、まだ配送中の
-        # 期待 packet や重複/遅延 straggler の直後の空 pop が生きた seq を追い越し、以後
-        # 全 in-order packet が late 判定で落ちて永久に無音化する(target_depth=0 の既定で
-        # 発生、final review で実証)。
+        # The expected seq is absent. Only when **a newer seq is in the buffer** is this
+        # confirmed real loss (we jumped past the expected seq) -> conceal and advance. An
+        # empty buffer means starvation (it simply has not arrived yet), so **do not
+        # advance**: moving the cursor lets an empty pop -- right after an expected packet
+        # still in flight, or a duplicate/late straggler -- overtake a live seq, after
+        # which every in-order packet is judged late and dropped and the output goes
+        # silent forever (this happens at the default target_depth=0; demonstrated in the
+        # final review).
         if self._buf:
             self._next_seq += 1
             return PopResult(

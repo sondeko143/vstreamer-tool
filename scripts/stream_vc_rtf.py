@@ -1,23 +1,24 @@
-"""RVC ストリーミング VC の RTF 実測ハーネス。
+"""Measurement harness for the RTF of RVC streaming VC.
 
-読むのは `--config` の **[rvc] セクションだけ**で、[stream_vc.rvc] は見ない
-(ADR-0054 の通り両者は独立に設定できるので、内容が違えば測る対象も違う)。
-[stream_vc.rvc] の構成を測りたいときは、[rvc] をそれと同じ内容に写した config を
-用意して渡すこと。
+It reads **only the [rvc] section** of `--config` and never looks at [stream_vc.rvc] (per
+ADR-0054 the two are configured independently, so different contents mean a different
+subject of measurement). To measure a [stream_vc.rvc] configuration, prepare a config
+whose [rvc] mirrors it and pass that.
 
-`--config` の [rvc] セクションを流用してモデルを 1 回ロードし、合成有声信号を
-固定ブロックで StreamingVc に流して per-block 遅延と context 込み RTF を
-掃引計測する。feasible をマークした表を出し、最低遅延の feasible config を推奨
-する。最終の block/context/遅延予算と go/no-go は人が判定する。計測区間は
-意図的に入力の H2D / 出力の D2H コピーを含む(実運用の per-block ストリーミング
-コストをそのまま反映するため)。margin(既定 0.5)は transport/jitter/crossfade
-用の 2x ヘッドルーム。
+It loads the models once from `--config`'s [rvc] section, pushes a synthetic voiced signal
+through StreamingVc in fixed blocks, and sweeps per-block latency and context-inclusive
+RTF. It prints a table marking the feasible rows and recommends the feasible config with
+the lowest latency. The final block/context/latency budget and the go/no-go call are made
+by a human. The measured span deliberately includes the input H2D and output D2H copies
+(so it reflects the real per-block streaming cost as deployed). margin (0.5 by default) is
+2x headroom for transport/jitter/crossfade.
 
   uv run poe stream-vc-rtf --config ./config.toml
 
-純粋な解析ヘルパ(make_voiced_signal / parse_grid / summarize / format_table /
-recommend / go_no_go)は numpy のみに依存し、GPU 無し CPU から import・テスト
-できる。torch / vspeech / StreamingVc の import は実行部の関数内に遅延させる。
+The pure analysis helpers (make_voiced_signal / parse_grid / summarize / format_table /
+recommend / go_no_go) depend only on numpy and can be imported and tested on a CPU with no
+GPU. The torch / vspeech / StreamingVc imports are deferred into the functions that run
+the measurement.
 """
 
 from __future__ import annotations
@@ -41,10 +42,12 @@ if TYPE_CHECKING:
 def make_voiced_signal(
     rate: int, seconds: float, f0: float = 150.0, seed: int = 0
 ) -> NDArray[np.float32]:
-    """決定論の有声信号(倍音 + 微ビブラート + 微ノイズ)を [-1, 1] で返す。
+    """Return a deterministic voiced signal (harmonics + slight vibrato + slight noise) in
+    [-1, 1].
 
-    f0 抽出器(rmvpe/fcpe)は無音では全フレーム無声(0)を返し計測が不自然に
-    なるので、明確な基音を持つ有声信号にする。seed 付きで再現可能。
+    The f0 extractors (rmvpe/fcpe) return unvoiced (0) for every frame on silence, which
+    makes the measurement unrepresentative, so the signal has a clear fundamental. Seeded,
+    hence reproducible.
     """
     n = int(rate * seconds)
     t = np.arange(n, dtype=np.float64) / rate
@@ -61,7 +64,7 @@ def make_voiced_signal(
 
 
 def parse_grid(text: str) -> list[float]:
-    """`"20,40,80"` を `[20.0, 40.0, 80.0]` に開く。"""
+    """Expand `"20,40,80"` into `[20.0, 40.0, 80.0]`."""
     return [float(x) for x in text.split(",") if x.strip()]
 
 
@@ -86,12 +89,14 @@ def summarize(
     context_ms: float,
     f0: str,
 ) -> BlockResult:
-    """per-block 遅延列 -> p50/p95/max・RTF(p95基準)・片道遅延・feasible。
+    """Per-block latency series -> p50/p95/max, RTF (based on p95), one-way latency,
+    feasibility.
 
-    RTF = per-block compute / block 実時間。context は毎 tick 再計算されるので
-    その分子に載る(ADR-0053 が指摘した余剰推論)。feasible は RTF_p95 < margin
-    (既定 0.5 = transport/jitter/crossfade 用の 2x ヘッドルーム)。片道の
-    アルゴリズム遅延 ≈ block_ms + compute_p95。
+    RTF = per-block compute / the block's real-time duration. The context is recomputed
+    every tick and therefore lands in that numerator (the redundant inference ADR-0053
+    pointed out). feasible means RTF_p95 < margin (0.5 by default = 2x headroom for
+    transport/jitter/crossfade). The one-way algorithmic latency is about
+    block_ms + compute_p95.
     """
     arr = np.asarray(latencies_s, dtype=np.float64)
     p50 = float(np.percentile(arr, 50)) * 1000.0
@@ -113,7 +118,7 @@ def summarize(
 
 
 def recommend(results: list[BlockResult]) -> BlockResult | None:
-    """feasible の中で片道遅延が最小のもの. 無ければ None。"""
+    """The feasible result with the lowest one-way latency, or None if there is none."""
     feasible = [r for r in results if r.feasible]
     if not feasible:
         return None
@@ -121,12 +126,13 @@ def recommend(results: list[BlockResult]) -> BlockResult | None:
 
 
 def go_no_go(results: list[BlockResult]) -> bool:
-    """feasible が 1 つでもあれば go。"""
+    """go if at least one result is feasible."""
     return any(r.feasible for r in results)
 
 
 def format_table(results: list[BlockResult]) -> str:
-    """掃引結果を整列テキスト表にする(feasible 行に [FEASIBLE])。"""
+    """Render the sweep results as an aligned text table (feasible rows get
+    [FEASIBLE])."""
     header = (
         f"{'block':>6} {'ctx':>6} {'f0':>6} "
         f"{'p50ms':>7} {'p95ms':>7} {'maxms':>7} {'RTF':>6} {'lat_ms':>7}  mark"
@@ -146,7 +152,7 @@ def format_table(results: list[BlockResult]) -> str:
 def load_shared_runtime(
     config_path: Path, gpu_id_override: int | None
 ) -> dict[str, Any]:
-    """[rvc] からモデルを 1 回ロード(f0_session は掃引で抽出器ごとに作る)。"""
+    """Load the models once from [rvc] (f0_session is built per extractor by the sweep)."""
     import json
 
     from vspeech.config import Config
@@ -184,7 +190,7 @@ def load_shared_runtime(
 def make_f0_session(
     rvc_config: RvcConfig, f0: str, device: torch.device
 ) -> InferenceSession | None:
-    """ "rmvpe"/"fcpe" の f0 session を作る。ファイル未設定/不在なら None。"""
+    """Build the f0 session for "rmvpe"/"fcpe". None when the file is unset or missing."""
     from pathlib import Path
 
     from vspeech.lib.onnx_session import create_session
@@ -208,7 +214,7 @@ def make_f0_session(
 def next_block(
     signal: NDArray[np.float32], block_len: int, i: int
 ) -> NDArray[np.float32]:
-    """信号から i 番目の block を巡回で取り出す(長さ block_len)。"""
+    """Take the i-th block out of the signal, wrapping around (length block_len)."""
     span = max(1, signal.shape[0] - block_len)
     start = (i * block_len) % span
     return signal[start : start + block_len]
@@ -224,7 +230,7 @@ def run_sweep(
     warmup_iters: int,
     margin: float,
 ) -> list[BlockResult]:
-    """掃引して各 (block, context, f0) の per-block 遅延を計測する。"""
+    """Sweep and measure the per-block latency of each (block, context, f0)."""
     import time
 
     import torch
@@ -309,11 +315,11 @@ def run_sweep(
 
 
 def main() -> None:
-    # go/no-go 判定行は日本語を含む。stdout/stderr が pipe/redirect 先だと Windows は
-    # 既定で cp1252 を選び、`--json` 書き出し前に main() が UnicodeEncodeError で落ちる
-    # (プロジェクト頻出の encoding 対策。convert_hubert.py / export_hubert_onnx.py と同型)。
-    # typeshed は sys.stdout/stderr を .reconfigure を持たない TextIO とするが、
-    # runtime は TextIOWrapper。
+    # The go/no-go line contains Japanese. When stdout/stderr is a pipe/redirect, Windows
+    # picks cp1252 by default and main() dies with UnicodeEncodeError before writing
+    # `--json` (the encoding guard this project keeps needing; same shape as
+    # convert_hubert.py / export_hubert_onnx.py). typeshed types sys.stdout/stderr as a
+    # TextIO without .reconfigure, but at runtime they are TextIOWrapper.
     import sys
 
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # ty: ignore[unresolved-attribute]
@@ -395,7 +401,7 @@ def main() -> None:
 
 
 def _load_wav_16k(path: Path) -> NDArray[np.float32]:
-    """wav を 16kHz mono float32 [-1,1] にして返す。"""
+    """Return the wav as 16kHz mono float32 in [-1,1]."""
     import torch
     import torchaudio
 

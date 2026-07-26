@@ -116,7 +116,7 @@ def _cuda_available() -> bool:
     reason=f"CUDA / ${_CONFIG_ENV} config not available",
 )
 def test_harness_entrypoint_runs_one_iter():
-    # エントリポイントを実際に起動する(「テストだけでなくエントリポイントを走らせる」)。
+    # Actually launch the entry point ("run the entry point, not just the tests").
     repo_root = Path(__file__).resolve().parents[1]
     assert _GOLDEN_CONFIG is not None
     proc = subprocess.run(

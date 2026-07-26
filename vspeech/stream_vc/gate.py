@@ -1,43 +1,50 @@
-"""streaming VC の窓単位 VAD ノイズゲート(ADR-0059 / ADR-0053 / ADR-0019)。
+"""The per-window VAD noise gate of streaming VC (ADR-0059 / ADR-0053 / ADR-0019).
 
-streaming 経路は無音でも止まらず回り続けるので、ゲートが無いと**部屋のノイズ
-フロアがそのまま RVC を通り、しかも増幅されて**鳴り続ける。さらに語頭では、
-発声直前の微小入力(実測 RMS 0.002)が音として合成されて出る(実測: 同一音声・
-同一モデルで batch 経路の **+43dB**)。これは解析窓の中身に依存する現象で、
-content encoder が同じ音を左文脈次第で別物として符号化するために起きる
-(f0 経路ではないことは実測で確認済み。窓のどの性質が効いているかまでは
-切り分けていない — ADR-0059 参照)。モデル側は動かせないので、**バッチ経路と
-同じ 32ms 窓の粒度でゲートする**ことで可聴成分を落とす(実録音の e2e 実測で
-語頭のブレス -25.4dB / -16.9dB、本物の語頭と定常は保持)。
+The streaming path keeps running through silence, so without a gate **the room's noise
+floor goes straight through RVC and comes out amplified**, continuously. On top of that,
+at a phrase onset the tiny input just before phonation (measured RMS 0.002) is
+synthesized into audible sound (measured at **+43dB** over the batch path for the same
+audio and the same model). This depends on the contents of the analysis window: the
+content encoder encodes the same sound differently depending on the left context (it was
+measured not to be the f0 path; exactly which property of the window drives it has not
+been isolated -- see ADR-0059). The model cannot be changed, so we **gate at the same
+32ms window granularity as the batch path** to remove the audible component (end-to-end
+measurement on real recordings: -25.4dB / -16.9dB on the onset breath, while real onsets
+and steady state are preserved).
 
-ここは判定と適用だけを持つモデル非依存の純ロジックで、Silero VAD 本体は
-`vspeech/lib/vad.py`(発話系 `[vc]` と共有)をそのまま読み取り専用で再利用する。
-そのため CPU・モデル無しで単体テストできる。
+This module is model-independent pure logic holding only the decision and its
+application; the Silero VAD itself is reused read-only from `vspeech/lib/vad.py` (shared
+with the utterance path `[vc]`). It can therefore be unit tested on CPU with no model.
 
-設計上の要点:
+Design points:
 
-- **入力ブロックで判定し、出力ブロックへ適用する**。ゲートが閉じていても推論は
-  スキップしない。`StreamingVc` は rolling 左文脈とクロスフェード tail を持つ
-  ステートフル変換なので、ブロックを飛ばすと文脈に穴が開き、発話が再開した
-  ときの seam が壊れる。減衰するのは emit する音だけ。
-- **判定も適用も 32ms 窓の粒度**(発話系 `lib/vad.py` の `speech_gate_mask` /
-  `apply_vad_gate` と同じ考え方)。ブロック粒度(160ms)で窓確率の max を採ると、
-  語頭の 1 窓のせいでブロック全体が開き、その手前にある発声前のブレスを full
-  gain で通してしまう。
-- **hangover は前方へは dilate しない**。バッチ側 `speech_gate_mask` は前後対称に
-  広げるが、streaming で前方へ広げると語頭直前のブレスをそのまま開けてしまう
-  (実録音へマスク単体をかけた実測: 前方 0ms なら -26dB のところ 32ms 足すと -9dB
-  まで後退)。語尾・語間の保護に要るのは後方だけなので、`hangover_ms` を
-  **後方 dilation** として使う。
-- **emit 遅延を補正して重ねる**。emit の内容は入力ブロックより手前から始まる
-  (crossfade + HuBERT 受容野の切り詰めで既定 50ms)。補正しないとマスクがずれた
-  音声に当たり、実測で抑圧が -26dB から -8dB まで落ちる。遅延量は
-  `StreamingVc.emit_delay_samples` が公開する(公称位置由来なので tick 間で一定)。
-- **ゲインは窓中心のあいだを線形補間する**。境界でゲインを階段状に変えること自体が
-  クリックを生むので、32ms かけて渡す(前ブロックのマスク末尾から連続させる)。
+- **Decide on the input block, apply to the output block.** Inference is never skipped
+  even when the gate is closed. `StreamingVc` is a stateful conversion with a rolling
+  left context and a crossfade tail, so skipping a block punches a hole in the context
+  and breaks the seam when speech resumes. Only the emitted audio is attenuated.
+- **Both the decision and the application are at 32ms window granularity** (the same
+  idea as `speech_gate_mask` / `apply_vad_gate` in the utterance path's `lib/vad.py`).
+  Taking the max window probability at block granularity (160ms) would open the entire
+  block because of a single onset window and pass the pre-phonation breath before it at
+  full gain.
+- **The hangover never dilates forward.** The batch-side `speech_gate_mask` dilates
+  symmetrically, but dilating forward in streaming opens the breath right before an
+  onset (measured by applying the mask alone to real recordings: -26dB at 0ms forward,
+  regressing to -9dB when 32ms is added). Only the backward direction is needed to
+  protect word endings and inter-word gaps, so `hangover_ms` is used as a **backward
+  dilation**.
+- **Correct for the emit delay when overlaying.** The emit's content starts earlier than
+  the input block (50ms by default, from the crossfade plus HuBERT's receptive-field
+  truncation). Without the correction the mask lands on misaligned audio and the
+  measured suppression drops from -26dB to -8dB. The delay is published by
+  `StreamingVc.emit_delay_samples` (derived from the nominal position, hence constant
+  across ticks).
+- **The gain is linearly interpolated between window centres.** Stepping the gain at a
+  boundary is itself a click, so it is handed over across 32ms (continuing from the tail
+  of the previous block's mask).
 
-numpy は `vspeech/lib/stream_vc.py` と同様にメソッド内 import に留める
-(この module を import 軽量に保つ)。
+As in `vspeech/lib/stream_vc.py`, numpy is imported inside the methods (to keep
+importing this module cheap).
 """
 
 from __future__ import annotations
@@ -53,60 +60,68 @@ if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
 
-# Silero の 1 窓の長さ(ms)。hangover をこの粒度の窓数へ換算する。
+# The length of one Silero window (ms). The hangover is converted into a window count at
+# this granularity.
 _WINDOW_MS = VAD_WINDOW_SAMPLES * 1000.0 / VAD_SAMPLE_RATE
 
 
 class StreamingVadGate:
-    """32ms 窓単位のゲートマスク + emit 遅延補正付きの適用。
+    """A 32ms-window gate mask plus application with emit-delay correction.
 
-    `window_gains()` がこのブロックの窓ごとのゲインを返し、`apply()` がそれを
-    emit のサンプル格子へ(遅延補正して)写して掛ける。状態は「最後に speech を
-    見てから何窓経ったか」と「前ブロックのマスク」の二つだけ。
+    `window_gains()` returns this block's per-window gains and `apply()` maps them onto
+    the emit's sample grid (with the delay correction) and multiplies. The state is just
+    two things: how many windows have passed since speech was last seen, and the previous
+    block's mask.
     """
 
     def __init__(self, threshold: float, hangover_ms: float, min_gain: float) -> None:
         self.threshold = threshold
         self.min_gain = min_gain
-        # fail-open 警告の重複抑止フラグ(runner が使う)。streaming は 6.25Hz で
-        # 回るので、VAD が壊れたときに毎ブロック警告するとログが埋まる。
+        # Dedup flag for the fail-open warning (used by the runner). Streaming runs at
+        # 6.25Hz, so warning on every block when the VAD is broken would bury the log.
         self.warned = False
-        # Silero の再帰状態。ブロックごとに作り直すと RNN が毎回コールドスタートし、
-        # 明確な有声窓の確率まで壊れる(lib/vad.py の VadCarry 参照)。runner が
-        # speech_probs へ渡す。
+        # Silero's recurrent state. Rebuilding it per block cold-starts the RNN every
+        # time and wrecks even the probabilities of clearly voiced windows (see VadCarry
+        # in lib/vad.py). The runner passes it to speech_probs.
         self.vad_carry = VadCarry()
         self._hangover_windows = max(0, round(hangover_ms / _WINDOW_MS))
-        # 最後の speech からの窓数。予算超えで頭打ちにして単調増加を止める。
-        # 初期値は「閉じた状態」: 窓単位なら speech の窓がそのまま開くので、
-        # 開いた状態から始めて無音を漏らす必要が無い。
+        # Windows since the last speech. Saturated at the budget so it stops growing
+        # monotonically. The initial value is the "closed" state: at window granularity a
+        # speech window opens the gate by itself, so there is no need to start open and
+        # leak silence.
         self._since_speech = self._hangover_windows + 1
         self._prev_gains: NDArray[np.float64] | None = None
 
     def reset(self) -> None:
-        """閉じた状態(hangover 空・前ブロックのマスク無し・VAD 状態も新品)へ戻す。
+        """Return to the closed state (hangover empty, no previous-block mask, and a fresh
+        VAD state).
 
-        pause/resume や capture 再 open で実時間が飛んだあと、古い hangover 残量や
-        マスク、飛ぶ前の音で育った VAD の再帰状態が漏れて直後のブロックを妙に
-        開放/減衰させないため、runner が遷移で呼ぶ。`warned`(fail-open 警告の
-        重複抑止)は障害状態なので触らない。
+        Called by the runner on a transition so that, after real time has jumped from a
+        pause/resume or a capture reopen, a stale hangover budget, a stale mask, or a VAD
+        recurrent state grown on pre-jump audio cannot leak through and oddly open or
+        attenuate the block right after. `warned` (the fail-open warning dedup) is fault
+        state and is deliberately left alone.
 
-        `vad_carry` を残す案は実測して**却下**した(ADR-0059 の Alternatives 参照)。
-        発話中に pause して無音へ resume すると、古い「発話中」の状態が最初の窓を
-        誤って speech と判定しうる。1 窓でも誤ると `_since_speech` が 0 に戻って
-        hangover 予算が満額で再武装されるので、漏れは 1 窓では止まらない
-        (実測: 104 通り中 8 回漏れ、最大 320ms)。それはこの ADR が消そうとしている
-        「増幅された微小入力が鳴る」そのものなので、精度と引き換えにはできない。
+        Keeping `vad_carry` was measured and **rejected** (see ADR-0059's Alternatives).
+        Pausing mid-speech and resuming into silence lets the stale "in speech" state
+        misjudge the first window as speech. A single misjudged window resets
+        `_since_speech` to 0 and rearms the full hangover budget, so the leak does not
+        stop at one window (measured: 8 leaks out of 104 cases, up to 320ms). That is
+        precisely the "amplified tiny input becomes audible" this ADR exists to remove,
+        so it cannot be traded for accuracy.
         """
         self._since_speech = self._hangover_windows + 1
         self._prev_gains = None
         self.vad_carry = VadCarry()
 
     def window_gains(self, probs: NDArray[np.float64]) -> NDArray[np.float64]:
-        """窓確率列からこのブロックの窓ごとのゲインを返す(後方 dilation のみ)。
+        """Return this block's per-window gains from the window probabilities (backward
+        dilation only).
 
-        speech 窓は 1.0。無音窓は最後の speech から `hangover_ms` 以内なら 1.0、
-        超えたら `min_gain`。予算はブロック境界をまたいで持ち越す(判定はブロック
-        ごとに来るが、発話は境界を意識しない)。
+        A speech window gets 1.0. A silent window gets 1.0 while it is within
+        `hangover_ms` of the last speech and `min_gain` beyond that. The budget carries
+        across block boundaries (decisions arrive per block, but speech does not care
+        about the boundaries).
         """
         import numpy as np
 
@@ -130,46 +145,54 @@ class StreamingVadGate:
         delay_samples: int,
         sample_rate: int,
     ) -> NDArray[np.int16]:
-        """窓ゲインを emit のサンプル格子へ写して掛ける(遅延補正つき)。
+        """Map the window gains onto the emit's sample grid and multiply (with delay
+        correction).
 
-        emit のサンプル j が持つ音は、入力ブロック先頭から見て
-        `j - delay_samples`(出力レート)の位置にある。したがってマスクもその分だけ
-        ずらして重ねる。emit の先頭 `delay_samples` は**前ブロック**の入力に対応
-        するので、前ブロックのマスク(`_prev_gains`)を左へ連結してから補間する
-        — これがブロック境界のゲイン連続性(段差=クリック無し)も同時に担保する。
-        ただし連続性が成り立つのは `delay_samples` が tick 間で一定のときだけなので、
-        `StreamingVc` は SOLA の lag を含まない**公称**遅延を公開する(ADR-0059)。
+        The sound carried by emit sample j sits at position `j - delay_samples` (at the
+        output rate) relative to the start of the input block, so the mask is shifted by
+        the same amount when overlaid. The first `delay_samples` of the emit correspond to
+        the **previous** block's input, so the previous block's mask (`_prev_gains`) is
+        concatenated on the left before interpolating -- which simultaneously guarantees
+        gain continuity across the block boundary (no step = no click). That continuity
+        only holds while `delay_samples` is constant across ticks, which is why
+        `StreamingVc` publishes the **nominal** delay, excluding SOLA's lag (ADR-0059).
 
-        全窓 1.0(かつ直前も 1.0)は恒等の高速路で、入力オブジェクトをそのまま返す:
-        常時 speech / 既定 off のとき出力は無ゲート時とビット単位で一致する
-        (起動直後・reset 直後の 1 ブロックだけは閉じた状態から開くので例外)。
+        All-1.0 gains (with the previous block also all 1.0) take an identity fast path
+        that returns the input object as-is: with continuous speech, or with the feature
+        off by default, the output is bit-identical to the ungated one (the single block
+        right after startup or a reset is the exception, since it opens from the closed
+        state).
         """
         import numpy as np
 
         n = int(out_i16.shape[0])
         if n == 0 or gains.shape[0] == 0:
             return out_i16
-        # 窓 1 つぶんの出力サンプル数。窓中心をこの格子に並べて線形補間する。
+        # Output samples per window. Window centres are laid out on this grid and linearly
+        # interpolated.
         step = VAD_WINDOW_SAMPLES * sample_rate / VAD_SAMPLE_RATE
         prev = self._prev_gains
         self._prev_gains = gains
         if prev is None:
-            # 直前の情報が無い(起動直後 / reset 直後)。emit の頭は「実時間が飛ぶ前」
-            # または zeros 文脈から描かれた音なので、閉じた状態(min_gain)から始める
-            # ── `_since_speech` の初期値と揃える。**1 窓ではなく hop ぶんの窓数**を
-            # 置くこと: 1 要素だとその中心が hop まるごと手前(既定で -144ms)に来て、
-            # 立ち上がりが 32ms でなく 160ms かけて渡り、頭が閉じきらない(実測 -4.6dB)。
-            # 窓数は実マスクと同じ数え方(ceil)にする。round だとブロック長が窓長の
-            # 倍数でない設定(block_ms=80)で 1 窓少なくなり、最後の seed 中心が
-            # 手前へずれて頭が閉じきらない。
+            # No previous information (right after startup or a reset). The head of the
+            # emit is audio rendered from before the real-time jump, or from a zeros
+            # context, so start from the closed state (min_gain) -- matching
+            # `_since_speech`'s initial value. Seed **a hop's worth of windows, not one**:
+            # with a single element its centre lands a whole hop earlier (-144ms by
+            # default), so the ramp is handed over across 160ms instead of 32ms and the
+            # head never fully closes (measured -4.6dB). Count the windows the same way
+            # the real mask does (ceil): round would give one window fewer when the block
+            # length is not a multiple of the window length (block_ms=80), shifting the
+            # last seed centre earlier and leaving the head not fully closed.
             prev = np.full(max(1, ceil(n / step)), self.min_gain, dtype=np.float64)
         if float(gains.min()) == 1.0 and float(prev.min()) == 1.0:
             return out_i16
         n_prev = int(prev.shape[0])
-        # 前ブロックの原点は「窓数 x 窓長」ではなく **emit 長(= hop) ぶん手前**。
-        # speech_probs は ceil(block_len/512) 窓へゼロパディングするので、block_len が
-        # 512 の倍数でないと窓の総長がブロック長を超える(例: block_ms=80 で 96ms)。
-        # n_prev*step でずらすとその差だけマスクが早まる(80ms 設定で 16ms)。
+        # The previous block's origin is **one emit length (= hop) earlier**, not
+        # "window count x window length". speech_probs zero-pads to ceil(block_len/512)
+        # windows, so when block_len is not a multiple of 512 the windows total more than
+        # the block length (e.g. 96ms at block_ms=80). Shifting by n_prev*step would move
+        # the mask earlier by that difference (16ms at the 80ms setting).
         centers = np.concatenate(
             [
                 (np.arange(n_prev, dtype=np.float64) + 0.5) * step - n,
@@ -177,10 +200,11 @@ class StreamingVadGate:
             ]
         )
         all_gains = np.concatenate([prev, gains])
-        # `prev` は 1 ブロックぶんしか持たないので、`delay_samples` が hop を超える
-        # 設定(例: block_ms=80 かつ crossfade_ms=70)では emit の頭が最初の窓中心より
-        # 左に出て `prev[0]` へ clamp される。連続なので click にはならないが、その
-        # 区間のマスクは 2 ブロック前の情報を持たない。
+        # `prev` only holds one block, so in configurations where `delay_samples` exceeds
+        # the hop (e.g. block_ms=80 with crossfade_ms=70) the head of the emit falls left
+        # of the first window centre and is clamped to `prev[0]`. Being continuous it does
+        # not click, but the mask over that span carries no information from two blocks
+        # back.
         gain = np.interp(
             np.arange(n, dtype=np.float64) - delay_samples, centers, all_gains
         )

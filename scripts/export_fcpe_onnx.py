@@ -1,28 +1,32 @@
-"""torchfcpe の bundled FCPE を「波形入力」ONNX へ export する。
+"""Export torchfcpe's bundled FCPE to a "waveform-input" ONNX.
 
-**一度きり**のオフライン処理。runtime には含めない。依存 (torchfcpe / onnx /
-onnxscript) は poe task の `uv run --with` が供給する (pyproject/uv.lock には載せない)。
+A **one-shot** offline step, not part of the runtime. Its dependencies (torchfcpe / onnx /
+onnxscript) are supplied by the poe task's `uv run --with` (they are not in
+pyproject/uv.lock).
 
     uv run poe export-fcpe-onnx --output ~/.config/vstreamer/fcpe.onnx
 
-`python scripts/export_fcpe_onnx.py` ではなく **`python -m scripts.export_fcpe_onnx`** で
-起動すること。
+Launch it as **`python -m scripts.export_fcpe_onnx`**, not
+`python scripts/export_fcpe_onnx.py`.
 
-出力 fcpe.onnx の契約:
-  入力  waveform  (1, N)  float32  16kHz mono
-  出力  f0        (1, T, 1)  Hz     無声フレームは 0
-  threshold / sample_rate(16000) / decoder_mode("local_argmax") は export 時に焼き込む
-  (runtime では可変化しない = ADR-0049 の非ゴール)。
+The contract of the fcpe.onnx it writes:
+  input   waveform  (1, N)  float32  16kHz mono
+  output  f0        (1, T, 1)  Hz     unvoiced frames are 0
+  threshold / sample_rate(16000) / decoder_mode("local_argmax") are baked in at export
+  time (not made variable at runtime = a non-goal of ADR-0049).
 
-なぜ特殊な export が要るか (ADR-0049 / スパイクの知見):
-  * 新 dynamo exporter は wav2mel 内のデータ依存分岐 (wav.min()<-1 を .item()) で不可。
-  * legacy tracer (dynamo=False) も torch.stft(return_complex=True) の複素型で不可。
-  * → MelModule の STFT を conv1d(cos/sin DFT 基底 + hann 窓, center=False)で厳密再現し
-    (元 torch.stft と f0 max_rel ~1e-6)、legacy tracer + opset17 で export する。
-  * output_proj の weight_norm パラメトリゼーションは export 前に剥がす。
+Why the export needs to be special (ADR-0049 / what the spike found):
+  * The new dynamo exporter cannot handle the data-dependent branch inside wav2mel
+    (.item() on wav.min()<-1).
+  * The legacy tracer (dynamo=False) cannot handle it either, because of the complex type
+    of torch.stft(return_complex=True).
+  * -> So MelModule's STFT is reproduced exactly with conv1d (cos/sin DFT basis + hann
+    window, center=False), matching the original torch.stft to f0 max_rel ~1e-6, and
+    exported with the legacy tracer at opset17.
+  * output_proj's weight_norm parametrization is stripped before the export.
 
-このスクリプト自身が (1) conv-STFT が元 torch.stft と一致 (2) onnx が torch と一致 を
-アサートし、通らなければ資産を書き出さない。
+This script asserts (1) that the conv-STFT matches the original torch.stft and (2) that
+the onnx matches torch; if either fails, no asset is written.
 """
 
 import argparse
@@ -38,8 +42,8 @@ import numpy as np
 import torch
 import torch.nn.functional as Fnn
 
-# torch.onnx の verbose 出力や警告に非 ASCII (絵文字) が混じり、Windows の cp1252
-# stdout でクラッシュする。UTF-8 に固定する (プロジェクト頻出の encoding 対策)。
+# torch.onnx's verbose output and warnings contain non-ASCII (emoji) and crash on a
+# Windows cp1252 stdout. Pin it to UTF-8 (the encoding guard this project keeps needing).
 if isinstance(sys.stdout, io.TextIOWrapper):
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -47,24 +51,27 @@ THRESHOLD = 0.006
 SR = 16000
 DECODER = "local_argmax"
 OPSET = 17
-# 検証許容 (スパイク実測は ~1e-6; 十分な余裕を持たせる)
+# Verification tolerance (the spike measured ~1e-6; leave plenty of margin)
 REL_TOL = 1e-3
 
 
 def _patched_mel_call(
     self, y, key_shift=0, speed=1, center=False, no_cache_window=False
 ):
-    """MelModule.__call__ の inference 経路 (center=False, key_shift=0) を conv1d-DFT で置換。
+    """Replace MelModule.__call__'s inference path (center=False, key_shift=0) with a
+    conv1d-DFT.
 
-    torch.stft(return_complex=True) は ONNX に載らないので、hann 窓込みの cos/sin カーネルで
-    magnitude スペクトルを厳密再現する。win_size==n_fft の前提 (bundled 既定 1024==1024)。
+    torch.stft(return_complex=True) does not go into ONNX, so the magnitude spectrum is
+    reproduced exactly with cos/sin kernels that include the hann window. Assumes
+    win_size==n_fft (the bundled default is 1024==1024).
     """
     n_fft = self.n_fft
     win_size = self.win_size
     hop = self.hop_length
     clip_val = self.clip_val
-    # cos/sin カーネルは長さ n_fft。torch.stft は win_length<n_fft を中央ゼロ埋めするが
-    # ここでは等長を前提にする (bundled 既定 1024==1024)。違えば loud に失敗させる。
+    # The cos/sin kernels have length n_fft. torch.stft centre-zero-pads when
+    # win_length<n_fft, but equal lengths are assumed here (the bundled default is
+    # 1024==1024). Fail loudly if they differ.
     assert win_size == n_fft, (
         f"conv-STFT replacement assumes win_size==n_fft (got {win_size} != {n_fft})"
     )
@@ -98,26 +105,29 @@ def _patched_mel_call(
 
 
 class FcpeWave(torch.nn.Module):
-    """波形 (1, N) を受けて f0 (1, T, 1) Hz を返す export 用ラッパ。"""
+    """The export wrapper that takes a waveform (1, N) and returns f0 (1, T, 1) in Hz."""
 
     def __init__(self, bundled):
         super().__init__()
         self.bundled = bundled
 
     def forward(self, waveform):
-        # FCPE の forward は完全無声フレームで threshold マスク由来の NaN (0/0) を返す。
-        # rmvpe.onnx は無声を 0 にするので、契約を揃え NaN が RVC の NSF に漏れないよう
-        # graph 内で 0 に潰す。
+        # FCPE's forward returns NaN (0/0) from the threshold mask on a fully unvoiced
+        # frame. rmvpe.onnx makes unvoiced 0, so collapse it to 0 inside the graph to
+        # match that contract and keep NaN from leaking into RVC's NSF.
         f0 = self.bundled(waveform, SR, DECODER, THRESHOLD)
         return torch.nan_to_num(f0, nan=0.0, posinf=0.0, neginf=0.0)
 
 
-# 検証する波形長。非 hop 倍数 (12345) と、焼き込み reflect-pad が要求する最小長 (FLOOR) を
-# 含める。グラフは N=16000 でトレースするが dynamic_axes で N は可変。ここで実際に複数長を
-# 通し、トレースが N を焼き込んでいない (= 一般化する) ことを毎回確認する。
-FLOOR = 433  # reflect-pad(432) が要求する最小サンプル数 (runtime の FCPE_MIN_SAMPLES と同値)
+# The waveform lengths to verify. They include a non-multiple of the hop (12345) and the
+# minimum length the baked-in reflect-pad requires (FLOOR). The graph is traced at
+# N=16000, but N is variable through dynamic_axes. Actually pushing several lengths
+# through here confirms every time that the trace did not bake N in (i.e. it generalizes).
+# The minimum sample count the reflect-pad(432) requires (the same value as the runtime's
+# FCPE_MIN_SAMPLES)
+FLOOR = 433
 VERIFY_LENGTHS = (16000, 24000, 12345, 8000, FLOOR)
-ABS_TOL_HZ = 1.0  # 無声フレームを含む全フレームの絶対差 (Hz)
+ABS_TOL_HZ = 1.0  # absolute difference over all frames, unvoiced included (Hz)
 
 
 def _tone(n: int) -> np.ndarray:
@@ -128,8 +138,9 @@ def _tone(n: int) -> np.ndarray:
 
 
 def _voicing_signal() -> np.ndarray:
-    # 前半 220Hz / 後半 無音。threshold voicing 分岐 (無声フレーム=0) を通し、
-    # onnx が無声区間に pitch を捏造しないことを非マスク比較で検証するため。
+    # 220Hz for the first half, silence for the second. This exercises the threshold
+    # voicing branch (unvoiced frame = 0) and lets an unmasked comparison verify that the
+    # onnx does not fabricate pitch over the unvoiced span.
     n = 16000
     t = np.arange(n, dtype=np.float32) / SR
     x = (0.6 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)
@@ -149,8 +160,8 @@ def _max_rel(a: np.ndarray, b: np.ndarray, voiced: np.ndarray) -> float:
 
 def _max_abs(a: np.ndarray, b: np.ndarray) -> float:
     m = min(len(a), len(b))
-    # NaN を 0 に潰してから比較する。NaN のまま max を取ると NaN>tol が False になり
-    # 差分を見逃す (無声フレームは NaN になりうる)。
+    # Collapse NaN to 0 before comparing. Taking the max with NaN still present makes
+    # NaN>tol False and lets the difference slip through (unvoiced frames can be NaN).
     diff = np.abs(np.nan_to_num(a[:m]) - np.nan_to_num(b[:m]))
     return float(np.max(diff)) if diff.size else 0.0
 
@@ -183,7 +194,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    import torchfcpe  # overlay 専用の遅延 import (pyproject の ty override で未解決 import を許容)
+    # deferred import, overlay only (pyproject's ty override tolerates the unresolved
+    # import)
+    import torchfcpe
     from torchfcpe import mel_extractor as ME
 
     bundled = torchfcpe.spawn_bundled_infer_model(torch.device("cpu")).eval()
@@ -192,11 +205,11 @@ def main() -> None:
     waves: dict[object, np.ndarray] = {n: _tone(n) for n in VERIFY_LENGTHS}
     waves["voicing"] = _voicing_signal()
 
-    # (1) 元 torch.stft 経路の f0 を各長で保存
+    # (1) Save the f0 of the original torch.stft path for each length
     with torch.no_grad():
         ref_orig = {k: _f0(wrap(torch.from_numpy(w))) for k, w in waves.items()}
 
-    # weight_norm パラメトリゼーションを剥がす (export で不安定)
+    # Strip the weight_norm parametrization (it is unstable under export)
     import torch.nn.utils.parametrize as P
 
     for _n, mod in bundled.named_modules():
@@ -204,7 +217,8 @@ def main() -> None:
             for pname in list(mod.parametrizations.keys()):
                 P.remove_parametrizations(mod, pname, leave_parametrized=True)
 
-    # (2) STFT を conv1d-DFT に差し替え、各長で元 torch.stft と一致することを確認
+    # (2) Swap the STFT for the conv1d-DFT and confirm it matches the original torch.stft
+    # at every length
     ME.MelModule.__call__ = _patched_mel_call
     with torch.no_grad():
         ref_conv = {k: _f0(wrap(torch.from_numpy(w))) for k, w in waves.items()}
@@ -220,9 +234,10 @@ def main() -> None:
             )
     print(f"[conv-STFT vs torch.stft] OK over {list(waves)}")
 
-    # export は N=16000 でトレース -> 全長を検証 -> 成功時のみ --output へ move。
-    # tmp は --output と同じ親ディレクトリに作る (別ドライブ/mount への move は
-    # WinError 17 になるため tempfile の TEMP ではなく out.parent に置く)。
+    # The export traces at N=16000 -> verifies every length -> moves to --output only on
+    # success. tmp is created in the same parent directory as --output (a move across a
+    # different drive/mount raises WinError 17, so it goes in out.parent rather than
+    # tempfile's TEMP).
     import onnxruntime as ort
 
     out = args.output.expanduser()
@@ -245,8 +260,9 @@ def main() -> None:
         for k, w in waves.items():
             got_raw = cast(np.ndarray, sess.run(None, {"waveform": w})[0])
             got = np.atleast_1d(got_raw.squeeze(-1).squeeze(0))
-            # graph 内の nan_to_num が効いていることを export 自身が保証する
-            # (_max_abs は両辺 nan_to_num するので NaN 差分を見逃す。ここで直接弾く)。
+            # The export itself guarantees that the in-graph nan_to_num is effective
+            # (_max_abs applies nan_to_num to both sides and would miss a NaN difference,
+            # so reject it directly here).
             if bool(np.isnan(got).any()):
                 raise SystemExit(f"onnx が NaN を出力しました (N={k})")
             if len(got) != len(ref_conv[k]):
@@ -256,7 +272,8 @@ def main() -> None:
             m = min(len(got), len(ref_conv[k]))
             voiced = ref_conv[k][:m] > 1.0
             rel = _max_rel(got[:m], ref_conv[k][:m], voiced)
-            # 非マスク: onnx が無声フレームに pitch を捏造しないことも見る
+            # Unmasked: also checks that the onnx does not fabricate pitch on unvoiced
+            # frames
             ab = _max_abs(got, ref_conv[k])
             if rel > REL_TOL or ab > ABS_TOL_HZ:
                 raise SystemExit(

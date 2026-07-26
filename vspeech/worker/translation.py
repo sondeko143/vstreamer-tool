@@ -67,17 +67,18 @@ async def translate_request(
 def create_translation_client(
     credentials: BaseCredentials,
 ) -> TranslationServiceAsyncClient:
-    """翻訳クライアントを、トークン更新が retry される認証チャネルの上に作る。
+    """Build the translation client on top of an auth channel whose token refresh
+    retries.
 
-    `TranslationServiceAsyncClient(credentials=...)` に任せると api_core が
-    `Request()` を引数無しで作り、トークン更新が retry 無しの素の
-    `requests.Session` で走る。約 1 時間 idle した接続をプールから掴んで
-    ConnectionReset で落ちる窓がそこにあるので (`vspeech.lib.gcp` の
-    `_AUTH_RETRY` 参照)、チャネルだけこちらで組んで注入する。
+    Leaving it to `TranslationServiceAsyncClient(credentials=...)` makes api_core
+    construct `Request()` with no arguments, so the token refresh runs on a bare
+    `requests.Session` with no retries. That is where the window of grabbing a
+    roughly-one-hour-idle pooled connection and dying with ConnectionReset lives (see
+    `_AUTH_RETRY` in `vspeech.lib.gcp`), so we build the channel ourselves and inject it.
 
-    transport に `aio.Channel` の実体を渡すと、ライブラリ側は credentials を
-    無視してそのチャネルを使う (`_ignore_credentials`) -- つまり認証経路は
-    完全にこちらの持ち物になる。
+    When an actual `aio.Channel` is passed as the transport, the library ignores
+    credentials and uses that channel (`_ignore_credentials`) -- i.e. the auth path
+    becomes entirely ours.
     """
     transport = TranslationServiceGrpcAsyncIOTransport
     channel = create_auth_channel(

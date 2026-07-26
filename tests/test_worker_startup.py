@@ -16,7 +16,7 @@ def test_passes_through_worker_startup_error():
     with pytest.raises(WorkerStartupError) as ei:
         with worker_startup("tts"):
             raise WorkerStartupError("voicevox", "boom")
-    assert ei.value.worker == "voicevox"  # 内側を保持
+    assert ei.value.worker == "voicevox"  # the inner one is preserved
 
 
 def test_no_error_is_transparent():

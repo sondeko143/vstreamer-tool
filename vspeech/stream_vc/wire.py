@@ -1,9 +1,10 @@
-"""ストリーミング VC の UDP ワイヤ書式(ADR-0051 T3)。
+"""The UDP wire format of streaming VC (ADR-0051 T3).
 
-固定ヘッダ + PCM ペイロードの 1 ブロック 1 データグラム。session_id は 32-hex を
-16 バイト生 UUID に詰める。1 ブロックは MTU(1500)を超える(160ms/48kHz int16 で
-~15KB)が UDP の 64KB 上限には収まるので、そのまま送って IP 層に断片化させる
-(断片欠落はブロック単位の loss = seq gap として観測される, ADR-0056)。
+One datagram per block: a fixed header plus the PCM payload. session_id packs the
+32-hex form into a 16-byte raw UUID. A block exceeds the MTU (1500) -- about 15KB at
+160ms/48kHz int16 -- but stays within UDP's 64KB limit, so it is sent as-is and let the
+IP layer fragment it (losing a fragment is observed as block-granularity loss, i.e. a
+seq gap, ADR-0056).
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ _HEADER = struct.Struct("!2sBB16sQdI")
 
 
 class WireError(ValueError):
-    """データグラムが本コーデックの書式でない/壊れている。"""
+    """The datagram is not in this codec's format, or is corrupt."""
 
 
 def encode_packet(p: StreamPacket) -> bytes:

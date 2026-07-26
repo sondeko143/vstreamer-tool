@@ -1,7 +1,7 @@
-"""streaming VC の device 自力再接続ループ(vspeech/stream_vc/retry.py)。
+"""The self-healing device reconnect loop of streaming VC (vspeech/stream_vc/retry.py).
 
-pure な next_backoff と、run_with_device_retry の再接続/fail-loud/cancellation の
-振る舞いを、実デバイス無しの fake stream で CPU 検証する。
+Verifies the pure next_backoff plus run_with_device_retry's reconnect / fail-loud /
+cancellation behaviour on CPU, using a fake stream and no real device.
 """
 
 import asyncio
@@ -23,13 +23,14 @@ def test_next_backoff_grows_then_caps():
     for _ in range(10):
         b = next_backoff(b)
         seen.append(b)
-    assert seen[1] == BACKOFF_START * 2  # 倍々で増える
-    assert max(seen) == BACKOFF_MAX  # 最終的に頭打ち
-    assert next_backoff(BACKOFF_MAX) == BACKOFF_MAX  # 上限で clamp
+    assert seen[1] == BACKOFF_START * 2  # doubles each time
+    assert max(seen) == BACKOFF_MAX  # eventually saturates
+    assert next_backoff(BACKOFF_MAX) == BACKOFF_MAX  # clamped at the ceiling
 
 
 class _FakeStream:
-    """read が仕込んだ列(例外 or 値)を消化する device 代役。空になると永久ブロック。"""
+    """A device stand-in whose read consumes a scripted sequence (exceptions or values).
+    Once empty, it blocks forever."""
 
     def __init__(self, script: list) -> None:
         self._script = list(script)
@@ -44,7 +45,7 @@ class _FakeStream:
             if isinstance(item, BaseException):
                 raise item
             return item
-        await asyncio.Event().wait()  # 列を使い切ったら cancel されるまで待つ
+        await asyncio.Event().wait()  # once the script runs out, wait to be cancelled
 
 
 async def _nosleep(_: float) -> None:
@@ -60,12 +61,12 @@ async def _read_loop(stream: _FakeStream) -> None:
     "fault", [OSError("mic unplugged"), sd.PortAudioError("format changed")]
 )
 async def test_reopens_on_device_error_and_cancellation_propagates(fault):
-    """steady-state の (OSError, PortAudioError) は close→再 open で回復し、
-    CancelledError は握らず WorkerShutdown で propagate する。"""
+    """A steady-state (OSError, PortAudioError) recovers through close -> reopen, while
+    CancelledError is not swallowed and propagates as WorkerShutdown."""
     opened: list[_FakeStream] = []
 
     def open_stream() -> _FakeStream:
-        # 1つ目の read は即 device fault、2つ目以降は永久ブロック。
+        # The first read faults immediately; every stream after that blocks forever.
         s = _FakeStream([fault] if not opened else [])
         opened.append(s)
         return s
@@ -83,15 +84,16 @@ async def test_reopens_on_device_error_and_cancellation_propagates(fault):
         await asyncio.sleep(0)
         if len(opened) >= 2:
             break
-    assert len(opened) == 2  # 初回 open + fault 後の再 open
-    assert opened[0].closed >= 1  # fault 時に閉じている
+    assert len(opened) == 2  # the first open plus the reopen after the fault
+    assert opened[0].closed >= 1  # closed on the fault
     task.cancel()
     with pytest.raises(WorkerShutdown):
         await task
 
 
 async def test_first_open_failure_is_fail_loud():
-    """初回 open の失敗は worker_startup で WorkerStartupError 化(無限 retry しない)。"""
+    """A failure on the first open becomes a WorkerStartupError through worker_startup (it
+    does not retry forever)."""
 
     def open_stream() -> _FakeStream:
         raise OSError("no such device")
@@ -110,7 +112,8 @@ async def test_first_open_failure_is_fail_loud():
 
 
 async def test_non_device_error_propagates_without_retry():
-    """DEVICE_ERRORS 以外(ここでは ValueError)は捕えず、再 open もしない。"""
+    """Anything outside DEVICE_ERRORS (here a ValueError) is not caught and triggers no
+    reopen."""
     opened: list[_FakeStream] = []
 
     def open_stream() -> _FakeStream:
@@ -129,4 +132,4 @@ async def test_non_device_error_propagates_without_retry():
             label="test",
             sleep=_nosleep,
         )
-    assert len(opened) == 1  # 再 open していない
+    assert len(opened) == 1  # no reopen happened

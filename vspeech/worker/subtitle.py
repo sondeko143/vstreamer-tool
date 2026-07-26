@@ -1,8 +1,8 @@
-"""subtitle worker のディスパッチャ (ADR-0040)。
+"""The subtitle worker's dispatcher (ADR-0040).
 
-transcription / tts と同じく `worker_type` でバックエンドへ振る。tkinter は
-TK バックエンドの中だけに閉じ込めるので、このモジュールは import しない
-(ヘッドレス構成で tkinter を要求しないため)。
+Dispatches to a backend by `worker_type`, just like transcription / tts. tkinter is
+confined to the TK backend, so this module does not import it (so a headless
+configuration does not require tkinter).
 """
 
 from asyncio import Queue

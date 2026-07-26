@@ -52,11 +52,12 @@ def make_output(followings, sound: bool = True, text: str = "hi") -> WorkerOutpu
 
 
 def fake_transport(monkeypatch, process):
-    """get_channel / CommanderStub を差し替える。
+    """Replace get_channel / CommanderStub.
 
-    process: async fn(channel, command) -> Response。
-    返り値 state["channels"] は get_channel 呼び出しで作られた FakeChannel 列、
-    state["commands"] は process_command に渡った (remote, command) 列。
+    process: async fn(channel, command) -> Response.
+    In the returned state, state["channels"] is the sequence of FakeChannels created by
+    get_channel calls, and state["commands"] is the sequence of (remote, command) pairs
+    that reached process_command.
     """
     state = {"channels": [], "commands": []}
 
@@ -90,7 +91,7 @@ def test_enqueue_drops_oldest_when_full():
     rs = RemoteSender(remote="//r", credentials=None, maxsize=2)
     rs.enqueue(make_command(data=b"1"))
     rs.enqueue(make_command(data=b"2"))
-    rs.enqueue(make_command(data=b"3"))  # 満杯 → 最古(b"1")を破棄
+    rs.enqueue(make_command(data=b"3"))  # full -> discards the oldest (b"1")
     assert rs.queue.qsize() == 2
     assert rs.queue.get_nowait().operand.sound.data == b"2"
     assert rs.queue.get_nowait().operand.sound.data == b"3"
@@ -113,8 +114,8 @@ async def test_send_reuses_channel(monkeypatch):
     rs = RemoteSender(remote="//r", credentials=None)
     await rs._send(make_command())
     await rs._send(make_command())
-    assert len(state["channels"]) == 1  # チャネルは1回だけ生成
-    assert len(state["commands"]) == 2  # 送信は2回
+    assert len(state["channels"]) == 1  # the channel is created only once
+    assert len(state["commands"]) == 2  # two sends
 
 
 async def test_send_trims_sound_for_subtitle(monkeypatch):
@@ -130,9 +131,9 @@ async def test_send_swallows_errors_and_continues(monkeypatch):
 
     state = fake_transport(monkeypatch, boom)
     rs = RemoteSender(remote="//r", credentials=None)
-    await rs._send(make_command())  # 例外を外に漏らさない
+    await rs._send(make_command())  # never leaks the exception outward
     await rs._send(make_command())
-    assert len(state["commands"]) == 2  # 2回とも試行された
+    assert len(state["commands"]) == 2  # both attempts were made
 
 
 async def test_run_processes_commands_in_order(monkeypatch):
@@ -162,7 +163,7 @@ async def test_blocked_remote_does_not_block_others(monkeypatch):
     async def process(channel, command):
         if channel.remote == "A":
             a_started.set()
-            await block.wait()  # 永久にブロック
+            await block.wait()  # blocks forever
             a_finished.set()
         else:
             b_done.set()
@@ -178,8 +179,8 @@ async def test_blocked_remote_does_not_block_others(monkeypatch):
     try:
         await asyncio.wait_for(b_done.wait(), timeout=2)
         assert a_started.is_set()
-        assert not a_finished.is_set()  # A はまだ詰まっている
-        assert b_done.is_set()  # それでも B は完了
+        assert not a_finished.is_set()  # A is still stuck
+        assert b_done.is_set()  # B completed anyway
     finally:
         for t in (ta, tb):
             t.cancel()
@@ -218,7 +219,7 @@ def test_dispatch_empty_remote_uses_local_process_command():
         [[EventAddress(event=EventType.subtitle)]], sound=False, text="hello"
     )
     _dispatch_output(context, senders, None, lambda rs: None, output)
-    assert senders == {}  # リモート送信は発生しない
+    assert senders == {}  # no remote send happens
     wi = worker.in_queue.get_nowait()
     assert wi.current_event == EventType.subtitle
     assert wi.text == "hello"

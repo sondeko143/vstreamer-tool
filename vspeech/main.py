@@ -111,16 +111,16 @@ def cmd(config_file: IO[bytes] | None):
         for problem in e.problems:
             logger.error("  %s", problem)
         exit(1)
-    # 3.14 で get_event_loop() は running loop が無いと RuntimeError を投げる
-    # (暗黙生成が撤廃された)。明示的に新しいループを作って current に据える。
+    # On 3.14 get_event_loop() raises RuntimeError when there is no running loop
+    # (implicit creation was removed). Create a new loop explicitly and install it.
     loop = new_event_loop()
     set_event_loop(loop)
     try:
         loop.run_until_complete(vspeech_coro(config=config))
         loop.stop()
         loop.close()
-        # 正常終了はしない: 全 worker 停止 or startup 失敗 (except* で処理済) は
-        # 必ず異常終了させる (fail-loud, ADR-0038)。
+        # Never exit successfully: all workers stopped, or startup failed (already
+        # handled by except*), must surface as a failure (fail-loud, ADR-0038).
         exit(1)
     except (KeyboardInterrupt, CancelledError) as e:
         logger.exception(e)

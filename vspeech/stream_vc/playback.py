@@ -1,12 +1,14 @@
-"""streaming VC のローカル連続再生。
+"""Local continuous playback for streaming VC.
 
-transport から受けた変換音声を出力デバイスへ連続 write する。producer は実時間
-より速くバースト(RTF<1)するのに consumer は出力デバイスクロックで消費するため、
-一過性ストールで積んだバックログはそのまま張り付き恒久遅延になる。これを防ぐため
-再生前に `drain_to_latest` で到着済みバックログを最新へ畳み、捨てた分は telemetry
-と seq(gap)簿記で必ず観測する — この module は欠落を黙って無音の穴にしないのが
-約束なので、意図的な drop も記録する(silent には落とさない)。seq の飛びも同様に
-記録する(受入基準)。実際の穴埋め/整列は網トランスポートを入れる段階の担当。
+Continuously writes the converted audio received from the transport to the output
+device. The producer bursts faster than real time (RTF<1) while the consumer consumes on
+the output device clock, so a backlog built up by a transient stall sticks around as
+permanent delay. To prevent that, `drain_to_latest` folds the already-arrived backlog
+forward to the newest before playing, and whatever was discarded is always observed
+through telemetry and the seq (gap) bookkeeping -- this module promises never to turn a
+loss into a silent hole, so even deliberate drops are recorded (nothing is dropped
+silently). Seq jumps are recorded the same way (an acceptance criterion). Actual
+concealment and reordering belong to the stage that introduces the network transport.
 """
 
 from asyncio import CancelledError
@@ -29,7 +31,8 @@ from vspeech.stream_vc.transport import Transport
 
 
 def detect_gap(prev_seq: int | None, seq: int) -> int:
-    """前 seq から見た欠落パケット数(前進の飛びのみ、並べ替え/重複は 0)。"""
+    """Packets missing relative to the previous seq (forward jumps only; reordering and
+    duplicates give 0)."""
     if prev_seq is None:
         return 0
     missing = seq - prev_seq - 1
@@ -53,30 +56,34 @@ def open_stream_vc_output_stream(
 
 
 async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
-    """transport から受けて連続再生する。最初のパケットで出力ストリームを開く。
+    """Receive from the transport and play continuously. The output stream is opened on
+    the first packet.
 
-    初回 open は fail-loud(worker_startup)。以降 write/再 open で起きる runtime
-    device fault は close→backoff→次パケットで lazy 再 open して自力回復する
-    (発話系や兄弟タスクは巻き込まない, ADR-0050)。出力の sample_rate はパケットが
-    持つので再 open もパケット到着時に行える。
+    The first open is fail-loud (worker_startup). Runtime device faults from later
+    writes/reopens self-heal via close -> backoff -> lazy reopen on the next packet
+    (without dragging in the utterance path or sibling tasks, ADR-0050). The output
+    sample_rate travels with the packet, so a reopen can also happen on packet arrival.
     """
     stream: sd.RawOutputStream | None = None
     prev_seq: int | None = None
-    # 条件ごとに 1 つ。出力 underflow も stale drop も seq gap も、起きるときは
-    # 毎ブロック起きる(block_ms=160 なら ~6 回/秒)ので、警告自体がログを埋めない
-    # よう時間で絞る。telemetry は間引きに関係なく毎回記録する(ADR-0062)。
+    # One per condition. Output underflows, stale drops and seq gaps all fire on every
+    # block once they start (about 6 times a second at block_ms=160), so throttle by time
+    # to keep the warnings themselves from burying the log. Telemetry is recorded every
+    # time regardless of the thinning (ADR-0062).
     underflow_throttle = LogThrottle()
     drop_throttle = LogThrottle()
     gap_throttle = LogThrottle()
-    # 一度でも open に成功したか(初回 fail-loud と runtime 再 open を区別するため)。
+    # Whether an open has ever succeeded (to tell the fail-loud first open apart from a
+    # runtime reopen).
     started = False
     backoff = BACKOFF_START
     try:
         while True:
             packet = await transport.recv()
-            # 到着済みバックログを最新へ畳んで遅延の張り付きを防ぐ。backlog があれば
-            # recv 済みの packet(最古)も含めて捨て、drain が残した最新を改めて取り
-            # 出して再生する(keep=1)。捨てた分は seq 簿記に通して必ず観測する。
+            # Fold the already-arrived backlog forward to the newest so latency does not
+            # stick. When there is a backlog, discard the recv'd packet (the oldest) too
+            # and take the newest that drain left behind to play (keep=1). Everything
+            # discarded goes through the seq bookkeeping so it is always observed.
             stale = transport.drain_to_latest(keep=1)
             if stale:
                 for old in (packet, *stale):
@@ -98,12 +105,14 @@ async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
                             "latency (total %d)",
                             n,
                         )
-                # drain が残した最新(キューに 1 個ある)を非ブロッキングで取り直す。
+                # Re-take the newest that drain left behind (one item in the queue);
+                # this does not block.
                 packet = await transport.recv()
             try:
                 if stream is None:
                     if started:
-                        # runtime 再 open は fail-loud にしない(backoff 済み)。
+                        # A runtime reopen is not made fail-loud (it is already backed
+                        # off).
                         stream = open_stream_vc_output_stream(
                             config, packet.sample_rate
                         )
@@ -126,9 +135,9 @@ async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
                             n,
                         )
                 prev_seq = packet.seq
-                # write() の戻り値 = paOutputUnderflowed (capture.py の read() の
-                # overflowed と対称)。捨てると「無音の穴」が黙って出る — この module が
-                # 防ぐと謳っているものそのものなので必ず見る。
+                # write()'s return value = paOutputUnderflowed (symmetric with read()'s
+                # overflowed in capture.py). Discarding it would let a "silent hole" slip
+                # out -- exactly what this module claims to prevent, so always look at it.
                 underflowed = await to_thread(stream.write, packet.pcm)
                 if underflowed:
                     telemetry.record("stream_vc_playback_underflow", 1.0)
@@ -137,15 +146,16 @@ async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
                             "stream_vc playback output underflow (total %d)", n
                         )
             except (OSError, sd.PortAudioError) as e:
-                # runtime device fault: 出力先が消えた/フォーマットが変わった等。
-                # サブシステム内で吸収し、次パケットで lazy 再 open する。
+                # A runtime device fault: the output sink disappeared, the format
+                # changed, etc. Absorb it inside the subsystem and lazily reopen on the
+                # next packet.
                 logger.warning(
                     "stream_vc playback device fault; retry for %r (backoff %.1fs)",
                     e,
                     backoff,
                 )
                 telemetry.record("stream_vc_playback_reopen", 1.0)
-                # 再 open 自体が失敗したときは stream が None のままなので guard する。
+                # When the reopen itself failed stream is still None, so guard it.
                 if stream is not None:
                     close_quietly(stream)
                 stream = None
@@ -154,8 +164,9 @@ async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
     except CancelledError as e:
         raise shutdown_worker(e)
     finally:
-        # close_quietly で包む: Ctrl-C 中に出力デバイスが faulted だと raw close() が
-        # sd.PortAudioError を投げ、それが finally から抜けて直前の WorkerShutdown を
-        # 置き換えてしまう(clean cancel が error-exit に化ける)。
+        # Wrapped in close_quietly: if the output device is faulted during a Ctrl-C, a
+        # raw close() raises sd.PortAudioError, which escapes the finally and replaces
+        # the WorkerShutdown that was in flight (turning a clean cancel into an error
+        # exit).
         if stream is not None:
             close_quietly(stream)

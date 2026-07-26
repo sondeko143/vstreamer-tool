@@ -1,12 +1,13 @@
-"""FCPE onnx が torch 参照実装と f0 で一致することの golden テスト。
+"""Golden test that the FCPE onnx matches the torch reference implementation on f0.
 
-資産 (fcpe.onnx) が無い通常実行では skip する。実行するには:
+Skipped on a normal run, where the asset (fcpe.onnx) is absent. To run it:
 
     uv run poe export-fcpe-onnx --output ./fcpe.onnx
     VSPEECH_FCPE_ONNX=./fcpe.onnx uv run --extra rvc --with torchfcpe pytest tests/test_fcpe_onnx.py -v
 
-参照は torchfcpe の forward (= __call__、export したもの) と比較する。model.infer(...) は
-f0_min による無声マスク等の後処理を足すので、export した forward とは別物である点に注意。
+The reference compared against is torchfcpe's forward (= __call__, the thing that was
+exported). Note that model.infer(...) adds post-processing such as the unvoiced mask from
+f0_min and is therefore a different thing from the exported forward.
 """
 
 import os
@@ -25,7 +26,7 @@ _ASSET = os.environ.get("VSPEECH_FCPE_ONNX")
 )
 def test_fcpe_onnx_matches_torch():
     import torch
-    import torchfcpe  # ty: ignore[unresolved-import]  # overlay 専用 (--with torchfcpe)
+    import torchfcpe  # ty: ignore[unresolved-import]  # overlay only (--with torchfcpe)
 
     from vspeech.lib.onnx_session import create_session
 
@@ -46,7 +47,7 @@ def test_fcpe_onnx_matches_torch():
     m = min(len(got), len(ref))
     voiced = ref[:m] > 1.0
     assert voiced.sum() > 0
-    # 220Hz トーンなので有声フレームは ~220Hz を返すはず
+    # It is a 220Hz tone, so voiced frames should come back at about 220Hz
     np.testing.assert_allclose(np.median(ref[:m][voiced]), 220.0, rtol=0.05)
     np.testing.assert_allclose(got[:m][voiced], ref[:m][voiced], rtol=0.02, atol=1.0)
 
@@ -56,10 +57,11 @@ def test_fcpe_onnx_matches_torch():
     reason="fcpe.onnx が無い (uv run poe export-fcpe-onnx で生成し VSPEECH_FCPE_ONNX で指す)",
 )
 def test_fcpe_onnx_generalizes_over_length_and_zeros_unvoiced():
-    """トレースは N=16000 固定だが、複数長で torch と一致し (N 一般化)、無声区間で
-    pitch を捏造しないこと (全フレーム = torch) を確認する。"""
+    """The trace is fixed at N=16000, but this checks that it matches torch at several
+    lengths (generalizes over N) and fabricates no pitch over unvoiced spans (every frame
+    equals torch)."""
     import torch
-    import torchfcpe  # ty: ignore[unresolved-import]  # overlay 専用 (--with torchfcpe)
+    import torchfcpe  # ty: ignore[unresolved-import]  # overlay only (--with torchfcpe)
 
     from vspeech.lib.onnx_session import create_session
 
@@ -68,7 +70,8 @@ def test_fcpe_onnx_generalizes_over_length_and_zeros_unvoiced():
     bundled = torchfcpe.spawn_bundled_infer_model(torch.device("cpu")).eval()
     sess = create_session(Path(_ASSET), torch.device("cpu"))
 
-    # 複数長 (非 hop 倍数と最小長付近を含む) で有声トーンを一致確認
+    # Check the voiced tone matches at several lengths (including a non-multiple of the
+    # hop and one near the minimum length)
     for n in (8000, 12345, 24000, 433):
         t = np.arange(n, dtype=np.float32) / sr
         wav = (0.6 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)
@@ -89,9 +92,10 @@ def test_fcpe_onnx_generalizes_over_length_and_zeros_unvoiced():
                 got[:m][voiced], ref[:m][voiced], rtol=0.02, atol=1.0
             )
 
-    # 無声 (後半無音) 区間: FCPE の forward は無声フレームで NaN (0/0) を出す。onnx は
-    # graph 内で 0 に潰す (rmvpe と同契約) ので、torch (NaN->0) と全フレーム一致し、無声に
-    # pitch を捏造しない。
+    # The unvoiced span (silence in the second half): FCPE's forward emits NaN (0/0) on
+    # unvoiced frames. The onnx collapses that to 0 inside the graph (the same contract as
+    # rmvpe), so it matches torch (NaN->0) on every frame and fabricates no pitch where
+    # there is none.
     from vspeech.lib.pitch_extract import pitch_extract_fcpe
 
     t = np.arange(sr, dtype=np.float32) / sr
@@ -105,14 +109,15 @@ def test_fcpe_onnx_generalizes_over_length_and_zeros_unvoiced():
             .cpu()
             .numpy()
         )
-    ref = np.nan_to_num(ref, nan=0.0)  # torch forward は無声で NaN を出す
+    ref = np.nan_to_num(ref, nan=0.0)  # torch's forward emits NaN where unvoiced
     got_raw = cast(np.ndarray, sess.run(None, {"waveform": wav[None, :]})[0])
     got = got_raw.squeeze(-1).squeeze(0)
-    assert not np.isnan(got).any()  # 焼き込んだ nan_to_num で onnx は NaN を残さない
+    # the baked-in nan_to_num leaves the onnx with no NaN
+    assert not np.isnan(got).any()
     m = min(len(got), len(ref))
     np.testing.assert_allclose(got[:m], ref[:m], atol=1.0)
 
-    # runtime helper も NaN を残さず、無音区間を ~0 にする
+    # The runtime helper also leaves no NaN and brings the silent span to about 0
     f0 = pitch_extract_fcpe(torch.from_numpy(wav), sess)
     assert not np.isnan(f0).any()
     silent = f0[len(f0) * 6 // 10 :]

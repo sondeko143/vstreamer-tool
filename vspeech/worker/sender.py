@@ -35,15 +35,17 @@ from vspeech.shared_context import SharedContext
 from vspeech.shared_context import WorkerInput
 from vspeech.shared_context import WorkerOutput
 
-# gRPC の既定再接続バックオフ（min 20s / max 120s）は、receiver より先に sender を
-# 起動して初回接続に失敗すると致命的に遅い: バックオフ待ちの間に来た RPC は
-# wait_for_ready=False のため即失敗し、キャッシュ済みの前回接続エラー（例: WSA 10060
-# Connection timed out）をそのまま返し続ける。チャネルは永続再利用（ADR-0004）なので
-# 新規チャネルでバックオフがリセットされることもない。よって receiver 起動後も同じ
-# エラーが数十秒〜最大2分出続ける。これを有界化し、冷起動からの復帰を高速化する。
-#  - initial: 初回リトライまでの待ち
-#  - min:     1回の接続試行のデッドライン下限（SYN 黙殺=10060 時に各試行が張り付く上限）
-#  - max:     試行間バックオフの上限（既定 120s → 数秒へ）
+# gRPC's default reconnect backoff (min 20s / max 120s) is disastrously slow when the
+# sender starts before the receiver and the first connection fails: an RPC arriving during
+# the backoff fails immediately because wait_for_ready=False and keeps returning the
+# cached previous connection error (e.g. WSA 10060 Connection timed out). Channels are
+# reused permanently (ADR-0004), so no new channel comes along to reset the backoff. The
+# same error therefore keeps appearing for tens of seconds, up to two minutes, even after
+# the receiver is up. These bound that and speed up recovery from a cold start.
+#  - initial: the wait before the first retry
+#  - min:     the lower bound on a single connection attempt's deadline (the ceiling on
+#             how long each attempt sticks when SYN is blackholed = 10060)
+#  - max:     the upper bound on the backoff between attempts (120s by default -> seconds)
 RECONNECT_CHANNEL_OPTIONS: list[tuple[str, int]] = [
     ("grpc.initial_reconnect_backoff_ms", 500),
     ("grpc.min_reconnect_backoff_ms", 1000),
@@ -67,29 +69,30 @@ def async_secure_authorized_channel(
 
 
 async def get_channel(address: str, credentials: GcpIDTokenCredentials | None):
-    """宛先ごとのチャネルを作る。
+    """Create the channel for one destination.
 
-    async なのは下の初回 `refresh()` のため。あれは requests での同期 HTTP で、
-    `_send` (イベントループ上) から呼ばれるので、そのまま呼ぶとループ全体が
-    止まる -- receiver の aio サーバも playback も vc も巻き添えになる。
-    retry を積んだぶん最悪時間が伸びた (ADR-0048) ので、なおさら手放せない:
-    実測でループが 1.5 秒止まり、最悪では約 85 秒になりうる。ADR-0004 が
-    「宛先間ブロックが消えた」と書いた性質も、ループが止まっては意味がない。
+    It is async because of the first `refresh()` below. That is synchronous HTTP through
+    requests, and it is called from `_send` (on the event loop), so calling it directly
+    would stop the whole loop -- taking the receiver's aio server, playback and vc down
+    with it. Adding retries lengthened the worst case (ADR-0048), which makes this all the
+    more necessary: the loop was measured stalling for 1.5 seconds, and the worst case is
+    about 85 seconds. The property ADR-0004 described as "blocking between destinations is
+    gone" means nothing if the loop itself stops.
     """
     url = urlparse(address)
     secure_port = url.scheme == "https" or url.port == 443
     if secure_port and credentials:
-        # retry 付き session を積んだ Request を使う (ADR-0048)。この 1 個の
-        # Request が 2 箇所で効く: 直下の初回 refresh と、
-        # async_secure_authorized_channel が組む AuthMetadataPlugin が以後
-        # 行う更新 (同じ request を持ち回る)。素の Request() だと、どちらも
-        # 約 1 時間 idle した死んだプール接続を掴んで落ちうる。
+        # Use a Request carrying a session with retries (ADR-0048). This single Request
+        # matters in two places: the first refresh just below, and every later refresh
+        # performed by the AuthMetadataPlugin that async_secure_authorized_channel builds
+        # (it carries the same request around). With a bare Request() either one could
+        # grab a dead pooled connection idle for about an hour and die.
         request = Request(session=build_auth_session())
         id_token_cred: GcpIDTokenCredentials = credentials.with_target_audience(
             f"https://{url.hostname}/"
         )
-        # requests での同期 HTTP。イベントループを塞がないようスレッドへ出す
-        # (この関数が async である理由。docstring 参照)。
+        # Synchronous HTTP through requests. Pushed onto a thread so it does not block the
+        # event loop (the reason this function is async; see the docstring).
         await to_thread(id_token_cred.refresh, request)
         return async_secure_authorized_channel(
             credentials=id_token_cred, request=request, target=address.strip("/")
@@ -146,7 +149,7 @@ class RemoteSender:
             logger.info("success response: %s", str(res))
         except (RefreshError, MutualTLSChannelError, AioRpcError) as e:
             logger.warning("%s", e)
-        except Exception as e:  # noqa: BLE001 - 宛先タスクを死なせない
+        except Exception as e:  # noqa: BLE001 - never let the destination task die
             logger.warning("send error to %s: %s", self.remote, e)
 
     async def run(self):
@@ -164,7 +167,7 @@ class RemoteSender:
             if self.channel is not None:
                 try:
                     await self.channel.close()
-                except Exception as e:  # noqa: BLE001 - クローズ失敗は無視
+                except Exception as e:  # noqa: BLE001 - ignore close failures
                     logger.debug("channel close error for %s: %s", self.remote, e)
 
 

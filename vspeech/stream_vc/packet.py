@@ -1,8 +1,8 @@
-"""ストリーミング VC のマシン間ユニット(ADR-0051)。
+"""The cross-machine unit of streaming VC (ADR-0051).
 
-`session_id`/`seq`/`pts` を持つので consumer 側で欠落検出・整列ができる。
-現状は単一マシン内の in-process 転送だが、将来 網トランスポートへ差し替えても
-同じ StreamPacket が流れる。
+Carrying `session_id`/`seq`/`pts` lets the consumer detect loss and reorder. Today the
+transfer is in-process on a single machine, but the same StreamPacket flows when the
+transport is later swapped for a network one.
 """
 
 from dataclasses import dataclass

@@ -119,7 +119,7 @@ def test_loud_output_is_not_clipped_with_default_config():
     # Regression: the RVC output is already a full-level int16 signal, so the
     # gain must not boost it past int16 range. With the default max_gain the
     # gain stays <= 1 (a duck), so a near-full-scale output region cannot be
-    # amplified into hard clipping ("音割れ" on loud parts).
+    # amplified into hard clipping (audible distortion on loud parts).
     from vspeech.config import VcConfig
 
     n = 8000

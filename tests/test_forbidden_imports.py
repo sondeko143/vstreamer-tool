@@ -1,12 +1,12 @@
-"""runtime に重い ML フレームワークを二度と入れないための構造ゲート。
+"""A structural gate that keeps heavy ML frameworks out of the runtime for good.
 
-- fairseq: requires-python 引き上げの唯一の障害（上流は 0.12.2 で凍結、リポジトリは
-  2026-03-20 に archived）。spec ① で撤去。
-- transformers: uv.lock に載るだけで `uv audit` に 3 件の advisory を持ち込む。
-  spec ② で content encoder を ONNX 化して撤去。
+- fairseq: the sole obstacle to raising requires-python (upstream is frozen at 0.12.2 and
+  the repository was archived on 2026-03-20). Removed in spec 1.
+- transformers: merely appearing in uv.lock brings three advisories into `uv audit`.
+  Removed in spec 2 by moving the content encoder to ONNX.
 
-どちらも offline ツール (scripts/convert_hubert.py, scripts/export_hubert_onnx.py) では
-使ってよい。禁じるのは `vspeech/` 配下、すなわち runtime だけ。
+Both are fine in the offline tools (scripts/convert_hubert.py,
+scripts/export_hubert_onnx.py). What is forbidden is only `vspeech/`, i.e. the runtime.
 """
 
 import ast
@@ -33,10 +33,10 @@ def _imported_modules(path: Path):
 
 
 def _is_forbidden(module: str, forbidden: str) -> bool:
-    """`forbidden` 本体か、そのサブモジュールか。
+    """Whether it is `forbidden` itself, or a submodule of it.
 
-    `fairseq_utils` のような別モジュールを巻き込まないよう、サブモジュール判定には
-    必ずドットを付ける（`startswith("fairseq")` では誤検出する）。
+    Always include the dot in the submodule test so that an unrelated module such as
+    `fairseq_utils` is not swept in (`startswith("fairseq")` false-positives on it).
     """
     return module == forbidden or module.startswith(f"{forbidden}.")
 
@@ -65,18 +65,19 @@ def test_vspeech_never_imports(forbidden: str):
     ],
 )
 def test_is_forbidden_predicate(module: str, forbidden: str, expected: bool):
-    """述語そのものを固定する。
+    """Pin the predicate itself.
 
-    `test_vspeech_never_imports` はいま何も import していない runtime に対して走るので、
-    述語が壊れても緑のままになる。ここだけが述語を検査している。サブモジュール判定を
-    落とす退行 (`fairseq.data` を見逃す) と、ドットを落とす退行 (`fairseq_utils` を
-    誤検出する) の両方を捕まえる。
+    `test_vspeech_never_imports` runs against a runtime that currently imports none of
+    them, so it stays green even if the predicate breaks. This is the only place that
+    checks the predicate. It catches both a regression that drops the submodule test
+    (missing `fairseq.data`) and one that drops the dot (false-positiving on
+    `fairseq_utils`).
     """
     assert _is_forbidden(module, forbidden) is expected
 
 
 def test_the_gate_would_catch_a_regression(tmp_path):
-    """AST 走査と述語が実際に繋がっていること（end-to-end）。"""
+    """The AST walk and the predicate really are wired together (end-to-end)."""
     leaked = tmp_path / "leak.py"
     leaked.write_text("from transformers import HubertModel\n", encoding="utf-8")
     modules = list(_imported_modules(leaked))
@@ -85,10 +86,11 @@ def test_the_gate_would_catch_a_regression(tmp_path):
 
 
 def test_consumer_path_is_torch_free():
-    """role=consumer(再生専任)のモジュール群は torch を一切引かない(ADR-0055)。
+    """The role=consumer (playback-only) modules pull in no torch at all (ADR-0055).
 
-    同一プロセス内 sys.modules チェックはテスト順序に汚染される(先に別テストが
-    torch を import していれば偽陽性で見逃す)ので、まっさらな子プロセスで確認する。
+    A sys.modules check within this process is contaminated by test order (if an earlier
+    test imported torch it would pass falsely), so the check runs in a pristine child
+    process.
     """
     code = (
         "import sys\n"

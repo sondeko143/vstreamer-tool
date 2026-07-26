@@ -45,13 +45,13 @@ def _full_acp():
 
 
 def test_disabled_worker_is_not_checked():
-    # transcription 無効なら ami 空でも問題なし
+    # With transcription disabled, an empty ami is fine
     preflight(Config())
 
 
 def test_acp_missing_fields_are_all_reported():
     with pytest.raises(ConfigError) as ei:
-        preflight(_acp())  # 4 フィールドすべて空
+        preflight(_acp())  # all four fields empty
     details = [p.detail for p in ei.value.problems]
     assert any("ami.appkey" in d for d in details)
     assert any("ami.engine_uri" in d for d in details)
@@ -174,10 +174,10 @@ def test_voicevox_missing_dirs_reported():
 
 
 def test_vr2_tts_passes_without_files():
-    # VR2 は実初期化が層B。preflight は通す。
+    # VR2's real initialization is layer B, so preflight lets it through.
     from vspeech.config import TtsConfig
 
-    preflight(Config(tts=TtsConfig(enable=True)))  # 既定 worker_type=VR2
+    preflight(Config(tts=TtsConfig(enable=True)))  # the default worker_type=VR2
 
 
 def test_vc_unconfigured_hubert_dir_is_reported():
@@ -229,7 +229,7 @@ def test_vc_fcpe_missing_model_file_reported():
         preflight(cfg)
     problems = ei.value.problems
     assert any(p.field == "rvc.fcpe_model_file" for p in problems)
-    # fcpe 選択時は rmvpe_model_file 不在を咎めない
+    # With fcpe selected, a missing rmvpe_model_file is not flagged
     assert not any(p.field == "rvc.rmvpe_model_file" for p in problems)
 
 
@@ -253,7 +253,7 @@ def test_vc_fcpe_present_model_file_passes(tmp_path):
             fcpe_model_file=fcpe,
         ),
     )
-    # 全アセット存在 -> ConfigError を上げない
+    # every asset present -> no ConfigError is raised
     preflight(cfg)
 
 
@@ -299,7 +299,7 @@ def test_vc_non_rmvpe_extractor_skips_rmvpe_check(tmp_path):
 
 
 def test_subtitle_tk_backend_is_not_checked():
-    # TK 構成に新しい失敗を持ち込まない (ADR-0042)。
+    # Never introduce a new failure into a TK configuration (ADR-0042).
     config = Config()
     config.subtitle.enable = True
     config.subtitle.worker_type = SubtitleWorkerType.TK
@@ -463,7 +463,7 @@ def test_obs_backend_reports_every_bad_color_not_just_the_first():
 
 
 def test_collect_problems_returns_list_without_raising():
-    problems = collect_problems(_acp())  # ACP 4 フィールドすべて空
+    problems = collect_problems(_acp())  # all four ACP fields empty
     assert [p.worker for p in problems] == ["transcription"] * 4
     assert {p.field for p in problems} == {
         "ami.appkey",
@@ -492,7 +492,7 @@ def test_vc_problems_carry_their_field():
     fields = {p.field for p in collect_problems(config)}
     assert "rvc.model_file" in fields
     assert "rvc.hubert_model_file" in fields
-    assert "rvc.rmvpe_model_file" in fields  # f0_extractor_type の既定は rmvpe
+    assert "rvc.rmvpe_model_file" in fields  # f0_extractor_type defaults to rmvpe
 
 
 def _fields(problems):
@@ -537,6 +537,6 @@ def test_local_role_rejects_udp_transport():
 
 
 def test_local_role_default_transport_has_no_transport_problem():
-    # 既定 (role=local, transport_type=in_process) は transport 問題を出さない。
+    # The defaults (role=local, transport_type=in_process) raise no transport problem.
     cfg = Config.model_validate({"stream_vc": {"enable": True}})
     assert "stream_vc.transport_type" not in _fields(collect_problems(cfg))

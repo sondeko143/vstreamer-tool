@@ -39,7 +39,7 @@ class _FakeModel:
         return False
 
 
-# vvm ファイル名 -> metas
+# vvm file name -> metas
 METAS_BY_NAME: dict[str, list] = {}
 
 
@@ -111,7 +111,7 @@ def test_lazy_load_loads_correct_model_once(voicevox_module, tmp_path):
     vvox.load_model(3)
     assert vvox.is_model_loaded(3)
     assert len(vvox.synthesizer.loaded) == 1
-    vvox.load_model(3)  # 2 回目は再ロードしない
+    vvox.load_model(3)  # the second call does not reload
     assert len(vvox.synthesizer.loaded) == 1
 
 

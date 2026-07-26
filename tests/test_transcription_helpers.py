@@ -164,6 +164,6 @@ async def test_recording_log_write_failure_degrades(monkeypatch, tmp_path):
 
     monkeypatch.setattr(tx.Path, "mkdir", _boom)
     tx._rec_log_warned.clear()
-    # 例外を投げずに返る（プロセスを止めない）
+    # returns without raising (does not stop the process)
     await tx.log_transcribed(tmp_path, BytesIO(b"data"), "text")
     assert str(tmp_path) in tx._rec_log_warned

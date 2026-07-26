@@ -155,11 +155,13 @@ def test_speech_probs_with_carry_threads_state_and_context_across_calls():
 
 
 def test_speech_probs_block_by_block_with_carry_equals_one_whole_call():
-    """carry 付きのブロック分割は、信号を丸ごと 1 回で渡すのと同じ確率を返す。
+    """Splitting into blocks with a carry returns the same probabilities as passing the
+    whole signal in one call.
 
-    streaming は 160ms ブロックごとに呼ぶので、これが成り立たないと RNN が毎回
-    コールドスタートし、明確な有声窓でも低い確率が返る(実録音で 34 窓中 15 窓が
-    threshold 0.3 を割った)。窓単位ゲートはその確率を 1 窓ずつ直接使う。
+    Streaming calls it once per 160ms block, so without this the RNN cold-starts every
+    time and returns low probabilities even for clearly voiced windows (on a real
+    recording, 15 of 34 windows fell below the 0.3 threshold). The per-window gate uses
+    those probabilities directly, one window at a time.
     """
     from vspeech.lib.vad import VadCarry
 
@@ -172,7 +174,8 @@ def test_speech_probs_block_by_block_with_carry_equals_one_whole_call():
         speech_probs(session, audio[i * 1024 : (i + 1) * 1024], carry) for i in range(3)
     ]
     np.testing.assert_allclose(np.concatenate(blocks), whole)
-    # 持ち越さないと確率は別物になる(このテストが本物の差を見ている証拠)
+    # Without the carry the probabilities differ (proof that this test observes a real
+    # difference)
     session2 = _StateDependentStub()
     cold = [speech_probs(session2, audio[i * 1024 : (i + 1) * 1024]) for i in range(3)]
     assert not np.allclose(np.concatenate(cold), whole)

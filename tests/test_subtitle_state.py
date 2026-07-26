@@ -30,7 +30,8 @@ def make_panels() -> dict[str, Texts]:
 
 
 def test_age_panels_only_ages_the_head_entry():
-    # tk バックエンドの 30fps ループは values[0] だけを減らす。壁時計でも同じ意味を保つ。
+    # The tk backend's 30fps loop decrements only values[0]. Keep the same meaning on a
+    # wall clock.
     panels = make_panels()
     panels["n"].values.append(Text(value="first", display_remain_sec=1.0))
     panels["n"].values.append(Text(value="second", display_remain_sec=5.0))

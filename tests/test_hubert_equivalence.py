@@ -1,17 +1,21 @@
-"""ONNX 版 HuBERT の数値等価ゲート。
+"""The numeric equivalence gate of the ONNX HuBERT.
 
-fp32 グラフ: fairseq 時代に scripts/convert_hubert.py が捕獲した特徴量（fp32）を正解とし、
-(9, use_final_proj=True) と (12, use_final_proj=False) の両方を厳密に照合する。
+fp32 graph: the features captured by scripts/convert_hubert.py back in the fairseq era
+(fp32) are the reference, and both (9, use_final_proj=True) and
+(12, use_final_proj=False) are matched strictly.
 
-fp16 グラフ: 参照は **fp32 golden ではなく torch fp16**（置き換え対象の実装）。半精度の
-絶対誤差は hidden state のスケール (O(1)-O(2.5)) に対して 1e-1 オーダーで、現行 runtime の
-HubertModel.half() 自身が fp32 golden 比 cosine 0.987 / max_abs 0.435 を出す。したがって
-fp32 golden を fp16 の参照にすること自体が誤り。問うべきは「ONNX 化で fp16 の振る舞いが
-変わっていないか」であり、参照は scripts/export_hubert_onnx.py が捕獲した
-hubert_golden_fp16.npz。GPU 依存の参照なので CUDA gating 済みの開発機でのみ走る。
+fp16 graph: the reference is **torch fp16, not the fp32 golden** (the implementation being
+replaced). Half precision's absolute error is on the order of 1e-1 relative to the scale
+of the hidden states (O(1)-O(2.5)), and the current runtime's own HubertModel.half()
+scores cosine 0.987 / max_abs 0.435 against the fp32 golden. Using the fp32 golden as an
+fp16 reference is therefore wrong in itself. The question to ask is "did going to ONNX
+change the fp16 behaviour", and the reference for that is the hubert_golden_fp16.npz
+captured by scripts/export_hubert_onnx.py. Being a GPU-dependent reference, it runs only
+on a CUDA-gated development machine.
 
-資産と golden は派生物なので gitignore してある。環境変数が未設定なら skip し、
-CPU/CI のスイートを壊さない（tests/test_change_voice_golden.py と同じ流儀）。
+The assets and goldens are derived artifacts and are gitignored. When the environment
+variables are unset the tests skip, so the CPU/CI suite is not broken (the same style as
+tests/test_change_voice_golden.py).
 """
 
 import os
@@ -37,8 +41,9 @@ ASSET_DIR = Path(_asset) if _asset else None
 GOLDEN_NPZ = Path(_golden) / "hubert_golden.npz" if _golden else None
 GOLDEN_FP16_NPZ = Path(_golden) / "hubert_golden_fp16.npz" if _golden else None
 
-# しきい値 (COSINE_MIN / MAX_ABS_MAX / *_FP16) の単一情報源は scripts/hubert_metrics.py。
-# 緩めるときはそこで変更し、実測値を根拠としてコメントに残すこと（実測の 10 倍まで）。
+# scripts/hubert_metrics.py is the single source of truth for the thresholds
+# (COSINE_MIN / MAX_ABS_MAX / *_FP16). To relax one, change it there and leave the
+# measured value in a comment as the justification (up to 10x the measurement).
 pytestmark = pytest.mark.skipif(
     ASSET_DIR is None
     or not ASSET_DIR.exists()
@@ -51,7 +56,8 @@ CASES = [(9, True, "l9_proj"), (12, False, "l12_raw")]
 
 
 def _compare(device: torch.device, is_half: bool, case) -> tuple[float, float]:
-    """`is_half` は判定に使う参照 npz も選ぶ。fp16 の参照は torch fp16。"""
+    """`is_half` also selects the reference npz used for the check. The fp16 reference is
+    torch fp16."""
     from vspeech.lib.rvc import extract_features
     from vspeech.lib.rvc import load_hubert_model
 
@@ -101,7 +107,8 @@ def test_fp32_features_match_fairseq_golden(
 def test_fp16_features_match_the_torch_fp16_reference(
     emb_output_layer, use_final_proj, golden_key
 ):
-    """ONNX 化で fp16 の振る舞いが変わっていないこと。fp32 golden とは比べない。"""
+    """Going to ONNX did not change the fp16 behaviour. Never compared against the fp32
+    golden."""
     cosine, max_abs = _compare(
         torch.device("cuda", 0), True, (emb_output_layer, use_final_proj, golden_key)
     )

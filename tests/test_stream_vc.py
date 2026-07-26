@@ -31,10 +31,10 @@ def _bare_streaming_vc(
     sola_search_len: int = 80,
     target_sample_rate: int = 48000,
 ):
-    """モデル/GPU 無しで `_emit_with_crossfade` だけを駆動する StreamingVc。
+    """A StreamingVc that drives only `_emit_with_crossfade`, with no model and no GPU.
 
-    `__init__` は torch / rvc extra を要求するので、必要な属性だけ手で埋めた
-    素のインスタンスを作る(CPU のみで emit 長の契約を固定するため)。
+    `__init__` requires torch and the rvc extra, so a bare instance is built with just the
+    needed attributes filled in by hand (to pin the emit-length contract on CPU alone).
     """
     from vspeech.lib.stream_vc import StreamingVc
 
@@ -50,20 +50,23 @@ def _bare_streaming_vc(
 
 
 def test_emit_with_crossfade_hop_is_realtime_clock_not_render_ratio():
-    """emit 長は実時間クロック(block_len*sr/16000)ちょうどで、描画長に依存しない。
+    """The emit length is exactly the real-time clock (block_len*sr/16000) and does not
+    depend on the render length.
 
-    描画長からの比率導出(out_total * block_len / seq_len)だと、HuBERT の受容野が
-    末尾を一定量(約 320 入力サンプル)切り詰めるぶんだけ hop が短くなり、出力
-    デバイスを永続的に飢えさせる(実測 3.03% = 30.3ms/s)。GPU 無しで実値を固定する
-    回帰テスト。「毎tick同じ長さ」だけでは一定だが誤った値を素通しするので、
-    実値と「out_total 非依存」の両方を assert する。
+    Deriving it as a ratio of the render length (out_total * block_len / seq_len) shortens
+    the hop by however much HuBERT's receptive field truncates off the tail (about 320
+    input samples) and permanently starves the output device (measured 3.03% = 30.3ms/s).
+    A regression test that pins the actual value without a GPU. "The same length every
+    tick" alone would let a constant but wrong value through, so both the actual value and
+    independence from out_total are asserted.
     """
     block_len, sr = 2560, 48000
     seq_len = 8000 + block_len
     expected = round(block_len * sr / 16000)
     assert expected == 7680
 
-    # 切り詰め無しの理想長と、実機で実際に返ってくる長さ(受容野ぶん短い)。
+    # The ideal length with no truncation, and the length real hardware actually returns
+    # (shorter by the receptive field).
     ideal_total = round(seq_len * sr / 16000)
     truncated_total = round((seq_len - 320) * sr / 16000)
     assert ideal_total != truncated_total
@@ -73,19 +76,21 @@ def test_emit_with_crossfade_hop_is_realtime_clock_not_render_ratio():
         sv = _bare_streaming_vc(block_len=block_len, target_sample_rate=sr)
         out = np.arange(out_total, dtype=np.int16)
         emitted = [sv._emit_with_crossfade(out).shape[0] for _ in range(4)]
-        assert len(set(emitted)) == 1  # tick 間で一定 = レートロック
+        assert len(set(emitted)) == 1  # constant across ticks = rate lock
         lengths.append(emitted[0])
 
-    # 実値ちょうど、かつ描画長 out_total に依存しない(← バグを捕まえる assert)
+    # Exactly the expected value, and independent of the render length out_total
+    # (this is the assert that catches the bug)
     assert lengths == [expected, expected]
 
 
 def test_emit_delay_is_the_offset_from_the_block_start():
-    """emit の内容は入力ブロック先頭より `emit_delay_samples` だけ手前から始まる。
+    """The emit's content starts `emit_delay_samples` before the start of the input block.
 
-    デコーダ描画は解析窓の先頭に揃い(切り詰めは末尾)、読み出しは末尾アンカーなので、
-    emit は crossfade + SOLA + 受容野の切り詰めぶん手前を鳴らす。VAD ゲートはこの値で
-    マスクをずらして重ねる(ADR-0059)ので、値の契約を CPU で固定する。
+    The decoder render is aligned to the start of the analysis window (the truncation is
+    at the tail) and the read is anchored at the tail, so the emit sounds earlier by the
+    crossfade plus SOLA plus the receptive-field truncation. The VAD gate shifts its mask
+    by this value when overlaying (ADR-0059), so the contract is pinned on CPU.
     """
     block_len, ctx_len, sr = 2560, 8000, 48000
     xf_len, sola_len = 400, 0
@@ -96,7 +101,8 @@ def test_emit_delay_is_the_offset_from_the_block_start():
         sola_search_len=sola_len,
         target_sample_rate=sr,
     )
-    # 実機同様に受容野ぶん(320 入力サンプル)短い描画長。
+    # A render length shortened by the receptive field (320 input samples), as on real
+    # hardware.
     out_total = round((ctx_len + block_len - 320) * sr / 16000)
     sv._emit_with_crossfade(np.arange(out_total, dtype=np.int16))
 
@@ -104,15 +110,18 @@ def test_emit_delay_is_the_offset_from_the_block_start():
     out_xf = round(xf_len * sr / 16000)
     ctx_out = round(ctx_len * sr / 16000)
     assert sv.emit_delay_samples == ctx_out - (out_total - out_hop - out_xf)
-    # 切り詰め(20ms)+ crossfade(25ms) 相当。実測の ~52ms(SOLA 込み)と整合する。
+    # The truncation (20ms) plus the crossfade (25ms). Consistent with the measured ~52ms
+    # (which includes SOLA).
     assert sv.emit_delay_samples == round(0.045 * sr)
 
 
 def test_emit_delay_does_not_move_with_the_sola_lag():
-    """emit 遅延は SOLA が選ぶ lag では動かない(公称の読み出し位置から導く)。
+    """The emit delay does not move with the lag SOLA picks (it is derived from the
+    nominal read position).
 
-    lag を時刻軸に載せると、これを使って出力へ重ねる側(VAD ゲートのマスク)の
-    時刻軸が tick ごとに再アンカーされ、emit の継ぎ目でゲインが跳ぶ(クリック)。
+    Folding the lag into the time axis would re-anchor the time axis of whoever overlays
+    the output with it (the VAD gate's mask) on every tick, making the gain jump at the
+    emit seam (a click).
     """
     block_len, ctx_len, sr = 2560, 8000, 48000
     xf_len, sola_len = 400, 80
@@ -132,7 +141,7 @@ def test_emit_delay_does_not_move_with_the_sola_lag():
     rng = np.random.default_rng(0)
     delays = []
     for _ in range(5):
-        # tick ごとに違う内容 -> SOLA は毎回違う lag を選ぶ
+        # different content every tick -> SOLA picks a different lag each time
         out = (rng.standard_normal(out_total) * 8000).astype(np.int16)
         sv._emit_with_crossfade(out)
         delays.append(sv.emit_delay_samples)
@@ -140,7 +149,8 @@ def test_emit_delay_does_not_move_with_the_sola_lag():
 
 
 def test_emit_delay_without_crossfade_is_the_receptive_field_truncation():
-    """crossfade 無効時の emit 遅延は受容野の切り詰めぶんちょうど。"""
+    """With crossfade disabled, the emit delay is exactly the receptive-field
+    truncation."""
     block_len, ctx_len, sr = 2560, 8000, 48000
     sv = _bare_streaming_vc(
         block_len=block_len,
@@ -158,7 +168,8 @@ def test_emit_delay_without_crossfade_is_the_receptive_field_truncation():
 
 
 def test_emit_with_crossfade_raises_when_output_shorter_than_hop():
-    """描画長が 1 hop に満たないときは黙って短く出さず、原因を言って落ちる。"""
+    """When the render is shorter than one hop, fail and name the cause rather than
+    silently emitting something short."""
     sv = _bare_streaming_vc()
     out = np.arange(4000, dtype=np.int16)  # < hop(7680)
     with pytest.raises(ValueError, match="context_ms"):
@@ -359,14 +370,15 @@ def test_sola_offset_finds_known_shift():
     from vspeech.lib.stream_vc import sola_offset
 
     rng = np.random.default_rng(0)
-    # 振幅は int16 単位(実際に渡るのは out.astype(np.float32))。無音判定は
-    # フルスケール比なので、単位分散のままだと -90dBFS = 実質無音扱いになる。
+    # The amplitude is in int16 units (what is actually passed is
+    # out.astype(np.float32)). The silence test is a ratio of full scale, so leaving unit
+    # variance would read as -90dBFS = effectively silent.
     sig = (rng.standard_normal(4096) * 3000.0).astype(np.float32)
     tail = sig[1000:1500]
     shift = 37
     region = sig[1000 - 100 + shift : 1500 + 100 + shift]
-    # region は sig[937:1637] なので、tail (= sig[1000:1500]) と一致するのは
-    # region 先頭からの index 1000 - 937 = 63 = 100 - shift。
+    # region is sig[937:1637], so it matches tail (= sig[1000:1500]) at index
+    # 1000 - 937 = 63 = 100 - shift from the start of region.
     assert sola_offset(tail, region) == 100 - shift
 
 
@@ -375,34 +387,36 @@ def test_sola_offset_centers_when_tail_digitally_silent():
 
     tail = np.zeros(100, dtype=np.float32)
     region = (np.random.default_rng(1).standard_normal(300) * 3000.0).astype(np.float32)
-    # 「シフト無し」は index 0 ではなく中央 (len(region)-n)//2。呼び出し側が
-    # 探索半幅ぶん手前から region を切るので、0 は最大の負シフトになる。
+    # "No shift" is the centre (len(region)-n)//2, not index 0. The caller cuts region
+    # starting one search half-width earlier, so 0 is the largest negative shift.
     assert sola_offset(tail, region) == (300 - 100) // 2
 
 
 def test_sola_offset_centers_when_tail_is_near_silent_noise_floor():
-    """デジタル無音ではない現実のノイズフロアでも探索せず中央を返す。
+    """Even at a realistic noise floor that is not digital silence, it does not search and
+    returns the centre.
 
-    従来の絶対値 1e-9 判定は完全なデジタル無音でしか発火せず、ノイズ同士を
-    相関させて argmax が事実上ランダムな lag を選んでいた(合わせるべき位相が
-    そもそも無いので、どの lag も等価に「それらしい」)。
+    The previous absolute 1e-9 test only fired on perfect digital silence and let argmax
+    correlate noise against noise, picking an effectively random lag (with no phase to
+    align to, every lag looks equally plausible).
     """
     from vspeech.lib.stream_vc import sola_offset
 
     rng = np.random.default_rng(7)
-    # 実測のノイズフロア RMS 0.000298 * 32768 ≈ 9.8 int16 単位より更に小さい、
-    # しかし 0 ではないレベル。
+    # A level even lower than the measured noise floor of RMS 0.000298 * 32768 ~ 9.8 int16
+    # units, but not zero.
     tail = (rng.standard_normal(100) * 1.0).astype(np.float32)
-    assert np.any(tail != 0.0)  # デジタル無音ではない
+    assert np.any(tail != 0.0)  # not digital silence
     region = (rng.standard_normal(300) * 1.0).astype(np.float32)
     assert sola_offset(tail, region) == (300 - 100) // 2
 
 
 def test_sola_offset_breaks_flat_ties_toward_center():
-    """相関面が完全に平坦なとき index 0 ではなく中央(公称 lag)を選ぶ。"""
+    """On a perfectly flat correlation surface, pick the centre (the nominal lag), not
+    index 0."""
     from vspeech.lib.stream_vc import sola_offset
 
-    # DC 一定なので全 lag の正規化相関が 1.0 = 完全な同点。
+    # Constant DC, so the normalized correlation is 1.0 at every lag = a perfect tie.
     tail = np.full(100, 5000.0, dtype=np.float32)
     region = np.full(300, 5000.0, dtype=np.float32)
     assert sola_offset(tail, region) == (300 - 100) // 2
@@ -411,6 +425,7 @@ def test_sola_offset_breaks_flat_ties_toward_center():
 def test_sola_offset_zero_when_region_too_short():
     from vspeech.lib.stream_vc import sola_offset
 
-    # 窓が 1 つも取れないので中央は定義できない。0 だけが妥当な戻り値。
+    # Not a single window fits, so a centre cannot be defined. 0 is the only sensible
+    # return value.
     tail = np.full(100, 5000.0, dtype=np.float32)
     assert sola_offset(tail, np.full(50, 5000.0, dtype=np.float32)) == 0

@@ -1,8 +1,9 @@
-"""entry point をプロセスとして起動する検証。
+"""Verification that launches the entry point as a process.
 
-CliRunner は出力を UTF-8 の BytesIO に受けるので、Windows の cp932/cp1252 な
-stdout でだけ出る UnicodeEncodeError を再現できない。help もエラーも日本語な
-以上、そこを踏むと `vsctl --help` すら通らないので、実プロセスで確かめる。
+CliRunner receives output into a UTF-8 BytesIO, so it cannot reproduce the
+UnicodeEncodeError that only appears on a Windows cp932/cp1252 stdout. Since both the help
+and the errors are in Japanese, stepping on that breaks even `vsctl --help`, so it is
+checked in a real process.
 """
 
 import os
@@ -11,8 +12,8 @@ import sys
 
 import pytest
 
-# cp1252 は日本語を 1 文字も表現できない。Windows の既定 (cp932) より厳しい
-# 条件を作って、再エンコード漏れがあれば必ず落ちるようにする。
+# cp1252 cannot represent a single Japanese character. This creates a condition stricter
+# than the Windows default (cp932) so that any missed re-encoding always fails.
 NARROW_ENV = {"PYTHONIOENCODING": "cp1252"}
 
 
@@ -38,7 +39,7 @@ def test_help_survives_a_narrow_stdout_encoding(args):
 
 
 def test_usage_error_survives_a_narrow_stdout_encoding():
-    # 使い方エラー (宛先なし) は日本語混じりで stderr に出る。
+    # A usage error (no target) goes to stderr with Japanese mixed in.
     result = run(["ping"], {**NARROW_ENV, "VSPEECH_TARGET": ""})
     assert result.returncode == 2
     assert "UnicodeEncodeError" not in result.stderr

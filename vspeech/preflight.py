@@ -1,9 +1,10 @@
-"""起動時の設定 preflight (層A, ADR-0038)。
+"""Startup config preflight (layer A, ADR-0038).
 
-enable した各 worker の「実リソースを取得せずに安価に判定できる」設定不備
-(必須フィールド・参照ファイル/ディレクトリの存在・デバイス発見可否・依存の
-有無) を検査する。検出した全問題を集約して ConfigError で送出する。実ロードで
-しか分からない失敗は worker 起動時に扱う (層B)。
+For every enabled worker, check the config problems that can be decided cheaply
+without acquiring a real resource (required fields, existence of referenced
+files/directories, device discoverability, presence of dependencies). All detected
+problems are aggregated and raised as a ConfigError. Failures that only surface on a
+real load are handled at worker startup (layer B).
 """
 
 from collections.abc import Callable
@@ -29,7 +30,8 @@ Checker = Callable[[Config], list[ConfigProblem]]
 
 
 def _check_gcp_credentials(gcp: GcpConfig, worker: str) -> list[ConfigProblem]:
-    # 認証の実成立は層B。ここでは指定した key.json の存在だけ安価に見る。
+    # Whether auth actually succeeds is layer B. Here we only cheaply check that the
+    # configured key.json exists.
     if gcp.service_account_file_path is not None:
         path = gcp.service_account_file_path.expanduser()
         if not path.is_file():
@@ -46,10 +48,10 @@ def _check_gcp_credentials(gcp: GcpConfig, worker: str) -> list[ConfigProblem]:
 def _check_vad_gate(
     cfg: TranscriptionConfig | VcConfig | StreamVcConfig, worker: str
 ) -> list[ConfigProblem]:
-    """vad_gate=true なら vad_model_file の実在を要求する。
+    """Require vad_model_file to exist when vad_gate=true.
 
-    触るのは `.vad_gate` / `.vad_model_file` だけなので、同じ二つを持つ設定
-    ならそのまま使える([transcription] / [vc] / [stream_vc] が共有)。
+    Only `.vad_gate` / `.vad_model_file` are touched, so any config carrying those two
+    works as-is ([transcription] / [vc] / [stream_vc] share this).
     """
     if not cfg.vad_gate:
         return []
@@ -98,7 +100,7 @@ def _check_transcription(config: Config) -> list[ConfigProblem]:
             )
     elif tc.worker_type == TranscriptionWorkerType.GCP:
         problems.extend(_check_gcp_credentials(config.gcp, w))
-    # WHISPER のモデル/GPU ロードは層B（起動時取得）。
+    # WHISPER's model/GPU load is layer B (acquired at startup).
     problems.extend(_check_vad_gate(tc, w))
     return problems
 
@@ -152,7 +154,7 @@ def _check_tts(config: Config) -> list[ConfigProblem]:
     if not config.tts.enable:
         return []
     if config.tts.worker_type != TtsWorkerType.VOICEVOX:
-        return []  # VR2 の実初期化は層B
+        return []  # VR2's real initialization is layer B
     w = "tts"
     vv = config.voicevox
     problems: list[ConfigProblem] = []
@@ -181,7 +183,8 @@ def _check_tts(config: Config) -> list[ConfigProblem]:
 def _check_rvc_assets(
     rvc: RvcConfig, worker: str, field_prefix: str
 ) -> list[ConfigProblem]:
-    """RVC モデル資産(本体/HuBERT/f0)の存在検査。[vc] と [stream_vc] が共有。"""
+    """Existence check for the RVC model assets (model/HuBERT/f0). Shared by [vc] and
+    [stream_vc]."""
     problems: list[ConfigProblem] = []
     if not rvc.model_file.expanduser().is_file():
         problems.append(
@@ -234,7 +237,7 @@ def _check_subtitle(config: Config) -> list[ConfigProblem]:
     if not config.subtitle.enable:
         return []
     if config.subtitle.worker_type != SubtitleWorkerType.OBS:
-        return []  # TK は接続先を持たない
+        return []  # TK has no endpoint to connect to
     w = "subtitle"
     subtitle = config.subtitle
     obs = subtitle.obs
@@ -272,12 +275,11 @@ def _check_subtitle(config: Config) -> list[ConfigProblem]:
                 field="subtitle.obs.text_source",
             )
         )
-    # OBS は #rrggbb しか受け付けない (hex_color_to_obs_int) が、TK は
-    # "white" のような Tk 色名も正当に使える。フィールド自体に pydantic
-    # パターンバリデータを付けると動いている TK 設定を壊すので、この検査は
-    # worker_type == OBS のここでしか行わない。ADR-0040 は worker_type の
-    # 切り替えを「同じイベント、別バックエンド」として売っているため、これは
-    # typo ではなく移行経路。
+    # OBS accepts only #rrggbb (hex_color_to_obs_int), whereas TK legitimately accepts
+    # Tk color names such as "white". Attaching a pydantic pattern validator to the
+    # field itself would break working TK configs, so this check lives here, under
+    # worker_type == OBS, and nowhere else. ADR-0040 sells switching worker_type as
+    # "same event, different backend", so this is a migration path, not a typo.
     for name, value in (
         ("subtitle.text.font_color", subtitle.text.font_color),
         ("subtitle.text.outline_color", subtitle.text.outline_color),
@@ -288,8 +290,8 @@ def _check_subtitle(config: Config) -> list[ConfigProblem]:
             hex_color_to_obs_int(value)
         except ValueError as e:
             problems.append(ConfigProblem(w, f"{name}: {e}", field=name))
-    # bg_color だけ TRANSPARENT_BG_COLOR という番兵も正当な値として受け付ける
-    # -- lib/obs_text_settings.build_text_settings の扱いをそのまま踏襲する。
+    # bg_color alone also accepts the TRANSPARENT_BG_COLOR sentinel as a valid value
+    # -- this mirrors how lib/obs_text_settings.build_text_settings treats it.
     if subtitle.bg_color != TRANSPARENT_BG_COLOR:
         try:
             hex_color_to_obs_int(subtitle.bg_color)
@@ -297,7 +299,8 @@ def _check_subtitle(config: Config) -> list[ConfigProblem]:
             problems.append(
                 ConfigProblem(w, f"subtitle.bg_color: {e}", field="subtitle.bg_color")
             )
-    # 認証の成立とソースの実在は層B (接続してからでないと未起動と区別できない, ADR-0042)。
+    # Auth success and source existence are layer B (until we connect they cannot be
+    # told apart from "OBS is not running yet", ADR-0042).
     return problems
 
 
@@ -314,19 +317,19 @@ def _check_stream_vc(config: Config) -> list[ConfigProblem]:
     w = "stream_vc"
     sv = config.stream_vc
     role = sv.role
-    # local (M2, 単一プロセス) は今まで通り capture+vc+playback を全部やる。
-    # producer/consumer (M3, 二機分割, ADR-0055) は片方の役目だけ持つので、
-    # 持たない側の資産/デバイスまで要求すると GPU の無い consumer 機で
-    # 通らない設定を書かされる。
+    # local (M2, single process) still does all of capture+vc+playback. producer and
+    # consumer (M3, split across two machines, ADR-0055) each own only half the job, so
+    # demanding the assets/devices of the half they do not own would force an
+    # unsatisfiable config on a consumer machine with no GPU.
     does_vc = role in (StreamVcRole.local, StreamVcRole.producer)
     does_play = role in (StreamVcRole.local, StreamVcRole.consumer)
     problems: list[ConfigProblem] = []
 
     if does_vc:
         problems += _check_rvc_assets(sv.rvc, w, "stream_vc.rvc")
-        # StreamingVc の guard は ms→サンプル丸め後の長さで判定する。preflight も同じ
-        # サンプル領域で比較し、sub-ms 丸めで preflight は通るが __init__ が ValueError
-        # を投げる境界を無くす。
+        # StreamingVc's guard decides on the lengths after the ms->sample rounding.
+        # Compare in that same sample domain here so there is no boundary where
+        # sub-ms rounding passes preflight but __init__ raises ValueError.
         cf = ms_to_samples(sv.crossfade_ms)
         blk = ms_to_samples(sv.block_ms)
         ctx = ms_to_samples(sv.context_ms)
@@ -346,7 +349,7 @@ def _check_stream_vc(config: Config) -> list[ConfigProblem]:
                     field="stream_vc.crossfade_ms",
                 )
             )
-        # field は "stream_vc.vad_model_file" になる (worker 名がそのまま prefix)。
+        # field becomes "stream_vc.vad_model_file" (the worker name is the prefix).
         problems.extend(_check_vad_gate(sv, w))
         try:
             resolve_stream_vc_input_device(sv)
@@ -362,8 +365,9 @@ def _check_stream_vc(config: Config) -> list[ConfigProblem]:
                 ConfigProblem(w, str(e), field="stream_vc.output_device_index")
             )
 
-    # role≠local は網 transport が要る。in_process のままだと vc の送信を誰も受けず
-    # 全ブロックが黙って drop される(silent misconfig)ので fail-loud で弾く。
+    # role != local needs a network transport. Left on in_process nobody receives what
+    # vc sends and every block is dropped silently (a silent misconfig), so reject it
+    # fail-loud.
     if role is not StreamVcRole.local and sv.transport_type is not TransportType.udp:
         problems.append(
             ConfigProblem(
@@ -372,8 +376,9 @@ def _check_stream_vc(config: Config) -> list[ConfigProblem]:
                 field="stream_vc.transport_type",
             )
         )
-    # 逆向き: role=local は単一マシン (in_process) で完結するので udp 設定は無視される。
-    # 黙って捨てず fail-loud で指摘する(2 機分割の書き間違いを早期に検出)。
+    # The other direction: role=local is self-contained on one machine (in_process), so
+    # a udp setting is ignored. Point it out fail-loud instead of discarding it
+    # silently (catches a mistyped two-machine split early).
     if role is StreamVcRole.local and sv.transport_type is TransportType.udp:
         problems.append(
             ConfigProblem(
@@ -383,7 +388,7 @@ def _check_stream_vc(config: Config) -> list[ConfigProblem]:
                 field="stream_vc.transport_type",
             )
         )
-    # UDP なら role ごとにアドレスが要る。in_process(local)は不要。
+    # With UDP each role needs an address. in_process (local) needs none.
     if sv.transport_type is TransportType.udp:
         if role is StreamVcRole.producer and not (sv.peer_host and sv.peer_port):
             problems.append(
@@ -417,12 +422,13 @@ _CHECKERS: list[Checker] = [
 
 
 def collect_problems(config: Config) -> list[ConfigProblem]:
-    """enable 済み worker の設定不備を集約して返す（送出しない）。
+    """Aggregate and return the config problems of the enabled workers (never raises).
 
-    「何が必須か」の権威はこの module 一つで、起動時の fail-loud (ADR-0038) が
-    唯一の読み手。判断をこの module の外に複製しないこと — かつて GUI が起動前
-    readiness としてこれを再利用していたのは、複製する代わりに呼ぶためだった
-    (ADR-0045、GUI ごと ADR-0061 で撤去)。
+    This module is the single authority on "what is required", and the startup
+    fail-loud (ADR-0038) is its only reader. Do not duplicate that judgement outside
+    this module -- the GUI once reused it as a pre-launch readiness check precisely so
+    it could call instead of duplicate (ADR-0045; removed along with the GUI in
+    ADR-0061).
     """
     problems: list[ConfigProblem] = []
     for checker in _CHECKERS:

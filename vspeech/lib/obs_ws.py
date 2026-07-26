@@ -1,9 +1,9 @@
-"""obs-websocket 5.x クライアント (ADR-0043)。
+"""obs-websocket 5.x client (ADR-0043).
 
-必要なのは Hello(0)/Identify(1)/Identified(2) のハンドシェイクと
-Request(6)/RequestResponse(7) の往復だけで、イベント購読・バッチ・msgpack は
-使わない。websockets の API 変更の影響をこのファイルに
-閉じ込めるため、呼び出し側は ObsTransport 越しにしか触らない。
+All we need is the Hello(0)/Identify(1)/Identified(2) handshake and the
+Request(6)/RequestResponse(7) round trip; event subscriptions, batches and msgpack are
+unused. Callers only ever touch it through ObsTransport, so that the blast radius of a
+websockets API change stays inside this file.
 """
 
 import base64
@@ -20,22 +20,22 @@ from websockets.frames import Close
 
 RPC_VERSION = 1
 
-# Identify の eventSubscriptions に載せる値 (EventSubscription::None)。
+# The value put in Identify's eventSubscriptions (EventSubscription::None).
 #
-# このモジュールはイベントを一切使わない (先頭の docstring 参照) が、それは
-# 「購読しない」ことを OBS に伝えて初めて成立する: obs-websocket はこのキーを
-# 省略されると EventSubscription::All とみなす (プロトコル文書の Identify:
-# `"eventSubscriptions": number(optional) = (EventSubscription::All)`)。
-# 黙っている限り OBS は op 5 のイベントを押し続け、こちらは request() が
-# 応答待ちで recv() している間しか読まない (それ以外の時間、subtitle worker は
-# 自分の in_queue で止まっている) ので、読まれないフレームが溜まる一方になる。
+# This module uses no events at all (see the docstring at the top), but that only holds
+# once OBS is told we are not subscribing: obs-websocket treats an omitted key as
+# EventSubscription::All (from the protocol document's Identify:
+# `"eventSubscriptions": number(optional) = (EventSubscription::All)`). Stay silent and
+# OBS keeps pushing op 5 events, while we only read while request() is in recv() waiting
+# for a response (the rest of the time the subtitle worker is parked on its own
+# in_queue), so unread frames pile up without bound.
 #
-# 溜まった先が問題で、症状は原因とまるで似ていない: 16 フレーム
-# (websockets の max_queue 既定値) を超えると Assembler が
-# transport.pause_reading() を呼び、以後 *あらゆる* フレームの解析が止まる
-# -- Pong も含めて。すると keepalive() は ping_timeout 内に pong を受け取れず、
-# 自分で 1011 "keepalive ping timeout" を送って接続を切る。ローカルホスト
-# 相手に「ping が timeout した」という、原因を指していないログだけが残る。
+# What they pile up into is the problem, and the symptom looks nothing like the cause:
+# past 16 frames (websockets' default max_queue) the Assembler calls
+# transport.pause_reading() and parsing of *every* frame stops -- Pongs included. Then
+# keepalive() never receives a pong within ping_timeout and closes the connection itself
+# with 1011 "keepalive ping timeout". All that is left is a log line saying "the ping
+# timed out" against a localhost peer, which points nowhere near the cause.
 EVENT_SUBSCRIPTION_NONE = 0
 
 OP_HELLO = 0
@@ -46,45 +46,43 @@ OP_REQUEST_RESPONSE = 7
 
 STATUS_RESOURCE_NOT_FOUND = 600
 
-# 生の repr() は危険: OBS (ピア) が選べる JSON のネスト深さに比例して Python
-# の呼び出しスタックを消費するため、json.loads() 自体は生き延びる深さでも
-# repr() だけが RecursionError で落ちる窓がある (オブジェクトのネストで
-# 概ね深さ 9000-9600、残りの C スタックに応じて動く。配列のネストではこの窓
-# は開かない — json.loads() 側が先に力尽きるため)。このモジュールは
-# ObsProtocolError の本文を組み立てる最中にまさにその repr() を呼ぶので、
-# 素の repr() のままだと例外を作ろうとして別の (許容外の) 例外を漏らして
-# しまう。reprlib.Repr は深さを自前のカウンタで打ち切るため安全。
+# A bare repr() is dangerous: it consumes Python call stack in proportion to a JSON
+# nesting depth the peer (OBS) gets to choose, so there is a window where json.loads()
+# itself survives but repr() alone dies with RecursionError (roughly depth 9000-9600 for
+# object nesting, moving with whatever C stack is left; array nesting does not open this
+# window because json.loads() gives out first). This module calls exactly that repr()
+# while composing the body of an ObsProtocolError, so a bare repr() would leak another
+# (unacceptable) exception while trying to build an exception. reprlib.Repr cuts off the
+# depth with its own counter and is therefore safe.
 #
-# maxstring/maxother が制限するのは「葉 (leaf) 1 つあたり」の長さだけで、
-# 総出力長には効かない。maxlevel=6 の
-# 中でも maxlist=6/maxdict=4 は「幅」を許すため、6 段のネストの中に最大
-# 6^6 ≈ 46656 個もの葉 (各 ≤200 文字) が並びうる。実測: 深さ 4 段・幅 6 の
-# 入力 (約 328 KB のフレーム) から 262 KB の例外文字列が組み上がる —
-# json.loads() が生き延びる深さ (RecursionError の窓) にも、
-# 1 リーフの長さにも触れていない。つまり maxstring/maxother は「1 MiB の
-# ピアフレームがそのまま 1 MiB の例外文字列 (ひいてはログ行) になるのを
-# 防ぐ」という副次効果を持たない。総出力長を抑えるのは _bounded_repr() の
-# 役目で、このモジュールの例外メッセージはすべて _SAFE_REPR.repr() を直接
-# 使わず _bounded_repr() 経由にすること。
+# maxstring/maxother only bound the length of a single leaf, not the total output
+# length. Even under maxlevel=6, maxlist=6/maxdict=4 allow "width", so up to
+# 6^6 ~ 46656 leaves (each <= 200 chars) can line up within 6 levels of nesting.
+# Measured: an input 4 levels deep and 6 wide (a frame of about 328 KB) composes a
+# 262 KB exception string -- without touching the depth where json.loads() survives (the
+# RecursionError window) or the length of any single leaf. In other words
+# maxstring/maxother do not have the side effect of "keeping a 1 MiB peer frame from
+# becoming a 1 MiB exception string (and hence log line)". Bounding the total output is
+# _bounded_repr()'s job, so every exception message in this module must go through
+# _bounded_repr() rather than calling _SAFE_REPR.repr() directly.
 _SAFE_REPR = reprlib.Repr(maxlevel=6, maxstring=200, maxother=200)
 
-# _bounded_repr() が返す文字列の上限。9 箇所ある呼び出し元のうち最長の
-# プレフィックス文字列 (request_type を含むもの) がおよそ 60 文字なので、
-# 300 + len("…(truncated)") を足しても例外メッセージ全体は余裕を持って
-# 500 文字を下回る。
+# Upper bound on the string _bounded_repr() returns. The longest prefix among its nine
+# call sites (the one containing request_type) is about 60 characters, so even adding
+# 300 + len("…(truncated)") keeps the whole exception message comfortably under 500
+# characters.
 _BOUNDED_REPR_MAX_CHARS = 300
 
 
 def _bounded_repr(x: Any) -> str:
-    """`_SAFE_REPR.repr(x)` を、レンダリング後の文字列そのものに対して
-    さらに固定の総文字数まで切り詰めて返す。
+    """Return `_SAFE_REPR.repr(x)` further truncated to a fixed total character count,
+    applied to the rendered string itself.
 
-    `_SAFE_REPR` 単体は深さ (`maxlevel`) と葉 1 つあたりの長さ
-    (`maxstring`/`maxother`) しか制限しないため、幅 (`maxlist`/`maxdict`)
-    の分だけ葉が並ぶと、深さに関係なく合計は簡単に数百 KB になりうる
-    (上のモジュールコメント参照)。ここで最終的にレンダリング済みの文字列
-    そのものを切り詰めることで、幅にも深さにも依存しない総量の上限を
-    保証する。
+    `_SAFE_REPR` alone bounds only the depth (`maxlevel`) and the length of a single leaf
+    (`maxstring`/`maxother`), so once the width (`maxlist`/`maxdict`) lines leaves up the
+    total easily reaches hundreds of KB regardless of depth (see the module comment
+    above). Truncating the final rendered string here guarantees a total-size bound that
+    depends on neither width nor depth.
     """
     rendered = _SAFE_REPR.repr(x)
     if len(rendered) <= _BOUNDED_REPR_MAX_CHARS:
@@ -93,17 +91,18 @@ def _bounded_repr(x: Any) -> str:
 
 
 class ObsProtocolError(Exception):
-    """obs-websocket との対話が想定外の形になった。"""
+    """The exchange with obs-websocket took an unexpected shape."""
 
 
 class ObsIdentifyError(ObsProtocolError):
-    """Identify が成立しなかった (認証失敗、Hello/Identified 以外の op が来た、など)。
+    """Identify did not succeed (auth failure, an op other than Hello/Identified, ...).
 
-    RPC バージョン不一致はここでは検査しない: obs-websocket 側がそれを検出
-    すると接続そのものを閉じるため、この関数まで来た時点では起こり得ず、
-    検査しても死んだコードになる。
+    An RPC version mismatch is deliberately not checked here: obs-websocket closes the
+    connection itself when it detects one, so by the time control reaches this function
+    it cannot happen and a check would be dead code.
 
-    リトライしても直らない種類なので、呼び出し側は fail-loud に扱う (ADR-0042)。
+    This kind of failure does not get better on retry, so callers treat it fail-loud
+    (ADR-0042).
     """
 
 
@@ -112,22 +111,21 @@ class ObsRequestError(ObsProtocolError):
         self.request_type = request_type
         self.code = code
         self.comment = comment
-        # comment は OBS 側の自由文字列で長さの取り決めが無い最後の
-        # unbounded な peer->message 経路だった: 呼び出し側 (subtitle worker) はこれをリトライループ
-        # 上で毎回ログするので、悪意/単に冗長なピアがリトライのたびに巨大な
-        # ログ行を吐かせられる。属性 (self.comment) は呼び出し側が生の値を
-        # 読めるよう素通しのまま残し、例外メッセージだけ切り詰める。通常長の
-        # comment はそのまま読めるよう、_SAFE_REPR の repr() 化 (クォート付き
-        # で読みにくくなる) ではなくスライスで済ませる。
+        # comment is a free-form string from OBS with no agreed length limit -- the last
+        # unbounded peer->message path: the caller (the subtitle worker) logs it on every
+        # pass of its retry loop, so a malicious (or merely verbose) peer can make it
+        # emit an enormous log line per retry. The attribute (self.comment) stays
+        # untouched so callers can read the raw value; only the exception message is
+        # truncated. To keep a normal-length comment readable, it is sliced rather than
+        # run through _SAFE_REPR's repr() (which adds quotes and hurts readability).
         #
-        # comment はアノテーション上 str だが、このクラスは公開クラスであり
-        # このモジュール外の呼び出し側 (呼び出し側が独自に組み立てる場合も
-        # 含む) が任意の値で直接構築しうる。ピア経由の 2 箇所の構築元は
-        # どちらも呼び出し前に isinstance(comment, str) を検査済みなので
-        # ここに非 str が来ることはないが、`len(comment)` を無検査で呼ぶと
-        # 例えば `ObsRequestError("X", 1, None)` が素の TypeError で死ぬ。
-        # isinstance で分岐し、非 str でも
-        # コンストラクタ自体は決して例外を漏らさない total な形に戻す。
+        # comment is annotated str, but this is a public class and callers outside this
+        # module (including ones that compose it themselves) can construct it directly
+        # with any value. Both peer-driven construction sites check
+        # isinstance(comment, str) before calling, so a non-str never arrives here, yet
+        # calling `len(comment)` unchecked would make e.g.
+        # `ObsRequestError("X", 1, None)` die with a bare TypeError. Branch on isinstance
+        # so the constructor stays total and never leaks an exception, non-str included.
         if isinstance(comment, str):
             bounded_comment = (
                 comment if len(comment) <= 200 else comment[:200] + "…(truncated)"
@@ -140,11 +138,11 @@ class ObsRequestError(ObsProtocolError):
 
 
 class ObsResourceNotFoundError(ObsRequestError):
-    """指定した input などが OBS に存在しない (code 600)。"""
+    """The named input (or similar) does not exist in OBS (code 600)."""
 
 
 class ObsTransport(Protocol):
-    """websockets の ClientConnection が満たす最小の口。"""
+    """The minimal surface that websockets' ClientConnection satisfies."""
 
     async def send(self, message: str) -> None: ...
 
@@ -154,11 +152,11 @@ class ObsTransport(Protocol):
 
 
 def build_auth_string(password: str, salt: str, challenge: str) -> str:
-    """obs-websocket 5.x の認証文字列を作る。
+    """Build the obs-websocket 5.x authentication string.
 
-    仕様の手順どおり:
-      1. password + salt を sha256 して base64 -> base64 secret
-      2. secret + challenge を sha256 して base64
+    Exactly the steps from the spec:
+      1. sha256 over password + salt, base64-encoded -> the base64 secret
+      2. sha256 over secret + challenge, base64-encoded
     """
     secret = base64.b64encode(
         hashlib.sha256((password + salt).encode("utf-8")).digest()
@@ -168,31 +166,33 @@ def build_auth_string(password: str, salt: str, challenge: str) -> str:
     ).decode("utf-8")
 
 
-# obs-websocket が自らハンドシェイクを拒否したことを表明する専用の close
-# code 帯 (5.x のプロトコル文書 WebSocketCloseCode がここに全ての拒否理由
-# を割り当てている。パスワード誤り = 4009 が実測での唯一の実例で、RPC
-# バージョン不一致・不正な Identify なども同じ帯を使う)。この帯に入る close
-# だけが「再接続しても直らない」と型で示せる signal で、identify() はこれ
-# だけを ObsIdentifyError に変換する。
+# The dedicated close-code band obs-websocket uses to declare that it rejected the
+# handshake itself (the 5.x protocol document's WebSocketCloseCode assigns every
+# rejection reason in here; a wrong password = 4009 is the only case observed in
+# practice, but an RPC version mismatch or a malformed Identify use the same band). A
+# close in this band is the only signal that can state in the type system "reconnecting
+# will not help", and identify() converts only these into ObsIdentifyError.
 #
-# 帯で絞るのが要で、`ConnectionClosed` を一律に拒否とみなしてはいけない:
-# OBS を普通に終了すると 1001 (going away) で切れる (実測)。一律にすれば
-# ユーザーが OBS を閉じるたびに fail-loud が発火し、字幕の都合で音声
-# パイプラインを殺す -- ADR-0042 が存在する理由そのものになる。粒度は
-# 4009 と 1001 の両方を実機で測って初めて決められた。
+# Filtering by the band is the crux; `ConnectionClosed` must not be treated as a
+# rejection wholesale: quitting OBS normally closes with 1001 (going away) (measured).
+# Treating that as a rejection would fire the fail-loud path every time the user closes
+# OBS and kill the audio pipeline over a subtitle concern -- exactly the reason ADR-0042
+# exists. This granularity could only be settled by measuring both 4009 and 1001 on real
+# hardware.
 _HANDSHAKE_REJECTION_CLOSE_CODES = range(4000, 5000)
 
 
 def _handshake_rejection(e: ConnectionClosed) -> Close | None:
-    """`e` が obs-websocket 自身によるハンドシェイク拒否の close なら、その
-    close frame (code/reason) を返す。そうでなければ None。
+    """Return the close frame (code/reason) if `e` is a handshake rejection issued by
+    obs-websocket itself, else None.
 
-    `e.rcvd` は相手 (OBS) から実際に届いた close frame。`e.sent` (自分側が
-    送った close) は判定に使わない -- 拒否理由を表明するのは相手だけなので。
-    close frame を一切受け取らずに切れた場合 (トランスポートの生の切断、
-    `e.rcvd is None`。例: 1006 相当や、プロセスが即死してハンドシェイクの
-    途中で TCP だけ落ちたケース) は判定材料が無いので拒否とは扱わない --
-    「まだ繋がっていないだけ」かもしれず、リトライで直りうる。
+    `e.rcvd` is the close frame actually received from the peer (OBS). `e.sent` (the
+    close we sent) is not used for the decision -- only the peer declares a rejection
+    reason. When the connection dropped without any close frame at all (a raw transport
+    disconnect, `e.rcvd is None`; e.g. the 1006 equivalent, or the process dying
+    instantly so only TCP fell over mid-handshake) there is nothing to judge by, so it is
+    not treated as a rejection -- it may just be "not connected yet" and get better on
+    retry.
     """
     rcvd = e.rcvd
     if rcvd is None:
@@ -203,14 +203,13 @@ def _handshake_rejection(e: ConnectionClosed) -> Close | None:
 
 
 class ObsWsClient:
-    """obs-websocket 5.x の薄いクライアント。
+    """A thin obs-websocket 5.x client.
 
-    Hello(0)/Identify(1)/Identified(2) のハンドシェイクと Request(6)/
-    RequestResponse(7) の往復のみをサポートする。イベント購読・バッチ
-    リクエスト・msgpack シリアライザは扱わない (ADR-0043)。想定外の応答は
-    すべてこのモジュールの例外 (`ObsProtocolError` とそのサブクラス) として
-    送出し、呼び出し側が `OSError` / `websockets` の例外と区別して扱えるように
-    する (ADR-0042)。
+    Supports only the Hello(0)/Identify(1)/Identified(2) handshake and the
+    Request(6)/RequestResponse(7) round trip. Event subscriptions, batch requests and the
+    msgpack serializer are out of scope (ADR-0043). Every unexpected response is raised
+    as an exception of this module (`ObsProtocolError` and its subclasses) so callers can
+    treat them separately from `OSError` and `websockets` exceptions (ADR-0042).
     """
 
     def __init__(self, transport: ObsTransport, timeout: float = 5.0):
@@ -235,12 +234,12 @@ class ObsWsClient:
         try:
             message = json.loads(raw)
         except (ValueError, RecursionError) as e:
-            # json.loads には 2 通りの壊れ方がある: 不正な JSON 構文
-            # (JSONDecodeError, ValueError のサブクラス) と、深すぎるネスト
-            # (RecursionError, RuntimeError のサブクラスで ValueError では
-            # 拾えない)。後者は "[" * N + "]" * N のような数万バイトの ASCII
-            # 文字列だけで作れ、websockets のデフォルト max_size (1 MiB) を
-            # 素通りする transport-valid な入力なので、ここで一緒に拾う。
+            # json.loads breaks in two ways: malformed JSON syntax (JSONDecodeError, a
+            # subclass of ValueError) and nesting that is too deep (RecursionError, a
+            # subclass of RuntimeError that ValueError does not catch). The latter can be
+            # built from a few tens of KB of ASCII such as "[" * N + "]" * N, which is
+            # transport-valid input well inside websockets' default max_size (1 MiB), so
+            # catch it here too.
             raise ObsProtocolError(f"OBS から不正な JSON: {e}") from e
         if not isinstance(message, dict) or "op" not in message:
             raise ObsProtocolError(
@@ -253,54 +252,52 @@ class ObsWsClient:
         return message
 
     async def identify(self, password: str) -> None:
-        """接続直後の Hello を受け取り、必要なら認証して Identify を送り、
-        Identified を待つ。
+        """Receive the Hello that follows connection, authenticate if required, send
+        Identify and wait for Identified.
 
-        接続ごとに一度だけ呼ぶ想定。obs-websocket は Hello/Identified の形式
-        異常だけでなく、ハンドシェイクそのものの拒否 (認証失敗・RPC バージョン
-        不一致・不正な Identify など) もエラーメッセージでは返さない -- 代わりに
-        WebSocket を 4000-4999 (private use) の close code で切る (実測: OBS
-        32.1.2 / obs-websocket 5.7.3、誤ったパスワードで code 4009
-        "Authentication failed.")。この関数は、検出できる失敗を
-        すべて `ObsIdentifyError` (`ObsProtocolError` のサブクラス) として
-        送出する -- リトライしても直らない失敗だと呼び出し側 (ADR-0042) が型で
-        見分けられるようにするため。
+        Intended to be called exactly once per connection. obs-websocket reports neither
+        a malformed Hello/Identified nor a rejection of the handshake itself (auth
+        failure, RPC version mismatch, malformed Identify, ...) as an error message --
+        instead it closes the WebSocket with a close code in 4000-4999 (private use)
+        (measured on OBS 32.1.2 / obs-websocket 5.7.3: a wrong password gives code 4009
+        "Authentication failed."). This function raises every failure it can detect as
+        `ObsIdentifyError` (a subclass of `ObsProtocolError`) so the caller (ADR-0042) can
+        tell "will not get better on retry" apart by type.
 
-        一方、close code が無い (`ConnectionClosed.rcvd is None`、例えば接続が
-        ハンドシェイクの途中で生の TCP レベルで落ちた場合) 切断や、4000-4999
-        帯の外の close (1006 のようなトランスポートレベルの異常切断など) は
-        ハンドシェイクの拒否ではなく、単に OBS にまだ繋がっていないだけかも
-        しれない -- リトライで直りうるので `ObsIdentifyError` には変換せず、
-        `websockets` の `ConnectionClosed` (`WebSocketException` のサブクラス)
-        のまま呼び出し側へ伝播させる。呼び出し側はそれを fail-open (バックオフ
-        再接続) として扱う (ADR-0042)。
+        Conversely, a disconnect with no close code (`ConnectionClosed.rcvd is None`, e.g.
+        the connection dropping at the raw TCP level mid-handshake) or a close outside the
+        4000-4999 band (a transport-level abnormal close such as 1006) is not a handshake
+        rejection and may simply mean OBS is not up yet -- it can get better on retry, so
+        it is not converted to `ObsIdentifyError` and propagates to the caller as
+        `websockets`' `ConnectionClosed` (a subclass of `WebSocketException`). The caller
+        treats that fail-open (reconnect with backoff, ADR-0042).
         """
         try:
             message = await self._recv()
             if message["op"] != OP_HELLO:
-                # message['op'] は _recv() が「キーとして存在する」ことしか保証して
-                # いない生のピア値。f-string の
-                # {x} は format() 経由で結局 dict.__repr__ を呼ぶので、!r を使って
-                # いなくても repr() の再帰ハザードと
-                # 無制限長ハザードを踏む。_bounded_repr() で両方封じる (深さは
-                # reprlib の maxlevel、総幅は _bounded_repr() 自身の切り詰めで)。
+                # message['op'] is a raw peer value that _recv() only guarantees to
+                # "exist as a key". An f-string's {x} still reaches dict.__repr__ through
+                # format(), so it hits both the recursion hazard and the unbounded-length
+                # hazard of repr() even without !r. _bounded_repr() seals both (depth via
+                # reprlib's maxlevel, total width via _bounded_repr()'s own truncation).
                 raise ObsIdentifyError(
                     f"Hello を期待したが op={_bounded_repr(message['op'])} が来た"
                 )
             hello_data = message["d"]
             d: dict[str, Any] = {
                 "rpcVersion": RPC_VERSION,
-                # 省略は「購読しない」ではなく All。EVENT_SUBSCRIPTION_NONE の
-                # コメント参照 -- 黙ると誰も読まないイベントが溜まり、最終的に
-                # keepalive の ping timeout として現れる。
+                # Omitting this means All, not "no subscription". See the comment on
+                # EVENT_SUBSCRIPTION_NONE -- staying silent piles up events nobody reads
+                # and eventually surfaces as a keepalive ping timeout.
                 "eventSubscriptions": EVENT_SUBSCRIPTION_NONE,
             }
-            # 「authentication キーが無い」と「あるが偽値」を区別する: obs-websocket
-            # は認証が要る場合にのみこのキーを載せる。真偽 (`if auth:`) で判定すると
-            # `{}` / `[]` / `0` / `false` / `""` を「認証不要」と誤読して無認証の
-            # Identify を送ってしまい、相手が実際には認証必須なら 4008 で切られて
-            # 呼び出し側が延々リトライすることになる (壊れたハンドシェイクはリトライ
-            # しても直らない)。聞くべきは値の真偽ではなくキーの有無。
+            # Distinguish "no authentication key" from "present but falsy":
+            # obs-websocket includes this key only when authentication is required.
+            # Testing truthiness (`if auth:`) would misread `{}` / `[]` / `0` / `false` /
+            # `""` as "no auth needed" and send an unauthenticated Identify; if the peer
+            # really does require auth it closes with 4008 and the caller retries forever
+            # (a broken handshake does not get better on retry). The question to ask is
+            # whether the key is present, not whether its value is truthy.
             if "authentication" in hello_data:
                 auth = hello_data["authentication"]
                 if not password:
@@ -321,30 +318,30 @@ class ObsWsClient:
                 try:
                     d["authentication"] = build_auth_string(password, salt, challenge)
                 except UnicodeError as e:
-                    # isinstance(salt, str) / isinstance(challenge, str) は UTF-8
-                    # エンコード可能であることまでは保証しない (例:
-                    # json.loads('"\\ud800"') は非対の surrogate を含む str を返す)。
-                    # build_auth_string() 自身はこの節の探索対象外の純粋関数として
-                    # 残す (専用ユニットテストを持つ) ので、ここで包んで
-                    # identify 時の失敗として fail-loud にする (ADR-0042)。
+                    # isinstance(salt, str) / isinstance(challenge, str) do not guarantee
+                    # the string is UTF-8 encodable (e.g. json.loads('"\\ud800"') returns
+                    # a str containing an unpaired surrogate). build_auth_string() itself
+                    # stays a pure function outside this concern (it has its own unit
+                    # tests), so wrap it here and fail loud as a failure of identify
+                    # (ADR-0042).
                     raise ObsIdentifyError(
                         f"OBS の authentication の salt/challenge が UTF-8 として不正: {e}"
                     ) from e
             await self._send(OP_IDENTIFY, d)
             message = await self._recv()
             if message["op"] != OP_IDENTIFIED:
-                # 上の Hello ガードと同じハザード。
+                # The same hazard as the Hello guard above.
                 raise ObsIdentifyError(
                     f"Identified を期待したが op={_bounded_repr(message['op'])} が来た"
                 )
         except ConnectionClosed as e:
-            # obs-websocket はエラーメッセージを送らず、close code で拒否を
-            # 表明する (このメソッドの docstring 参照)。
+            # obs-websocket sends no error message; it declares the rejection through the
+            # close code (see this method's docstring).
             rejection = _handshake_rejection(e)
             if rejection is None:
-                # ハンドシェイクの拒否ではない、ただの (リトライで直りうる)
-                # 切断。ObsIdentifyError には変換せず、ConnectionClosed の
-                # まま呼び出し側の fail-open 経路へ渡す。
+                # Not a handshake rejection, just a (retryable) disconnect. Do not convert
+                # it to ObsIdentifyError; hand it to the caller's fail-open path as
+                # ConnectionClosed.
                 raise
             raise ObsIdentifyError(
                 f"OBS がハンドシェイクを拒否した: {rejection}"
@@ -353,13 +350,13 @@ class ObsWsClient:
     async def request(
         self, request_type: str, request_data: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """obs-websocket に Request を送り、対応する RequestResponse を待って
-        `responseData` を返す。
+        """Send a Request to obs-websocket, wait for the matching RequestResponse and
+        return its `responseData`.
 
-        **並行呼び出しに対して安全ではない。** 2 回の呼び出しが同時に走ると、
-        どちらも同じ `_recv()` ストリームを消費するため互いの応答を取り違え
-        うる。呼び出し側 (subtitle worker) が 1 リクエストずつ順に呼ぶことを
-        前提にした設計であり、直す必要のあるバグではなく明文化した制約。
+        **Not safe for concurrent calls.** Two calls running at once both consume the
+        same `_recv()` stream and can pick up each other's responses. The design assumes
+        the caller (the subtitle worker) issues one request at a time; this is a
+        documented constraint, not a bug to fix.
         """
         request_id = str(uuid4())
         await self._send(
@@ -371,12 +368,12 @@ class ObsWsClient:
             },
         )
         while True:
-            # 集約デッドライン無し (per-recv の self._timeout のみ)。無関係な
-            # メッセージを timeout より速く送り続ける相手だとここが詰まりうる
-            # が、対象はローカル OBS でありリスクは低いと判断して見送った。
-            # 再現する運用が出たらここに集約デッドラインを足す。
+            # No aggregate deadline (only the per-recv self._timeout). A peer that keeps
+            # sending unrelated messages faster than the timeout could stall this loop,
+            # but the peer is a local OBS and the risk was judged low, so it was left
+            # out. Add an aggregate deadline here if a deployment ever reproduces it.
             message = await self._recv()
-            # イベント (op 5) や他リクエストの応答は捨てる。
+            # Discard events (op 5) and responses belonging to other requests.
             if message["op"] != OP_REQUEST_RESPONSE:
                 continue
             d = message["d"]
@@ -390,27 +387,24 @@ class ObsWsClient:
             if not status.get("result"):
                 code = status.get("code", 0)
                 comment = status.get("comment", "")
-                # ObsRequestError.code/comment のアノテーション (int/str) を
-                # 嘘にしないための型検査。これが無いと 2 つ実害が出る:
-                # (1) `code == STATUS_RESOURCE_NOT_FOUND` は int の 600 としか
-                #     一致しないので、相手が "600" (str) を送ると
-                #     ObsResourceNotFoundError が汎用の ObsRequestError に
-                #     こっそり降格し、呼び出し側の「リソースが無い」専用の
-                #     fail-loud 経路が発火しなくなる。
-                # (2) 検査を通さないと e.code / e.comment が str/list/dict/None
-                #     になりうり、呼び出し側の `e.comment.lower()` のような
-                #     アノテーション通りのコードが素の AttributeError で死ぬ。
-                # ここは requestStatus 自体が壊れているケースなので、
-                # ObsRequestError ではなく ObsProtocolError で fail-loud にする
-                # (`code`/`comment` を捏造して ObsRequestError を作ると同じ嘘を
-                # 一段先送りするだけ)。
-                # isinstance(True, int) は True になる (bool は int のサブクラス)
-                # ため、素の isinstance(code, int) だけだと相手が code に
-                # JSON の true/false を送ってきても素通りし、
-                # ObsRequestError.code に (600 とは絶対に一致しない) bool が
-                # 入ってしまう。これは「ガードが証明していることが足りない」
-                # という、このモジュールで繰り返し踏んでいる形そのものなので
-                # bool を明示的に除外する。
+                # Type checks that keep ObsRequestError.code/comment's annotations
+                # (int/str) honest. Without them two real harms follow:
+                # (1) `code == STATUS_RESOURCE_NOT_FOUND` only matches the int 600, so a
+                #     peer sending "600" (str) quietly demotes ObsResourceNotFoundError
+                #     to the generic ObsRequestError and the caller's dedicated
+                #     "resource missing" fail-loud path never fires.
+                # (2) Unchecked, e.code / e.comment can be str/list/dict/None, and caller
+                #     code written to the annotations (such as `e.comment.lower()`) dies
+                #     with a bare AttributeError.
+                # This is the case where requestStatus itself is broken, so fail loud
+                # with ObsProtocolError rather than ObsRequestError (fabricating
+                # `code`/`comment` to build an ObsRequestError would only defer the same
+                # lie by one step).
+                # isinstance(True, int) is True (bool is a subclass of int), so a bare
+                # isinstance(code, int) would let a peer send JSON true/false as code and
+                # put a bool -- which can never equal 600 -- into ObsRequestError.code.
+                # That is exactly the "the guard proves less than it appears to" shape
+                # this module keeps running into, so exclude bool explicitly.
                 if (
                     not isinstance(code, int)
                     or isinstance(code, bool)
@@ -427,10 +421,10 @@ class ObsWsClient:
             if response_data is None:
                 return {}
             if not isinstance(response_data, dict):
-                # requestStatus の isinstance 検査と非対称にしない: responseData
-                # だけ無検査だと、呼び出し側 (subtitle worker) の
-                # `result["inputSettings"]` のようなアクセスで同じバグ形が
-                # 1 フレーム先送りされて素の TypeError になる。
+                # Do not make this asymmetric with the isinstance checks on
+                # requestStatus: leaving responseData unchecked defers the same bug shape
+                # by one frame, into an access like `result["inputSettings"]` in the
+                # caller (the subtitle worker), where it becomes a bare TypeError.
                 raise ObsProtocolError(
                     f"{request_type} の応答の responseData が不正な形:"
                     f" {_bounded_repr(response_data)}"

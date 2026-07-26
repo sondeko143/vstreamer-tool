@@ -20,9 +20,9 @@ def test_secret_roundtrip_via_model_dump_json():
     assert cfg.gcp.service_account_info["private_key"].get_secret_value() == "gcpsecret"
 
     dumped = cfg.model_dump_json()
-    # field_serializer(when_used="json") により秘密値は平文で出力される。当初の動機
-    # だった GUI→本体の受け渡しは ADR-0060 で無くなったが、JSON config
-    # (`--config x.json`) を書き出して読み直す経路がこれに依存している。
+    # field_serializer(when_used="json") makes the secrets serialize as plaintext. The
+    # original motivation, the GUI-to-main handoff, went away in ADR-0060, but the path
+    # that writes a JSON config (`--config x.json`) and reads it back depends on this.
     data = json.loads(dumped)
     assert data["ami"]["appkey"] == "topsecret"
     assert data["gcp"]["service_account_info"]["private_key"] == "gcpsecret"
@@ -79,17 +79,18 @@ def _iter_secret_str_fields(model: type[BaseModel], prefix: str = ""):
 
 
 def test_every_secret_str_field_survives_export_to_toml():
-    """export_to_toml() は SecretStr を手作業でフィールド名指定して展開している
-    (vspeech/config.py の export_to_toml 参照)。新しい SecretStr フィールドを
-    足してその手作業リストへの追加を忘れると、model_dump() が返す生の SecretStr
-    オブジェクトが toml.dumps に渡り、マスクされた値 ("**********") か
-    "SecretStr(...)" の repr が書き出される -- GUI の保存経路がユーザーの実
-    config ファイルを静かに壊す。
+    """export_to_toml() expands SecretStr by naming each field by hand (see
+    export_to_toml in vspeech/config.py). Adding a new SecretStr field and forgetting to
+    add it to that manual list hands the raw SecretStr object returned by model_dump() to
+    toml.dumps, which writes either the masked value ("**********") or the
+    "SecretStr(...)" repr -- silently corrupting the user's real config file through the
+    saving path.
 
-    ここでは Config.model_fields を再帰的に歩いて SecretStr 型のフィールドを
-    機械的に列挙する (ハードコードされた一覧ではない)。見つけた各フィールドに
-    識別可能な sentinel をセットし、export_to_toml() の出力に平文で現れる
-    こと、マスク済みマーカーや SecretStr の repr が一切現れないことを検証する。
+    This test walks Config.model_fields recursively and enumerates the SecretStr-typed
+    fields mechanically (not from a hard-coded list). Each field it finds is set to an
+    identifiable sentinel, and the test verifies that the sentinel appears in
+    export_to_toml()'s output as plaintext and that no masked marker or SecretStr repr
+    appears anywhere.
     """
     fields = list(_iter_secret_str_fields(Config))
     assert fields, (

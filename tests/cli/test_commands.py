@@ -1,7 +1,8 @@
-"""CLI の表面 — 引数の解釈、出力、終了コード。
+"""The CLI's surface -- argument interpretation, output, and exit codes.
 
-送信そのものは差し替えて、CLI が「何を送ろうとしたか」と「結果をどう返すか」
-だけを見る。実際に届くかは test_client.py が受け側まで通して確かめている。
+The sending itself is substituted, so this only observes "what the CLI tried to send" and
+"how it reports the result". Whether it actually arrives is checked by test_client.py,
+which pushes through to the receiving side.
 """
 
 import pytest
@@ -16,7 +17,7 @@ from vspeech.config import EventType
 
 @pytest.fixture
 def sent(monkeypatch):
-    """send() を捕まえて呼び出し引数を記録する。既定は成功を返す。"""
+    """Capture send() and record the call arguments. Returns success by default."""
     calls: list[dict] = []
 
     def fake_send(address, event, config_path="", timeout=None):
@@ -70,7 +71,7 @@ def test_failure_exits_nonzero_with_the_reason(monkeypatch):
         ),
     )
     result = invoke(["pause", "--to", "host.example:8080"])
-    # 終了コードが操作の成否そのものであること — スクリプトから繋げるため。
+    # The exit code is the outcome of the operation itself -- so it chains from a script.
     assert result.exit_code == 1
     assert "NG" in result.output
     assert "DEADLINE_EXCEEDED" in result.output
@@ -115,7 +116,7 @@ def test_timeout_is_forwarded(sent):
 
 
 def test_a_target_without_a_port_is_rejected_before_sending(sent):
-    # port 無しを通すと gRPC 側で deadline まで無反応になる。
+    # Letting a portless target through means no response from gRPC until the deadline.
     result = invoke(["ping", "--to", "host.example"])
     assert result.exit_code == 2
     assert not sent

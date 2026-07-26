@@ -55,7 +55,7 @@ pytestmark = [
 
 
 async def test_voicevox_e2e_synthesis():
-    # 実資産がある環境でのみ実行。voicevox_core が import される。
+    # Runs only where the real assets exist. This imports voicevox_core.
     from vspeech.lib.voicevox import Voicevox
 
     style_index = Voicevox._build_style_index(_MODELS.expanduser())

@@ -166,16 +166,16 @@ def test_element_type_rejects_unsupported_dtype():
 
 
 def test_ort_output_to_torch_falls_back_to_numpy():
-    """dlpack が使えない ORT 値でも numpy 経由で torch tensor を返すこと。"""
+    """Even for an ORT value without dlpack, a torch tensor comes back via numpy."""
     import numpy as np
     import torch
 
     from vspeech.lib.rvc import _ort_output_to_torch
 
-    # 繰り延べ: このスタブは _ortvalue も to_dlpack も持たないので、内側の
-    # `except AttributeError` から想定外の AttributeError で外側 `except Exception`
-    # に落ちて numpy fallback に至る。「dlpack が無い」のか「dlpack が壊れている」のかを
-    # このテストは区別できない。
+    # Deferred: this stub has neither _ortvalue nor to_dlpack, so an unexpected
+    # AttributeError from the inner `except AttributeError` falls through to the outer
+    # `except Exception` and reaches the numpy fallback. This test cannot tell "dlpack is
+    # absent" apart from "dlpack is broken".
     class _NoDlpack:
         def numpy(self):
             return np.arange(6, dtype=np.float32).reshape(1, 2, 3)
@@ -188,11 +188,12 @@ def test_ort_output_to_torch_falls_back_to_numpy():
 
 
 def test_get_device_treats_gpu_id_zero_as_a_real_device(monkeypatch):
-    """`gpu_id = 0` は「未設定」ではなく cuda:0。
+    """`gpu_id = 0` means cuda:0, not "unset".
 
-    「未設定」を表すのは `None`（`gpu_id: int | None = None`）。`if gpu_id and ...` と
-    書くと 0 が falsy で弾かれ、`config.toml.example` が載せている `gpu_id = 0` の構成が
-    CPU device に落ちる。すると `check_cuda_provider` が vc worker の起動時に落ちる。
+    "Unset" is `None` (`gpu_id: int | None = None`). Writing `if gpu_id and ...` would
+    reject 0 as falsy and drop the `gpu_id = 0` configuration shown in
+    `config.toml.example` down to a CPU device -- which then makes `check_cuda_provider`
+    fail at vc worker startup.
     """
     import torch
 

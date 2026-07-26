@@ -1,8 +1,9 @@
-"""ストリーミング VC の生 UDP transport(ADR-0051 T3)。
+"""The raw UDP transport of streaming VC (ADR-0051 T3).
 
-producer は 1 ブロック 1 データグラムを送るだけ、consumer は受信を Queue に積み
-recv/poll で出す。並べ替え・穴埋め・遅延上限は持たない(それは JitterBuffer =
-ADR-0056)。asyncio の datagram endpoint を使うので追加依存は無い。
+The producer just sends one datagram per block; the consumer pushes what it receives
+onto a Queue and hands it out through recv/poll. It holds no reordering, concealment or
+delay ceiling (that is the JitterBuffer = ADR-0056). It uses asyncio's datagram
+endpoint, so there is no extra dependency.
 """
 
 from __future__ import annotations
@@ -25,18 +26,20 @@ from vspeech.stream_vc.wire import encode_packet
 
 
 class _SendProtocol(DatagramProtocol):
-    """producer 送信専用エンドポイントのプロトコル。
+    """The protocol of the producer's send-only endpoint.
 
-    UDP の送信失敗(到達不可・route 消失・ICMP port-unreachable 等)は asyncio では
-    sendto() が同期例外を投げず、後から error_received へ非同期に届く(Windows Proactor /
-    Selector 双方)。ここで捕えてログ+telemetry に通し、送信側の失敗が黙って消えない
-    ようにする(silent な無音穴を作らない)。非同期なので特定 packet には紐付かない。
+    In asyncio a UDP send failure (unreachable peer, lost route, ICMP port-unreachable,
+    ...) does not raise synchronously from sendto(); it arrives asynchronously at
+    error_received later (on both the Windows Proactor and Selector loops). Catch it here
+    and route it to the log and telemetry so a send-side failure never disappears
+    silently (never punch a silent hole). Being asynchronous it is not tied to a
+    particular packet.
     """
 
     def __init__(self) -> None:
-        # UDP のプロトコルコールバックはパケットレートで発火しうる(peer down なら
-        # datagram ごとに ICMP)。ログは時間で絞り、telemetry は毎回記録する
-        # (ADR-0062)。
+        # UDP protocol callbacks can fire at packet rate (one ICMP per datagram when the
+        # peer is down). Throttle the log by time and record telemetry every time
+        # (ADR-0062).
         self._error_throttle = LogThrottle()
 
     def error_received(self, exc: Exception) -> None:
@@ -51,9 +54,10 @@ class UdpProducerTransport(Transport):
         self._protocol = protocol
 
     async def send(self, packet: StreamPacket) -> bool:
-        # sendto は非同期な送信失敗(到達不可等)を同期例外にしない — それらは
-        # _SendProtocol.error_received でログ+telemetry される。ここで捕える OSError は
-        # 稀な同期失敗(message too long 等)のみで、その場合は send_drop として False。
+        # sendto does not turn asynchronous send failures (unreachable peer, ...) into
+        # synchronous exceptions -- those are logged and recorded by
+        # _SendProtocol.error_received. The OSError caught here is only the rare
+        # synchronous failure (message too long, ...), which returns False as a send_drop.
         try:
             self._transport.sendto(encode_packet(packet))
             return True
@@ -69,19 +73,21 @@ class UdpProducerTransport(Transport):
 
 
 class _RecvProtocol:
-    """datagram を decode して Queue へ。満杯なら最古を捨てる(遅延の張り付き防止)。"""
+    """Decode a datagram onto the Queue. When full, drop the oldest (so latency does not
+    stick)."""
 
     def __init__(self, queue: Queue[StreamPacket]) -> None:
         self._queue = queue
-        # _SendProtocol と同じ理由の時間ベース間引き(ADR-0062)。
+        # Time-based thinning for the same reason as _SendProtocol (ADR-0062).
         self._malformed_throttle = LogThrottle()
         self._error_throttle = LogThrottle()
 
     def connection_made(self, transport: Any) -> None:
         self._transport = transport
 
-    # asyncio はプロトコルを duck typing で駆動するため DatagramProtocol の継承は不要。
-    # 引数名 `_addr` は vulture の unused-arg 規約(既存 fix pass 2)に合わせて維持。
+    # asyncio drives protocols by duck typing, so subclassing DatagramProtocol is not
+    # needed. The parameter name `_addr` is kept to match vulture's unused-arg convention
+    # (from the existing fix pass 2).
     def datagram_received(self, data: bytes, _addr: Any) -> None:
         try:
             packet = decode_packet(data)

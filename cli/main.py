@@ -1,10 +1,14 @@
-"""走っている vspeech pipeline へ制御コマンドを送る CLI (ADR-0061)。
+"""The CLI that sends control commands to a running vspeech pipeline (ADR-0061).
 
-`vsctl <操作> --to <host:port>` の 1 発ずつ。宛先は保存しない — 環境変数
-`VSPEECH_TARGET` を既定値として読むので、繰り返し叩くときはそちらへ置く。
+One shot per invocation: `vsctl <operation> --to <host:port>`. The target is never
+stored -- the environment variable `VSPEECH_TARGET` is read as the default, so put it
+there when invoking repeatedly.
 
-終了コードは操作の成否そのもの (0 = 相手が受け取った / 1 = 失敗) なので、
-スクリプトから `&&` で繋げられる。
+The exit code is the outcome of the operation itself (0 = the peer accepted it,
+1 = failure), so it chains with `&&` from a script.
+
+Note: the docstrings of the click group and its commands are the `--help` text the user
+reads, so they stay in Japanese; every other docstring and comment here is English.
 """
 
 from collections.abc import Callable
@@ -23,10 +27,11 @@ TARGET_ENVVAR = "VSPEECH_TARGET"
 
 
 def normalize_address(address: str) -> str:
-    """`host:port` を検証して返す。
+    """Validate `host:port` and return it.
 
-    port の付け忘れをここで弾く。gRPC は port 無しの target をそのまま受けて
-    名前解決に失敗するまで待つので、通すと「deadline まで無反応」になる。
+    A forgotten port is rejected here. gRPC accepts a target with no port as-is and waits
+    until name resolution fails, so letting it through means "no response until the
+    deadline".
     """
     text = address.strip()
     host, separator, port_text = text.rpartition(":")
@@ -38,15 +43,15 @@ def normalize_address(address: str) -> str:
         raise click.BadParameter(f"port が数値ではありません: {port_text!r}") from None
     if not 1 <= port <= 65535:
         raise click.BadParameter(f"port が範囲外です: {port}")
-    # IPv6 リテラルは角括弧が要る。無いと最初の ":" が port 区切りとして読まれ、
-    # `::1` が host "::" port 1 として通ってしまう。
+    # An IPv6 literal needs square brackets. Without them the first ":" is read as the
+    # port separator and `::1` would pass as host "::" with port 1.
     if ":" in host and not (host.startswith("[") and host.endswith("]")):
         raise click.BadParameter(f"IPv6 は [..] で囲んでください: {address!r}")
     return f"{host}:{port}"
 
 
 def target_options(command: Callable[..., Any]) -> Callable[..., Any]:
-    """全サブコマンド共通の宛先オプション。"""
+    """The destination options shared by every subcommand."""
     command = click.option(
         "--timeout",
         type=float,
@@ -65,7 +70,7 @@ def target_options(command: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def report(address: str, event: EventType, result: SendResult) -> None:
-    """結果を 1 行で出し、失敗なら終了コード 1 で抜ける。"""
+    """Print the result on one line and exit with code 1 on failure."""
     line = (
         f"{'OK' if result.ok else 'NG'}  {address}  "
         f"{event.value}  {result.elapsed_ms:.0f}ms"
@@ -125,20 +130,21 @@ def reload(address: str, timeout: float, config_path: str) -> None:
     パスは対象マシンのファイルシステム上で解決される。こちらに同じファイルが
     あるかは無関係なので、存在確認もしない。
     """
-    # 空文字は受け側の validation で弾かれるだけで理由が分かりにくいので、
-    # click 側で先に落とす (required=True では空文字列を通してしまう)。
+    # An empty string would only be rejected by the peer's validation, where the reason is
+    # hard to see, so reject it earlier in click (required=True lets an empty string
+    # through).
     if not config_path.strip():
         raise click.BadParameter("--config-path が空です")
     run(address, EventType.reload, timeout, config_path=config_path.strip())
 
 
 def main() -> None:
-    """entry point (`vsctl`)。
+    """The entry point (`vsctl`).
 
-    click に何か出させる前に stdout/stderr を UTF-8 へ差し替える。Windows の
-    既定は cp932/cp1252 で、この CLI の help もエラーも日本語なので、素のままだと
-    `vsctl --help` が UnicodeEncodeError で落ちる (vspeech.logger と同じ罠)。
-    backslashreplace で「読める UTF-8 を出す」かつ「絶対に落ちない」。
+    Switches stdout/stderr to UTF-8 before letting click print anything. The Windows
+    default is cp932/cp1252, and this CLI's help and errors are in Japanese, so left as-is
+    `vsctl --help` dies with UnicodeEncodeError (the same trap as vspeech.logger).
+    backslashreplace gives both "readable UTF-8 out" and "never crashes".
     """
     for stream in (stdout, stderr):
         try:

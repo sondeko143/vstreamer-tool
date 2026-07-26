@@ -17,7 +17,8 @@ class HostAPIInfo(BaseModel):
 
 
 class DeviceInfo(BaseModel):
-    # sounddevice の device dict は snake_case。host api の key だけ `hostapi` なので別名で拾う。
+    # sounddevice's device dict is snake_case. Only the host api key is `hostapi`, so
+    # pick it up under an alias.
     model_config = ConfigDict(populate_by_name=True)
 
     host_api: int = Field(validation_alias=AliasChoices("hostapi", "host_api"))
@@ -101,10 +102,10 @@ def _resolve_device(
     input: bool = False,
     output: bool = False,
 ) -> DeviceInfo:
-    """`resolve_input_device` / `resolve_output_device` の共有本体 (ADR-0038)。
+    """The shared body of `resolve_input_device` / `resolve_output_device` (ADR-0038).
 
-    index 指定があれば優先し、無ければ host_api / name で検索する。見つから
-    なければ DeviceNotFoundError（メッセージは呼び出し側の config key を含む）。
+    An explicit index wins; otherwise search by host_api / name. If nothing is found,
+    raise DeviceNotFoundError (its message carries the caller's config key).
     """
     if index is not None:
         try:
@@ -127,9 +128,9 @@ def _resolve_device(
 
 
 def resolve_input_device(config: RecordingConfig) -> DeviceInfo:
-    """録音入力デバイスを解決する。見つからなければ DeviceNotFoundError。
+    """Resolve the recording input device. Raises DeviceNotFoundError if absent.
 
-    preflight と recording worker が同じ経路を通る (ADR-0038)。
+    preflight and the recording worker go through the same path (ADR-0038).
     """
     return _resolve_device(
         index=config.input_device_index,
@@ -143,9 +144,9 @@ def resolve_input_device(config: RecordingConfig) -> DeviceInfo:
 
 
 def resolve_output_device(config: PlaybackConfig) -> DeviceInfo:
-    """再生出力デバイスを解決する。見つからなければ DeviceNotFoundError。
+    """Resolve the playback output device. Raises DeviceNotFoundError if absent.
 
-    preflight と playback worker が同じ経路を通る (ADR-0038)。
+    preflight and the playback worker go through the same path (ADR-0038).
     """
     return _resolve_device(
         index=config.output_device_index,
@@ -159,7 +160,7 @@ def resolve_output_device(config: PlaybackConfig) -> DeviceInfo:
 
 
 def resolve_stream_vc_input_device(config: StreamVcConfig) -> DeviceInfo:
-    """streaming VC の独立入力デバイスを解決する (preflight と capture が同経路)。"""
+    """Resolve streaming VC's own input device (preflight and capture share the path)."""
     return _resolve_device(
         index=config.input_device_index,
         index_key="stream_vc.input_device_index",
@@ -172,7 +173,7 @@ def resolve_stream_vc_input_device(config: StreamVcConfig) -> DeviceInfo:
 
 
 def resolve_stream_vc_output_device(config: StreamVcConfig) -> DeviceInfo:
-    """streaming VC の出力デバイスを解決する (preflight と playback が同経路)。"""
+    """Resolve streaming VC's output device (preflight and playback share the path)."""
     return _resolve_device(
         index=config.output_device_index,
         index_key="stream_vc.output_device_index",

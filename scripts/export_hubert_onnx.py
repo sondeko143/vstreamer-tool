@@ -1,29 +1,31 @@
-"""transformers HubertModel 資産 (hubert_contentvec/) を ONNX へ export する。
+"""Export the transformers HubertModel assets (hubert_contentvec/) to ONNX.
 
-**一度きり**のオフライン処理。runtime には含めない。依存 (transformers / onnx /
-onnxscript) は poe task の `uv run --with` が一時環境で供給する。
+A **one-shot** offline step, not part of the runtime. Its dependencies (transformers /
+onnx / onnxscript) are supplied in a temporary environment by the poe task's
+`uv run --with`.
 
     uv run poe export-hubert-onnx --asset ./hubert_contentvec --golden ./hubert_golden
 
-`python scripts/export_hubert_onnx.py` ではなく **`python -m scripts.export_hubert_onnx`**
-で起動すること（前者は sys.path[0] が scripts/ になり `from scripts...` / `from vspeech...`
-の import が解決しない）。
+Launch it as **`python -m scripts.export_hubert_onnx`**, not
+`python scripts/export_hubert_onnx.py` (the latter makes sys.path[0] be scripts/, where
+the `from scripts...` / `from vspeech...` imports do not resolve).
 
-出力:
-  <asset>/hubert_fp32.onnx    fp32 グラフ
-  <asset>/hubert_fp16.onnx    CUDA 上で model.half() を export した fp16 グラフ
-  <asset>/mapping.json        出力名 <-> (layer, use_final_proj) の対応表（上書き）
-  <golden>/hubert_golden_fp16.npz  torch fp16 の出力（fp16 ゲートの参照）
+Outputs:
+  <asset>/hubert_fp32.onnx    the fp32 graph
+  <asset>/hubert_fp16.onnx    the fp16 graph, exported from model.half() on CUDA
+  <asset>/mapping.json        output name <-> (layer, use_final_proj) table (overwritten)
+  <golden>/hubert_golden_fp16.npz  the torch fp16 output (the fp16 gate's reference)
 
-ゲートの参照:
-  fp32 グラフ -> <golden>/hubert_golden.npz（fairseq 由来の fp32 正解）
-  fp16 グラフ -> torch fp16（置き換え対象の実装）。fp32 golden ではない。
-                 半精度の絶対誤差は hidden state のスケールに対して 1e-1 オーダーで、
-                 現行 runtime 自身が fp32 golden 比 cosine 0.987 / max_abs 0.435 を出す。
+The gates' references:
+  fp32 graph -> <golden>/hubert_golden.npz (the fp32 reference derived from fairseq)
+  fp16 graph -> torch fp16 (the implementation being replaced), not the fp32 golden.
+                Half precision's absolute error is on the order of 1e-1 relative to the
+                scale of the hidden states, and the current runtime itself scores
+                cosine 0.987 / max_abs 0.435 against the fp32 golden.
 
-final_proj はグラフに焼き込む。したがって runtime は safetensors も
-torch.nn.Linear も要らない。export の正しさはこのスクリプト自身がアサートし、
-通らなければ資産を書き出さない。
+final_proj is baked into the graph, so the runtime needs neither safetensors nor
+torch.nn.Linear. This script asserts the correctness of the export itself; if the
+assertions fail, no assets are written.
 """
 
 import argparse
@@ -48,16 +50,17 @@ from vspeech.lib.rvc import FEATS_L9_PROJ
 from vspeech.lib.rvc import FEATS_L12_RAW
 from vspeech.lib.rvc import parse_output_names
 
-# NOTE: transformers / safetensors / scripts.convert_hubert (transformers を引く) は
-# **関数内で遅延 import する**。それらは依存に無いので、module 直下に置くと
-# このモジュールをテストから import できなくなり、layer_indices / HubertOnnxWrapper を
-# 単体テストできなくなる。scripts/convert_hubert.py が fairseq に対して取っている手と同じ。
+# NOTE: transformers / safetensors / scripts.convert_hubert (which pulls in transformers)
+# are **imported lazily inside the functions**. They are not dependencies, so putting them
+# at module level would make this module unimportable from the tests and leave
+# layer_indices / HubertOnnxWrapper untestable. The same move scripts/convert_hubert.py
+# makes for fairseq.
 
 L9 = 9
 L12 = 12
 OPSET = 20
 
-# golden npz のキー -> (ONNX 出力名, fairseq output_layer, use_final_proj)
+# golden npz key -> (ONNX output name, fairseq output_layer, use_final_proj)
 GOLDEN_KEYS = {
     "l9_proj": (FEATS_L9_PROJ, L9, True),
     "l12_raw": (FEATS_L12_RAW, L12, False),
@@ -65,18 +68,20 @@ GOLDEN_KEYS = {
 
 
 def layer_indices(layer_offset: int) -> tuple[int, int]:
-    """fairseq の output_layer -> transformers hidden_states の添字。
+    """fairseq's output_layer -> the index into transformers' hidden_states.
 
-    layer_offset は変換時に実測で確定して mapping.json に記録されている（実資産では 0）。
+    layer_offset was determined by measurement at conversion time and recorded in
+    mapping.json (0 for the real assets).
     """
     return L9 + layer_offset, L12 + layer_offset
 
 
 class HubertOnnxWrapper(torch.nn.Module):
-    """export 専用。runtime には入らない。
+    """Export only; never part of the runtime.
 
-    final_proj をグラフに焼き込み、実在する 2 組合せだけを出力する。層インデックスは
-    export 時に解決してグラフへ固定するので、runtime は推測しない。
+    It bakes final_proj into the graph and emits only the two combinations that really
+    exist. The layer indices are resolved at export time and fixed into the graph, so the
+    runtime never guesses.
     """
 
     def __init__(
@@ -96,10 +101,10 @@ class HubertOnnxWrapper(torch.nn.Module):
 
 
 def fold_weight_norm(model: torch.nn.Module) -> None:
-    """pos_conv の weight_norm パラメトリゼーションを畳み込む。
+    """Fold pos_conv's weight_norm parametrization.
 
-    parametrization が残ったままだと export されるグラフに余計な演算が乗り、
-    exporter によっては失敗する。畳み込んでも数値は変わらない。
+    Leaving the parametrization in place puts extra operations into the exported graph and
+    makes some exporters fail. Folding does not change the numbers.
     """
     from torch.nn.utils import parametrize
 
@@ -111,7 +116,7 @@ def fold_weight_norm(model: torch.nn.Module) -> None:
 
 
 def load_asset(asset_dir: Path) -> tuple[torch.nn.Module, torch.nn.Linear, int, int]:
-    """(encoder, final_proj, layer_offset, num_hidden_layers) を返す。"""
+    """Return (encoder, final_proj, layer_offset, num_hidden_layers)."""
     from safetensors.torch import load_file
     from transformers import HubertModel
 
@@ -138,16 +143,16 @@ def load_asset(asset_dir: Path) -> tuple[torch.nn.Module, torch.nn.Linear, int, 
 
 
 def export_graph(wrapper: torch.nn.Module, source: torch.Tensor, path: Path) -> str:
-    """ONNX を書き、使った exporter 名 ("dynamo" / "legacy") を返す。
+    """Write the ONNX and return the name of the exporter used ("dynamo" / "legacy").
 
-    `external_data=False` で重みをグラフへ埋め込む。dynamo exporter の既定
-    (`external_data=True`) は重みを `<path>.data` へ別出しし、`path` 自体は
-    ポインタだけの小さなグラフになる。呼び出し側は `path` しか `shutil.move`
-    しないので、既定のままだと `.data` は一時ディレクトリに取り残されたまま
-    破棄され、移動後の資産は外部データが見つからず読み込めない
-    （2026-07-10 に実測: `InferenceSession` が
-    `External data path does not exist` で失敗するのを確認）。HuBERT の重みは
-    fp32/fp16 とも ONNX の 2GB protobuf 上限に収まるので埋め込んで問題ない。
+    `external_data=False` embeds the weights into the graph. The dynamo exporter's default
+    (`external_data=True`) writes the weights out separately to `<path>.data` and leaves
+    `path` as a small graph of pointers. The caller only `shutil.move`s `path`, so with
+    the default the `.data` is left behind in the temporary directory and discarded, and
+    the moved asset cannot be loaded because its external data is missing (measured
+    2026-07-10: `InferenceSession` failing with `External data path does not exist`).
+    HuBERT's weights fit within ONNX's 2GB protobuf limit in both fp32 and fp16, so
+    embedding them is fine.
     """
     kwargs: dict[str, Any] = dict(
         input_names=["source"],
@@ -163,11 +168,12 @@ def export_graph(wrapper: torch.nn.Module, source: torch.Tensor, path: Path) -> 
     try:
         torch.onnx.export(wrapper, (source,), str(path), dynamo=True, **kwargs)
         return "dynamo"
-    except Exception:  # exporter は多様な例外を投げるので広く捕まえる
-        # **大声で報告すること。** この except が例外を飲み込むと、dynamo が成功できるのに
-        # 黙って legacy へ落ちうる（torch.onnx が進捗の ✅ を Windows の cp1252 stdout へ
-        # 書こうとして落ちる類）。main() の UTF-8 reconfigure がその原因を潰すが、
-        # フォールバックが起きたときは必ず traceback を出す。
+    except Exception:  # exporters raise a wide variety of exceptions, so catch broadly
+        # **Report this loudly.** If this except swallowed the exception, we could fall
+        # back to legacy silently even though dynamo would have succeeded (e.g. torch.onnx
+        # dying while writing its progress ✅ to a Windows cp1252 stdout). main()'s UTF-8
+        # reconfigure removes that cause, but always print a traceback whenever the
+        # fallback happens.
         print("!!! dynamo exporter failed; falling back to the legacy exporter !!!")
         traceback.print_exc()
         torch.onnx.export(wrapper, (source,), str(path), dynamo=False, **kwargs)
@@ -188,19 +194,23 @@ def run_session(path: Path, wav: np.ndarray, is_half: bool) -> dict[str, np.ndar
 def torch_fp16_reference(
     half_wrapper: torch.nn.Module, source: torch.Tensor
 ) -> dict[str, np.ndarray]:
-    """置き換え対象である `HubertModel.half()` の出力（fp16 ゲートの参照）。
+    """The output of `HubertModel.half()`, the implementation being replaced (the fp16
+    gate's reference).
 
-    fp32 golden を fp16 の参照にはできない。半精度の絶対誤差は hidden state のスケール
-    (O(1)-O(2.5)) に対して 1e-1 オーダーになり、現行 runtime 自身が fp32 golden 比で
-    cosine 0.987 / max_abs 0.435 を出す。問うべきは「ONNX 化で fp16 の振る舞いが
-    変わっていないか」であり、参照は置き換え対象の torch fp16 である。
+    The fp32 golden cannot serve as an fp16 reference. Half precision's absolute error
+    lands on the order of 1e-1 relative to the scale of the hidden states (O(1)-O(2.5)),
+    and the current runtime itself scores cosine 0.987 / max_abs 0.435 against the fp32
+    golden. The question to ask is "did going to ONNX change the fp16 behaviour", and the
+    reference for that is the torch fp16 being replaced.
 
-    GPU / カーネル依存の参照。テストは CUDA gating 済みなので開発機でのみ意味を持つ。
+    A GPU- and kernel-dependent reference. The tests are CUDA-gated, so it only means
+    anything on a development machine.
 
-    **呼び出し順序が load-bearing**: `.half()` はモジュールを in-place で書き換えるので、
-    fp32 グラフの export を済ませてから半精度化すること。半精度化した後に `.float()` で
-    戻しても fp32 の重みは復元しない。ここでは既に半精度化済みのラッパをそのまま呼び、
-    ONNX fp16 と厳密に同じ重み・同じ層から参照を取る。
+    **The call order is load-bearing**: `.half()` rewrites the module in place, so export
+    the fp32 graph first and only then go to half precision. Calling `.float()` afterwards
+    does not restore the fp32 weights. Here the already-halved wrapper is called as-is, so
+    the reference comes from exactly the same weights and the same layers as the ONNX
+    fp16.
     """
     with torch.inference_mode():
         out9, out12 = half_wrapper(source)
@@ -236,9 +246,9 @@ def check(
 
 
 def main() -> None:
-    # torch.onnx の進捗表示は ✅ を含む。Windows の既定 stdout (cp1252) では
-    # UnicodeEncodeError になり、export_graph の except がそれを「dynamo 失敗」と
-    # 誤認して黙って legacy へ落ちる。ここで潰しておく。
+    # torch.onnx's progress display contains ✅. On the default Windows stdout (cp1252)
+    # that raises UnicodeEncodeError, which export_graph's except misreads as "dynamo
+    # failed" and silently falls back to legacy. Remove the cause here.
     # typeshed types sys.stdout/stderr as TextIO, which lacks .reconfigure(); at
     # runtime CPython gives TextIOWrapper, which has it.
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # ty: ignore[unresolved-attribute]
@@ -286,7 +296,7 @@ def main() -> None:
         fp32_path = tmp_dir / "hubert_fp32.onnx"
         fp16_path = tmp_dir / "hubert_fp16.onnx"
 
-        # fp32 を先に出す。次の `.half()` はモジュールを in-place で壊す。
+        # Emit fp32 first. The `.half()` that follows destroys the module in place.
         wrapper = HubertOnnxWrapper(model, final_proj, layer_offset).eval()
         source = torch.from_numpy(wav).unsqueeze(0)
         exporter = export_graph(wrapper, source, fp32_path)
@@ -304,11 +314,13 @@ def main() -> None:
             HubertOnnxWrapper(model, final_proj, layer_offset).eval().half().cuda()
         )
         half_source = source.half().cuda()
-        # fp16 ゲートの参照。ONNX fp16 と同じ重み・同じ層から取る。
+        # The fp16 gate's reference, taken from the same weights and layers as the ONNX
+        # fp16.
         reference = torch_fp16_reference(half_wrapper, half_source)
-        # 繰り延べ: fp16 の export_graph の戻り値（exporter 名）を捨てている。mapping.json
-        # の "exporter" は fp32 側しか記録せず、fp16 だけ legacy に落ちても残らない
-        # （来歴のみ・runtime は読まない。fallback 自体は traceback を出すので気づける）。
+        # Deferred: the return value of the fp16 export_graph (the exporter name) is
+        # discarded. mapping.json's "exporter" records only the fp32 side, so an fp16-only
+        # fall back to legacy leaves no trace (provenance only; the runtime never reads
+        # it, and the fallback itself prints a traceback, so it is noticeable).
         export_graph(half_wrapper, half_source, fp16_path)
         ok = (
             check(
@@ -327,15 +339,18 @@ def main() -> None:
         if not ok:
             raise SystemExit("等価ゲートに落ちました。資産は書き出しません。")
 
-        # 繰り延べ: 2 回の move は非アトミック。fp32 成功・fp16 失敗で新 fp32 と
-        # 旧 fp16・旧 mapping.json が同居しうる（同一 FS の rename で確率は低い）。
-        # 次のロードで parse_output_names が ValueError を投げるので静かには壊れない。
+        # Deferred: the two moves are not atomic. With fp32 succeeding and fp16 failing, a
+        # new fp32 could coexist with an old fp16 and an old mapping.json (unlikely, since
+        # these are renames on the same FS). It does not break silently: the next load
+        # makes parse_output_names raise ValueError.
         shutil.move(str(fp32_path), asset_dir / "hubert_fp32.onnx")
         shutil.move(str(fp16_path), asset_dir / "hubert_fp16.onnx")
 
-    # fp16 ゲートの参照を golden 側へ保存する。テストは npz を読むだけで transformers を
-    # 要らない（Task 8 でプロジェクト依存から外れるため、ここでしか捕獲できない）。
-    # numpy 2 の savez スタブは allow_pickle:bool を持ち、**reference 展開と衝突する型誤検知。実行時は正しい。
+    # Save the fp16 gate's reference on the golden side. The tests only read the npz and
+    # need no transformers (it leaves the project dependencies in Task 8, so this is the
+    # only place it can be captured).
+    # numpy 2's savez stub declares allow_pickle:bool, which collides with the **reference
+    # expansion -- a false positive from the type checker. It is correct at runtime.
     np.savez(golden_dir / "hubert_golden_fp16.npz", wav=wav, **reference)  # ty: ignore[invalid-argument-type]
 
     mapping = {
@@ -348,7 +363,8 @@ def main() -> None:
             {"name": FEATS_L12_RAW, "layer": L12, "use_final_proj": False, "dim": 768},
         ],
     }
-    parse_output_names(mapping)  # runtime が読める形であることをここで保証する
+    # guarantees here that the shape is one the runtime can read
+    parse_output_names(mapping)
     with open(asset_dir / "mapping.json", "w", encoding="utf-8") as f:
         json.dump(mapping, f, indent=2)
 

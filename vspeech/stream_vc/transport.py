@@ -1,10 +1,12 @@
-"""ストリーミング VC の transport 差し替え層(ADR-0051)。
+"""The swappable transport layer of streaming VC (ADR-0051).
 
-現状は in-process(asyncio.Queue)実装のみ。producer/consumer はこの interface
-の背後に置くので、網実装(UDP/TCP/bidi)へ VC・再生の他ロジックを変えずに
-差し替えられる。送信側は満杯時に最古を捨てて遅延の単調増加を防ぐ(受入基準)。
-受信側は `drain_to_latest` で到着済みバックログを最新へ畳み、一過性ストール後に
-残る恒久遅延を抑える(consumer は実時間消費なので RTF<1 でも自然には減らない)。
+Today only the in-process (asyncio.Queue) implementation exists. Producer and consumer
+sit behind this interface, so a network implementation (UDP/TCP/bidi) can be swapped in
+without changing any other VC or playback logic. The send side drops the oldest when
+full, which keeps latency from growing monotonically (an acceptance criterion). The
+receive side folds an already-arrived backlog forward to the newest via
+`drain_to_latest`, which suppresses the permanent delay left behind by a transient stall
+(the consumer consumes in real time, so it does not shrink on its own even at RTF<1).
 """
 
 from __future__ import annotations
@@ -19,58 +21,65 @@ from vspeech.stream_vc.packet import StreamPacket
 
 
 def drop_oldest_put[T](q: Queue[T], item: T) -> bool:
-    """満杯なら最古を捨てて `item` を入れる。捨てたら False。
+    """Put `item`, dropping the oldest when full. Returns False when something was
+    dropped.
 
-    capture/transport のバックプレッシャ共通処理。VC/GPU が実時間に追いつかない
-    ときにキューが伸び続けるのを防ぎ、落としたことを呼び出し側が観測できるよう
-    bool を返す(受入基準:遅延が単調増加せず落としたことが記録可能)。
+    The shared backpressure handling of capture/transport. It keeps the queue from
+    growing without bound when VC/GPU cannot keep up with real time, and returns a bool
+    so the caller can observe the drop (acceptance criteria: latency does not grow
+    monotonically, and drops are recordable).
 
-    単一イベントループ前提: この関数は await を挟まないので put_nowait と
-    get_nowait の間で他コルーチンが割り込まない。満杯確定直後の get_nowait は
-    必ず成功し、直後の put_nowait も解放済みスロットへ必ず入る(防御的 try は不要)。
+    Assumes a single event loop: this function has no await, so no other coroutine can
+    interleave between put_nowait and get_nowait. The get_nowait right after "full" was
+    established always succeeds, and the put_nowait right after it always lands in the
+    freed slot (no defensive try needed).
     """
     try:
         q.put_nowait(item)
         return True
     except QueueFull:
-        q.get_nowait()  # 最古を捨てる(満杯確定直後なので必ず成功)
-        q.put_nowait(item)  # 解放済みスロットへ(await 無しなので必ず成功)
+        # drop the oldest (always succeeds right after "full" was established)
+        q.get_nowait()
+        # into the freed slot (always succeeds because there is no await)
+        q.put_nowait(item)
         return False
 
 
 class Transport(ABC):
     @abstractmethod
     async def send(self, packet: StreamPacket) -> bool:
-        """packet を送る。バックプレッシャで最古を捨てたら False。"""
+        """Send the packet. Returns False when backpressure dropped the oldest."""
 
     @abstractmethod
     async def recv(self) -> StreamPacket:
-        """次の packet を受け取る(無ければ待つ)。"""
+        """Receive the next packet (waiting if there is none)."""
 
     def drain_to_latest(self, keep: int = 1) -> list[StreamPacket]:
-        """到着済みで待機中の packet を最新 `keep` 個だけ残し、それ以外を
-        非ブロッキングに取り出して返す(捨てた古い packet を返す)。
+        """Keep only the newest `keep` of the arrived, waiting packets and take the rest
+        out non-blockingly, returning the old packets that were discarded.
 
-        既に届いているキューだけを触り await を挟まないので同期処理でよい。
-        キューを覗けない transport(まだ実装なし)は既定で何もしない。
+        It only touches the already-arrived queue and has no await, so it can be
+        synchronous. A transport that cannot peek at its queue (none exists yet) does
+        nothing by default.
         """
         return []
 
     def poll(self) -> list[StreamPacket]:
-        """到着済みで待機中の packet を全て非ブロッキングに取り出して返す。
+        """Take out every arrived, waiting packet non-blockingly and return them.
 
-        consumer が recv 後に呼び、socket キューにある残りを一括で jitter buffer へ
-        push するためのもの(並べ替えを buffer に見せる)。キューを覗けない transport は
-        既定で何もしない。
+        The consumer calls this after recv to push whatever is left in the socket queue
+        into the jitter buffer in one go (exposing the reordering to the buffer). A
+        transport that cannot peek at its queue does nothing by default.
         """
         return []
 
     def close(self) -> None:
-        """transport のリソースを解放する。既定は何もしない(InProcessTransport 等)。"""
+        """Release the transport's resources. Does nothing by default (InProcessTransport
+        and the like)."""
 
 
 class InProcessTransport(Transport):
-    """同一プロセス内の asyncio.Queue 実装(ADR-0051 tier-0)。"""
+    """The same-process asyncio.Queue implementation (ADR-0051 tier-0)."""
 
     def __init__(self, max_queued: int) -> None:
         self._q: Queue[StreamPacket] = Queue(maxsize=max_queued)
@@ -86,18 +95,19 @@ class InProcessTransport(Transport):
         return await self._q.get()
 
     def drain_to_latest(self, keep: int = 1) -> list[StreamPacket]:
-        """待機中の packet を最新 `keep` 個残して非ブロッキングに取り出す。
+        """Take waiting packets out non-blockingly, keeping the newest `keep`.
 
-        consumer(playback)は出力デバイスクロック=実時間で消費するため、
-        一過性ストールで積み上がったバックログは RTF<1 でも自然には減らず恒久
-        遅延として張り付く。recv 後にこれを呼び、既に届いている古い packet を捨てて
-        near-live を保つ。捨てた分を返し、呼び出し側が seq/telemetry で観測できる。
-        単一ループ前提: await を挟まないので他コルーチンは割り込まない。
+        The consumer (playback) consumes on the output device clock, i.e. in real time,
+        so a backlog built up by a transient stall does not shrink on its own even at
+        RTF<1 and sticks around as permanent delay. Calling this after recv discards
+        already-arrived old packets and keeps playback near-live. What was discarded is
+        returned so the caller can observe it through seq/telemetry. Assumes a single
+        loop: there is no await, so no other coroutine interleaves.
         """
         dropped: list[StreamPacket] = []
         while self._q.qsize() > keep:
             try:
                 dropped.append(self._q.get_nowait())
-            except QueueEmpty:  # 単一ループでは起きえないが防御的に打ち切る
+            except QueueEmpty:  # impossible on a single loop; bail out defensively
                 break
         return dropped

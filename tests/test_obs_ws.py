@@ -16,13 +16,13 @@ from vspeech.lib.obs_ws import ObsResourceNotFoundError
 from vspeech.lib.obs_ws import ObsWsClient
 from vspeech.lib.obs_ws import build_auth_string
 
-# obs-websocket 5.x の認証アルゴリズム:
-#   1. base64(sha256(password + salt))    -> base64 secret
+# obs-websocket 5.x's authentication algorithm:
+#   1. base64(sha256(password + salt))    -> the base64 secret
 #   2. base64(sha256(secret + challenge))
-# 期待値は simpleobsws (obs-websocket 本家 IRLToolkit) の実装と行レベルで一致
-# することを確認した上で固定した回帰ベクタ (ADR-0043)。password は文字列
-# "supersecretpassword"、salt/challenge はこのテスト専用の固定値で、実在の OBS
-# のものではない (.gitleaks.toml で値ごと allowlist 済み)。
+# The expected values are regression vectors pinned after confirming they match
+# simpleobsws (obs-websocket's own IRLToolkit implementation) line for line (ADR-0043).
+# The password is the string "supersecretpassword" and the salt/challenge are fixed values
+# used only by this test, not from any real OBS (allowlisted by value in .gitleaks.toml).
 AUTH_PASSWORD = "supersecretpassword"
 AUTH_SALT = "lM1GncleQOaCu9lT1yeUZhFYnqhsLLP1G5lAGo3ixaI="
 AUTH_CHALLENGE = "+IxH4CnCiqpX1rM9scsNynZzbOe4KhDeYcTNS3PDaeY="
@@ -30,11 +30,11 @@ AUTH_EXPECTED = "1Ct943GAT+6YQUUX47Ia/ncufilbe6+oD6lY+5kaCu4="
 
 
 class FakeObsServer:
-    """スクリプト化した obs-websocket サーバ。ネットワークも OBS も使わない。
+    """A scripted obs-websocket server. Uses neither the network nor OBS.
 
-    「送られてきたものに応答する」形にしてある。おかげでテストはクライアントが
-    採番した requestId を知る必要がなく、応答は send の時点で積まれるので
-    待ち合わせも要らない。
+    It is shaped as "respond to whatever was sent", which means the tests never need to
+    know the requestId the client assigned, and since the response is queued at send time
+    there is nothing to synchronize on.
     """
 
     def __init__(
@@ -50,8 +50,8 @@ class FakeObsServer:
         self._responses: deque[tuple[bool, int, dict]] = deque()
         self._malformed_responses = 0
         self._raw_responses: deque[Callable[[str], str | bytes]] = deque()
-        # recv() が尽きたときに例外で止まる代わりに永遠に待つ
-        # (_recv() の wait_for タイムアウトを駆動するためのモード)。
+        # Wait forever instead of stopping with an exception when recv() runs dry
+        # (the mode used to drive _recv()'s wait_for timeout).
         self._hang = hang
         if greet:
             hello: dict = {"obsWebSocketVersion": "5.5.0", "rpcVersion": 1}
@@ -65,35 +65,35 @@ class FakeObsServer:
     def script_response(
         self, *, ok: bool = True, code: int = 100, data: dict | None = None
     ):
-        """次の Request に返す応答を積む。"""
+        """Queue the response to return for the next Request."""
         self._responses.append((ok, code, data or {}))
 
     def script_malformed_response(self):
-        """次の Request に requestStatus を欠いた不正な応答を返す。"""
+        """Return a malformed response missing requestStatus for the next Request."""
         self._malformed_responses += 1
 
     def script_raw_response(self, builder: Callable[[str], str | bytes]):
-        """次の Request に、`builder(requestId)` が返す生ペイロードをそのまま送る
-        (JSON エンコードしない)。requestId はクライアントが採番した実際の値が渡って
-        くるので、requestStatus 周りの壊れ方 (missing/非 dict) を、クライアントの
-        マッチングループ (`requestId` 一致待ち) を素通りさせた上で作れる。壊れ方が
-        requestId と無関係な生フレーム (不正 JSON・非 UTF-8・配列) にも同じフックを
-        使う (`builder` は引数を無視すればよい)。
+        """For the next Request, send the raw payload `builder(requestId)` returns, as-is
+        (without JSON encoding). The actual requestId the client assigned is passed in, so
+        corruption around requestStatus (missing / not a dict) can be produced after
+        getting past the client's matching loop (which waits for a `requestId` match). The
+        same hook is used for raw frames whose corruption is unrelated to requestId
+        (malformed JSON, non-UTF-8, an array); `builder` can simply ignore its argument.
         """
         self._raw_responses.append(builder)
 
     def stop_responding(self):
-        """以降、何を送られても応答しなくなる (タイムアウトテスト用)。"""
+        """From now on, never respond to anything (for the timeout tests)."""
         self._hang = True
 
     def inject(self, message: dict):
-        """次の応答より前に届く生メッセージ (イベント等) を積む。"""
+        """Queue a raw message (an event, etc.) that arrives before the next response."""
         self._outgoing.append(json.dumps(message))
 
     def inject_raw(self, payload: str | bytes):
-        """次の応答より前に届く、JSON エンコードしていない生フレームを積む。
-        不正 JSON・JSON 配列・非 UTF-8 バイト列など、`inject()` の dict 入力では
-        作れない壊れ方を作るためのフック。
+        """Queue a raw, non-JSON-encoded frame that arrives before the next response.
+        The hook for producing corruption that `inject()`'s dict input cannot express:
+        malformed JSON, a JSON array, non-UTF-8 bytes, and so on.
         """
         self._outgoing.append(payload)
 
@@ -101,8 +101,8 @@ class FakeObsServer:
         m = json.loads(message)
         self.sent.append(m)
         if self._hang:
-            # サーバが無応答になったふりをする: 何も積まない
-            # ので、次の recv() は _outgoing が尽きて hang モードに入る。
+            # Pretend the server went unresponsive: nothing is queued, so the next recv()
+            # exhausts _outgoing and enters hang mode.
             return
         if m["op"] == OP_IDENTIFY:
             self._outgoing.append(
@@ -122,7 +122,7 @@ class FakeObsServer:
                             "d": {
                                 "requestType": m["d"]["requestType"],
                                 "requestId": m["d"]["requestId"],
-                                # requestStatus を意図的に省く。
+                                # requestStatus is deliberately omitted.
                                 "responseData": {},
                             },
                         }
@@ -138,7 +138,7 @@ class FakeObsServer:
                         "op": 7,
                         "d": {
                             "requestType": m["d"]["requestType"],
-                            # 採番された id をそのまま返す = テスト側の受け渡し不要。
+                            # Echo the assigned id = nothing to hand around in the test.
                             "requestId": m["d"]["requestId"],
                             "requestStatus": {"result": ok, "code": code},
                             "responseData": data,
@@ -150,8 +150,8 @@ class FakeObsServer:
     async def recv(self) -> str | bytes:
         if not self._outgoing:
             if self._hang:
-                # 何も返さず、呼び出し側の wait_for がタイムアウトで cancel
-                # するまで永遠に待つ。
+                # Return nothing and wait forever, until the caller's wait_for times out
+                # and cancels.
                 await asyncio.Event().wait()
             raise AssertionError("client recv'd more than the fake scripted")
         return self._outgoing.popleft()
@@ -298,7 +298,7 @@ async def test_request_returns_empty_dict_when_there_is_no_response_data():
     assert await client.request("SetInputSettings", {"inputName": "x"}) == {}
 
 
-# --- _recv() が wait_for のタイムアウトを型付き例外に包む ---
+# --- _recv() wraps wait_for's timeout in a typed exception ---
 
 
 async def test_identify_raises_obs_protocol_error_on_timeout():
@@ -317,12 +317,12 @@ async def test_request_raises_obs_protocol_error_on_timeout():
         await client.request("GetInputSettings", {"inputName": "x"})
 
 
-# --- 不正なネスト構造が KeyError ではなく ObsProtocolError になる ---
+# --- a malformed nested structure becomes ObsProtocolError, not KeyError ---
 
 
 async def test_recv_raises_obs_protocol_error_when_d_is_missing():
     server = FakeObsServer(greet=False)
-    server.inject({"op": 0})  # Hello だが 'd' が無い不正なメッセージ
+    server.inject({"op": 0})  # a Hello, but a malformed message with no 'd'
     with pytest.raises(ObsProtocolError) as e:
         await ObsWsClient(server).identify("")
     assert not isinstance(e.value, ObsIdentifyError)
@@ -346,9 +346,9 @@ async def test_request_raises_obs_protocol_error_when_request_status_is_missing(
     assert not isinstance(e.value, ObsRequestError)
 
 
-# --- identify() 認証情報の生 index アクセス ---
-# (_recv() が d を dict と保証しても、その中身
-# (`authentication`) の形は OBS が選ぶので、さらに一段検査が要る。)
+# --- raw index access into identify()'s credentials ---
+# (Even though _recv() guarantees d is a dict, the shape of what is inside it
+# (`authentication`) is chosen by OBS, so one more layer of checking is required.)
 
 
 async def test_identify_raises_obs_identify_error_when_authentication_is_not_a_dict():
@@ -372,10 +372,10 @@ async def test_identify_raises_obs_identify_error_when_challenge_is_missing():
         await ObsWsClient(server).identify("irrelevant-password")
 
 
-# --- salt/challenge が str だが UTF-8 エンコード不能 (非対 surrogate) ---
-# isinstance(salt, str) は通るが .encode("utf-8") で素の UnicodeEncodeError を送出
-# しうる穴。JSON のワイヤ上は素の ASCII \uD800 なので websockets のフレームレベル
-# UTF-8 検証もこれを止めない (実機で再現確認済み)。
+# --- salt/challenge is a str but not UTF-8 encodable (an unpaired surrogate) ---
+# isinstance(salt, str) passes, yet .encode("utf-8") can raise a bare UnicodeEncodeError.
+# On the JSON wire it is plain ASCII \uD800, so websockets' frame-level UTF-8 validation
+# does not stop it either (reproduced on real hardware).
 
 
 async def test_identify_raises_obs_identify_error_when_salt_is_not_utf8_encodable():
@@ -390,10 +390,10 @@ async def test_identify_raises_obs_identify_error_when_salt_is_not_utf8_encodabl
         await ObsWsClient(server).identify("irrelevant-password")
 
 
-# build_auth_string() が .encode("utf-8") を 2 回呼ぶ
-# (salt 用と challenge 用) のに、salt 側のケースしか無かったテストの穴を埋める。
-# 挙動そのものは identify() の try/except UnicodeError が両方を包んでいるので
-# 既に直っている (このテストは pass/pass、境界ケースの取りこぼしではない)。
+# Fills the gap where build_auth_string() calls .encode("utf-8") twice (for salt and for
+# challenge) but only the salt case was covered. The behaviour itself is already correct
+# because identify()'s try/except UnicodeError wraps both (this test passes either way; it
+# is not a missed edge case).
 
 
 async def test_identify_raises_obs_identify_error_when_challenge_is_not_utf8_encodable():
@@ -408,11 +408,11 @@ async def test_identify_raises_obs_identify_error_when_challenge_is_not_utf8_enc
         await ObsWsClient(server).identify("irrelevant-password")
 
 
-# --- `if auth:` は「真偽」を証明するが問うべきは「鍵の
-# 有無」。`{}` / `[]` / `False` / `0` / `""` を「認証不要」と誤読して無認証の
-# Identify を送ってしまい、OBS が実際には認証必須なら 4008 close ->
-# WebSocketException で呼び出し側が延々リトライする (壊れたハンドシェイクは
-# リトライしても直らない)。 ---
+# --- `if auth:` proves truthiness, but the question is whether the key is present.
+# It would misread `{}` / `[]` / `False` / `0` / `""` as "no auth needed" and send an
+# unauthenticated Identify; if OBS really does require auth, that means a 4008 close ->
+# WebSocketException and the caller retrying forever (a broken handshake does not get
+# better on retry). ---
 
 
 async def test_identify_raises_when_authentication_present_but_empty_dict_and_password_empty():
@@ -436,7 +436,7 @@ async def test_identify_raises_when_authentication_present_but_not_a_dict_and_pa
         await ObsWsClient(server).identify("irrelevant-password")
 
 
-# --- 非 UTF-8 バイト列フレームが decode で漏れる ---
+# --- a non-UTF-8 byte frame leaking out of decode ---
 
 
 async def test_recv_raises_obs_protocol_error_on_non_utf8_bytes_frame():
@@ -446,13 +446,12 @@ async def test_recv_raises_obs_protocol_error_on_non_utf8_bytes_frame():
         await ObsWsClient(server).identify("")
 
 
-# --- json.loads の RecursionError が _recv()
-# から漏れる。JSONDecodeError (ValueError) は拾うが、深すぎるネスト
-# ("[" * N + "]" * N のような ASCII 文字列だけで作れる) は RecursionError
-# (RuntimeError のサブクラスで ValueError ではない) を投げる。websockets の
-# デフォルト max_size (1 MiB) を素通りする transport-valid な入力なので何も
-# 上流で弾かれない。identify() (bare / op-d envelope に包んだ両方) と
-# request() の両方で実機再現した。---
+# --- a RecursionError from json.loads leaking out of _recv().
+# JSONDecodeError (a ValueError) is caught, but nesting that is too deep -- constructible
+# from an ASCII string alone, such as "[" * N + "]" * N -- raises RecursionError (a
+# subclass of RuntimeError, not ValueError). It is transport-valid input well inside
+# websockets' default max_size (1 MiB), so nothing upstream rejects it. Reproduced on real
+# hardware in both identify() (bare and wrapped in an op-d envelope) and request(). ---
 
 _DEEPLY_NESTED_JSON_ARRAY = "[" * 12000 + "]" * 12000
 
@@ -480,12 +479,13 @@ async def test_request_raises_obs_protocol_error_on_deeply_nested_json_array():
         await client.request("GetInputSettings", {"inputName": "x"})
 
 
-# --- responseData が return 経路で無検査。
-# requestStatus には isinstance(dict) 検査があるのに responseData には無く、
-# 相手が list/str/int/bool/float を送ると型注釈 (-> dict[str, Any]) に反した
-# 値をそのまま返してしまう。今日はここで例外にならないが、呼び出し側の最初の
-# `result["inputSettings"]` で素の TypeError になる、同じバグ形の 1 フレーム
-# 先送り。builder は後方で定義 (_response_data_not_a_dict)。---
+# --- responseData was unchecked on the return path.
+# requestStatus has an isinstance(dict) check but responseData did not, so a peer sending
+# list/str/int/bool/float would have its value returned as-is, in violation of the type
+# annotation (-> dict[str, Any]). It does not raise here today; it merely defers the same
+# bug shape by one frame, to a bare TypeError at the caller's first
+# `result["inputSettings"]`. The builder is defined further down
+# (_response_data_not_a_dict). ---
 
 
 async def test_request_raises_obs_protocol_error_when_response_data_is_not_a_dict():
@@ -498,12 +498,12 @@ async def test_request_raises_obs_protocol_error_when_response_data_is_not_a_dic
     assert not isinstance(e.value, ObsRequestError)
 
 
-# --- ObsRequestError の code/comment が
-# 無検査。相手が code を "600" (str) で送ると `code == STATUS_RESOURCE_NOT_FOUND`
-# が一致せず ObsResourceNotFoundError が汎用の ObsRequestError に降格し、
-# 呼び出し側の「リソースが無い」専用の fail-loud 経路が発火しなくなる。
-# comment が dict/None で来ると e.comment.lower() が素の AttributeError で
-# 死ぬ。builder は後方で定義 (_code_not_an_int / _comment_not_a_string)。---
+# --- ObsRequestError's code/comment were unchecked.
+# A peer sending code as "600" (str) makes `code == STATUS_RESOURCE_NOT_FOUND` fail to
+# match, demoting ObsResourceNotFoundError to the generic ObsRequestError so the caller's
+# dedicated "resource missing" fail-loud path never fires. A comment arriving as dict/None
+# makes e.comment.lower() die with a bare AttributeError. The builders are defined further
+# down (_code_not_an_int / _comment_not_a_string). ---
 
 
 async def test_request_raises_obs_protocol_error_when_code_is_not_an_int():

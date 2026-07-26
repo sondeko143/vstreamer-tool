@@ -1,4 +1,4 @@
-"""fairseq -> transformers の state_dict キー変換テスト（torch 不要）。"""
+"""Tests for the fairseq -> transformers state_dict key translation (no torch needed)."""
 
 import pytest
 
@@ -43,7 +43,7 @@ from scripts.hubert_keymap import translate_key
             "encoder.layers.11.feed_forward.output_dense.bias",
         ),
         ("mask_emb", "masked_spec_embed"),
-        # 素通し（両者で同名）
+        # passed through (the same name on both sides)
         ("encoder.layer_norm.weight", "encoder.layer_norm.weight"),
         (
             "encoder.layers.7.final_layer_norm.weight",
@@ -77,7 +77,7 @@ def test_build_key_map_matches_and_drops():
 
 
 def test_build_key_map_resolves_weight_norm_parametrization_alias():
-    """新しい torch では weight_norm が parametrizations.* として現れる。"""
+    """On newer torch, weight_norm appears as parametrizations.*."""
     fairseq_keys = ["encoder.pos_conv.0.weight_g", "encoder.pos_conv.0.weight_v"]
     hf_keys = [
         "encoder.pos_conv_embed.conv.parametrizations.weight.original0",
@@ -95,15 +95,17 @@ def test_build_key_map_raises_when_a_transformers_param_is_unsourced():
 
 
 def test_build_key_map_raises_when_two_fairseq_params_collide():
-    """同じ transformers パラメータに 2 つ着地したら、黙って後勝ちで上書きしないこと。
+    """When two land on the same transformers parameter, the later one must not silently
+    overwrite the earlier.
 
-    「供給元が無い」網はこれを捕まえられない: 間違った規則の出力が別の正当なキーと
-    偶然一致すると、正しい供給元が静かに捨てられて重みが壊れる。
+    The "no source" net cannot catch this: when a wrong rule's output happens to coincide
+    with another legitimate key, the correct source is silently discarded and the weights
+    are corrupted.
     """
     hf_keys = ["feature_projection.projection.weight"]
     fairseq_keys = [
-        "post_extract_proj.weight",  # 規則 3 で変換されて着地
-        "feature_projection.projection.weight",  # 素通しで同じ名前に着地
+        "post_extract_proj.weight",  # lands there after rule 3 translates it
+        "feature_projection.projection.weight",  # lands on the same name by passthrough
     ]
     with pytest.raises(KeyError, match="same transformers param"):
         build_key_map(hf_keys, fairseq_keys)

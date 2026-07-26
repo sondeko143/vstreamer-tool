@@ -1,12 +1,11 @@
-"""走っている pipeline へ制御 Command を 1 本送る gRPC クライアント。
+"""The gRPC client that sends a single control Command to a running pipeline.
 
-送るのは制御イベント (ping / pause / resume / reload) だけ。データイベント
-(transcription や tts) は送らない — この CLI は pipeline を操作するもので、
-pipeline に仕事を流し込むものではない。
+It only sends control events (ping / pause / resume / reload). Data events (transcription
+or tts) are never sent -- this CLI operates the pipeline, it does not feed work into it.
 
-Command の組み立ては vspeech 側の変換 (EventAddress.to_pb) をそのまま使う。
-ここで PAUSE などの protobuf 定数を直に触ると、EventType ↔ Operation の対応が
-2 箇所に分かれて片方だけずれる。
+Commands are built through vspeech's own conversion (EventAddress.to_pb). Touching
+protobuf constants such as PAUSE directly here would split the EventType <-> Operation
+mapping across two places, where only one of them gets updated.
 """
 
 from dataclasses import dataclass
@@ -21,8 +20,8 @@ from vstreamer_protos.commander.commander_pb2_grpc import CommanderStub
 from vspeech.config import EventType
 from vspeech.shared_context import EventAddress
 
-# この CLI が送れる操作。ping は「疎通確認」— 受け側は log を 1 行出すだけ
-# なので、RPC が返ったこと自体が到達の証拠になる。
+# The operations this CLI can send. ping is a reachability check -- the peer only writes
+# one log line, so the RPC returning is itself the proof that it arrived.
 OPERATIONS: tuple[EventType, ...] = (
     EventType.ping,
     EventType.pause,
@@ -41,7 +40,7 @@ class SendResult:
 
 
 def build_command(event: EventType, config_path: str = "") -> Command:
-    """1 操作 = 1 チェーンの Command。後続イベントは持たせない。"""
+    """A Command of one chain per operation. It carries no following events."""
     route = EventAddress(event=event).to_pb()
     return Command(
         chains=[OperationChain(operations=[route])],
@@ -55,11 +54,13 @@ def send(
     config_path: str = "",
     timeout: float = DEFAULT_TIMEOUT,
 ) -> SendResult:
-    """`address` の pipeline へ 1 操作を送り、成否と往復時間を返す。
+    """Send one operation to the pipeline at `address` and return the outcome and the
+    round-trip time.
 
-    到達できない・相手が例外を投げたといった想定内の失敗は例外にせず
-    `ok=False` の結果として返す (呼び元は GUI スレッド)。deadline を必ず付ける
-    — 付けないと落ちたホスト宛ての呼び出しが返らず、押した人はただ固まる。
+    Expected failures -- unreachable peer, the peer raising -- are returned as an
+    `ok=False` result rather than raised (this dates from when the caller was the GUI
+    thread). Always attach a deadline: without one, a call to a dead host never returns
+    and whoever pressed the button simply hangs.
     """
     command = build_command(event, config_path=config_path)
     started = monotonic()
@@ -70,15 +71,15 @@ def send(
         elapsed = (monotonic() - started) * 1000
         return SendResult(ok=False, elapsed_ms=elapsed, detail=_describe(e))
     elapsed = (monotonic() - started) * 1000
-    # result=False は受け側が「受けたが処理しなかった」と言っている状態。
-    # RPC が成功したことと混ぜず、そのまま失敗として見せる。
+    # result=False is the peer saying "received but not processed". Do not conflate that
+    # with the RPC having succeeded; surface it as a failure.
     ok = bool(getattr(response, "result", False))
     return SendResult(ok=ok, elapsed_ms=elapsed, detail="" if ok else "result=False")
 
 
 def _describe(error: grpc.RpcError) -> str:
-    # 同期 stub の RpcError は grpc.Call でもあるので code()/details() を持つが、
-    # 型の上では保証されないので取れなければ str() に落とす。
+    # The synchronous stub's RpcError is also a grpc.Call, so it has code()/details(), but
+    # the types do not guarantee that; fall back to str() when they are unavailable.
     code = getattr(error, "code", None)
     details = getattr(error, "details", None)
     if code is None or details is None:

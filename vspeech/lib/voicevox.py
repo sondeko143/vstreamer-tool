@@ -24,8 +24,8 @@ class Voicevox:
         self.synthesizer = Synthesizer(
             onnxruntime,
             OpenJtalk(str(open_jtalk_dict_dir.expanduser())),
-            # 0.16 では AccelerationMode は Literal["AUTO","CPU","GPU"] エイリアス
-            # （enum ではない）。文字列をそのまま渡す。
+            # On 0.16 AccelerationMode is a Literal["AUTO","CPU","GPU"] alias
+            # (not an enum). Pass the string as-is.
             acceleration_mode="AUTO",
         )
         self.model_dir = model_dir.expanduser()

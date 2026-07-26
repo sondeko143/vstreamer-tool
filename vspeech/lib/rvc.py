@@ -23,9 +23,10 @@ from vspeech.logger import logger
 # it -- not the remote's original capture rate.
 HUBERT_SAMPLE_RATE = 16000
 
-# ONNX グラフの出力名。scripts/export_hubert_onnx.py がこの名前で export し、
-# mapping.json が (emb_output_layer, use_final_proj) との対応を記録する。
-# 実在する RVC モデルは v1 = (9, True) と v2 = (12, False) の 2 種類だけ。
+# Output names of the ONNX graph. scripts/export_hubert_onnx.py exports under these
+# names and mapping.json records how they correspond to (emb_output_layer,
+# use_final_proj). Real RVC models only come in two flavours: v1 = (9, True) and
+# v2 = (12, False).
 FEATS_L9_PROJ = "feats_l9_proj"
 FEATS_L12_RAW = "feats_l12_raw"
 
@@ -34,12 +35,13 @@ _REEXPORT_HINT = "scripts/export_hubert_onnx.py で再 export してください
 
 
 def parse_output_names(mapping: dict[str, Any]) -> dict[tuple[int, bool], str]:
-    """mapping.json の `outputs` を (emb_output_layer, use_final_proj) -> 出力名 に開く。
+    """Expand mapping.json's `outputs` into (emb_output_layer, use_final_proj) ->
+    output name.
 
-    runtime は層インデックスを推測しない。ここで読んだ対応表だけを信じる。
-    壊れた・古い mapping.json を黙って受け入れると、誤った層の出力へ voice
-    conversion をルーティングしてしまう（このモジュールが禁止する失敗モード）ので、
-    形式が少しでも期待と違えば必ず ValueError で止める。
+    The runtime never guesses the layer index; it trusts only the table read here.
+    Silently accepting a corrupt or stale mapping.json would route voice conversion to
+    the output of the wrong layer (the failure mode this module exists to forbid), so
+    any deviation from the expected shape stops with a ValueError.
     """
     outputs = mapping.get("outputs")
     if not outputs:
@@ -60,8 +62,8 @@ def parse_output_names(mapping: dict[str, Any]) -> dict[tuple[int, bool], str]:
                 f"mapping.json の 'outputs' の要素が壊れています: {entry!r}。"
                 f"{_REEXPORT_HINT}"
             ) from e
-        # bool は int のサブクラスなので isinstance(True, int) は True になる。
-        # JSON の true/false を層番号として受け入れてしまわないよう bool を先に弾く。
+        # bool is a subclass of int, so isinstance(True, int) is True. Reject bool
+        # first so JSON's true/false is never accepted as a layer number.
         if isinstance(layer, bool) or not isinstance(layer, int):
             raise ValueError(
                 "mapping.json の 'layer' は int である必要があります"
@@ -89,10 +91,11 @@ def parse_output_names(mapping: dict[str, Any]) -> dict[tuple[int, bool], str]:
 
 @dataclass
 class HubertSession:
-    """ONNX 化した ContentVec の runtime 表現。
+    """The runtime representation of the ONNX-ified ContentVec.
 
-    `final_proj` はグラフに焼き込まれているので runtime には持たない。どの出力が
-    どの (emb_output_layer, use_final_proj) に対応するかは mapping.json が唯一の情報源。
+    `final_proj` is baked into the graph, so the runtime does not carry it. mapping.json
+    is the single source of truth for which output corresponds to which
+    (emb_output_layer, use_final_proj).
     """
 
     session: InferenceSession
@@ -137,10 +140,11 @@ def _element_type(dtype: torch.dtype) -> type:
 
 
 def _bind_torch_input(io_binding: Any, name: str, tensor: torch.Tensor) -> torch.Tensor:
-    """torch の CUDA バッファを ORT の入力へゼロコピーで bind する。
+    """Bind a torch CUDA buffer to an ORT input with zero copy.
 
-    返り値は呼び出し側で**参照を保持する**こと。contiguous 化で新しい tensor が
-    生まれる場合があり、束縛したポインタの寿命がそれに依存する。
+    The caller **must keep a reference** to the return value: making the tensor
+    contiguous may produce a new tensor, and the lifetime of the bound pointer depends
+    on it.
     """
     tensor = tensor.contiguous()
     device = tensor.device
@@ -201,7 +205,8 @@ def extract_features(
     )
     if dev.type == "cuda":
         io_binding = model.session.io_binding()
-        # bind したポインタの寿命は `bound` が握る。run が終わるまで捨てないこと。
+        # `bound` owns the lifetime of the bound pointer. Do not drop it before run
+        # returns.
         bound = _bind_torch_input(io_binding, "source", source)
         io_binding.bind_output(
             output_name, "cuda", device_id=dev.index if dev.index is not None else 0
@@ -283,9 +288,10 @@ def infer(
 def _select_onnx_file(
     asset_dir: Path, device: torch.device, is_half: bool
 ) -> tuple[Path, bool]:
-    """使う ONNX ファイルと、それが fp16 かどうかを返す。
+    """Return the ONNX file to use and whether it is fp16.
 
-    fp16 グラフは CPUExecutionProvider では実質動かないので、CPU では必ず fp32。
+    An fp16 graph is effectively unusable on CPUExecutionProvider, so CPU always gets
+    fp32.
     """
     if is_half and device.type == "cuda":
         fp16 = asset_dir / "hubert_fp16.onnx"
@@ -303,7 +309,8 @@ def _select_onnx_file(
 def load_hubert_model(
     file_name: Path, device: torch.device, is_half: bool
 ) -> HubertSession:
-    """ONNX 化済み ContentVec 資産ディレクトリを読む（scripts/export_hubert_onnx.py の出力）。"""
+    """Load the ONNX-ified ContentVec asset directory (the output of
+    scripts/export_hubert_onnx.py)."""
     asset_dir = file_name.expanduser()
     model_file, half = _select_onnx_file(asset_dir, device, is_half)
     session = create_session(model_file, device)

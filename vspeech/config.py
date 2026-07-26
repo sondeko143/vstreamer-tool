@@ -177,8 +177,9 @@ class TranscriptionConfig(BaseModel):
     transliterate_with_mozc: bool = False
     recording_log: bool = False
     recording_log_dir: Path = Path("./rec")
-    # Silero VAD スキップゲート (opt-in)。vc.vad_* とは独立 (ADR-0037)。
-    # 音声比率が閾値未満のチャンクを音声認識前に落とす。出力ダックは無し。
+    # Silero VAD skip gate (opt-in). Independent of vc.vad_* (ADR-0037).
+    # Drops chunks whose speech ratio is below the threshold before recognition.
+    # No output ducking.
     vad_gate: bool = False
     vad_model_file: Path = Field(default=Path())
     vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -396,18 +397,19 @@ class StreamVcRole(Enum):
 
 class StreamVcConfig(BaseModel):
     enable: bool = False
-    # 発話系 [vc]/[rvc] とは独立したモデル設定(ADR-0054)。共有素材パスは
-    # 各系統へ明示 propagate する方針(ADR-0046)。f0 抽出器だけは RvcConfig の
-    # 既定 (rmvpe) を上書きして fcpe にする: streaming はブロックごとに毎回 f0 を
-    # 引くので 1 推論あたりの軽い fcpe が向き、実機耳確認もその構成で行った
-    # (ADR-0053)。[stream_vc] は既定 disable なので既存挙動は変わらない。
+    # Model settings independent of the utterance path [vc]/[rvc] (ADR-0054). Shared
+    # asset paths are propagated explicitly to each path (ADR-0046). Only the f0
+    # extractor overrides RvcConfig's default (rmvpe) with fcpe: streaming pulls f0 on
+    # every block, so the lighter per-inference fcpe fits, and the on-hardware ear
+    # check was done in that configuration (ADR-0053). [stream_vc] is disabled by
+    # default, so existing behaviour does not change.
     #
-    # この上書きは default_factory だけでは効かない: default_factory は
-    # [stream_vc.rvc] が**完全に無い**ときにしか発火せず、model_file 等を含む
-    # 現実的な設定では pydantic が RvcConfig の table を検証し、f0_extractor_type を
-    # 省略すると RvcConfig 自身の既定 (rmvpe) に落ちてしまう。そこで下の before
-    # validator が「raw dict に f0_extractor_type が無い」ときだけ fcpe を注入する
-    # (明示された値は rmvpe でも尊重する)。
+    # default_factory alone cannot express this override: it only fires when
+    # [stream_vc.rvc] is **entirely absent**, while a realistic config containing
+    # model_file and friends makes pydantic validate the RvcConfig table, where an
+    # omitted f0_extractor_type falls back to RvcConfig's own default (rmvpe). Hence
+    # the before-validator below injects fcpe only when "the raw dict has no
+    # f0_extractor_type" (an explicit value is honoured, even rmvpe).
     rvc: RvcConfig = Field(
         default_factory=lambda: RvcConfig(f0_extractor_type=F0ExtractorType.fcpe),
         description="ストリーミング専用の RVC 設定。f0_extractor_type を省略すると "
@@ -418,12 +420,14 @@ class StreamVcConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _default_stream_rvc_f0_to_fcpe(cls, data):
-        """[stream_vc.rvc] table に f0_extractor_type が無ければ fcpe を注入する。
+        """Inject fcpe when the [stream_vc.rvc] table has no f0_extractor_type.
 
-        default_factory は table が丸ごと無いときにしか発火しないので、model_file 等を
-        持つ現実的な table では f0 が RvcConfig 既定の rmvpe に落ちてしまう。raw dict の
-        段階で「未指定」を検出し fcpe を補う(明示された rmvpe/fcpe はそのまま)。rvc が
-        dict でない(未指定 → default_factory / RvcConfig インスタンス直渡し)ときは触らない。
+        default_factory only fires when the table is missing altogether, so a realistic
+        table carrying model_file and friends would let f0 fall back to RvcConfig's
+        default rmvpe. Detect "not specified" while the data is still a raw dict and
+        supply fcpe (an explicit rmvpe/fcpe is left alone). When rvc is not a dict
+        (unspecified -> default_factory, or an RvcConfig instance passed directly),
+        leave it untouched.
         """
         if isinstance(data, dict):
             rvc = data.get("rvc")
@@ -466,9 +470,9 @@ class StreamVcConfig(BaseModel):
         ge=0,
         description="SOLA 位相合わせの探索半幅 ms (0 で無効)。実測 ±5ms で十分",
     )
-    # Silero VAD ノイズゲート (opt-in)。発話系 vc.vad_* とは独立 (ADR-0053)。
-    # 判定は入力ブロック、適用は出力ブロック(推論はスキップしない = 文脈と
-    # クロスフェードの連続性を保つ)。
+    # Silero VAD noise gate (opt-in). Independent of the utterance path vc.vad_*
+    # (ADR-0053). Decided on the input block, applied to the output block (inference
+    # is never skipped = context and crossfade stay continuous).
     vad_gate: bool = Field(
         default=False,
         description="ストリーミング経路の VAD ノイズゲート。off だと無音中も"
@@ -498,9 +502,10 @@ class StreamVcConfig(BaseModel):
         le=1.0,
         description="ゲートが閉じたときの出力ゲイン (0.0 = 完全ミュート)",
     )
-    # 入力エンベロープ追従 (opt-in, ADR-0057)。出力音量を入力の相対ラウドネス包絡へ
-    # duck 追従させ、アタック/ディケイをバッチ変換に近づける。既定 off でビット不変。
-    # 参照は入力平均 RMS の rolling EMA (envelope_ema_ms)。VAD ゲートの前に適用。
+    # Input envelope following (opt-in, ADR-0057). Ducks the output volume to follow
+    # the input's relative loudness envelope, bringing attack/decay closer to batch
+    # conversion. Off by default = bit-identical. The reference is a rolling EMA of the
+    # mean input RMS (envelope_ema_ms). Applied before the VAD gate.
     envelope_follow: bool = Field(
         default=False,
         description="出力音量を入力の相対ラウドネス包絡へ追従させる (アタック/"
@@ -542,7 +547,7 @@ class StreamVcConfig(BaseModel):
         description="local=M2 単一プロセス(既定)。producer=capture+vc+送信。"
         "consumer=受信+jitter buffer+再生(GPU/torch 不要)。ADR-0055",
     )
-    # producer: 送信先。consumer: 待受。role=local では未使用。
+    # producer: where to send. consumer: where to listen. Unused when role=local.
     peer_host: str | None = Field(
         default=None, description="producer の送信先ホスト(consumer の bind と一致)"
     )

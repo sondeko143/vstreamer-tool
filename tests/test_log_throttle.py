@@ -2,7 +2,7 @@ from vspeech.lib.log_throttle import LogThrottle
 
 
 class _FakeClock:
-    """単調増加の偽クロック。テストを決定的にする。"""
+    """A monotonically increasing fake clock, to make the tests deterministic."""
 
     def __init__(self) -> None:
         self.t = 0.0
@@ -33,25 +33,27 @@ def test_hits_within_min_interval_are_silent():
 
 
 def test_logs_again_after_min_interval_with_suppressed_total():
-    """再開したログの件数は、間引かれたぶんも含む通算でなければ意味がない。"""
+    """The count on a resumed log line is meaningless unless it is the running total,
+    including what was thinned out."""
     clock = _FakeClock()
     t = _throttle(clock)
     assert t.hit() == 1
     for _ in range(4):
         clock.advance(0.1)
         t.hit()
-    clock.advance(4.6)  # 前回ログからちょうど 5.0s
+    clock.advance(4.6)  # exactly 5.0s since the previous log line
     assert t.hit() == 6
 
 
 def test_quiet_period_rearms_and_resets_the_count():
-    """静穏を挟んだ再発は「別のインシデント」= 先頭で必ず 1 行出る。"""
+    """A recurrence after a quiet period is "another incident" = one line always at the
+    head."""
     clock = _FakeClock()
     t = _throttle(clock)
     assert t.hit() == 1
     clock.advance(3.0)
     assert t.hit() is None
-    clock.advance(10.1)  # quiet_s 超 = 新しいエピソード
+    clock.advance(10.1)  # past quiet_s = a new episode
     assert t.hit() == 1
 
 

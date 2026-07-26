@@ -1,8 +1,9 @@
-"""streaming VC の独立マイクキャプチャ(ADR-0052)。
+"""The independent mic capture of streaming VC (ADR-0052).
 
-発話系 recording は無改変のまま、別途 16k mono でマイクを開いて固定 hop の
-float32 ブロックを出す。排他デバイスで二重 open が失敗する環境向けの fan-out
-フォールバックは未実装(ADR-0052 に設計として残す)。
+Leaves the utterance-path recording untouched and opens the mic separately at 16k mono,
+emitting float32 blocks of a fixed hop. The fan-out fallback for environments where an
+exclusive device rejects a second open is unimplemented (it remains a design in
+ADR-0052).
 """
 
 from asyncio import Event
@@ -26,28 +27,31 @@ CAPTURE_RATE = 16000
 
 
 class CaptureSignal(Enum):
-    """capture → runner の帯域内シグナル(音声ブロックに混ぜて capture_queue へ流す番兵)。
+    """In-band signals from capture to the runner (sentinels pushed onto capture_queue
+    among the audio blocks).
 
-    capture と runner(vc_loop)は別タスクなので、capture の device 再 open から
-    runner の StreamingVc へ直接触れない。単一メンバの Enum を番兵にすることで、
-    runner 側は `block is CaptureSignal.REOPEN` の identity 判定で音声ブロックと
-    区別でき、型も `NDArray | CaptureSignal` に正直に絞れる。
+    capture and the runner (vc_loop) are separate tasks, so capture's device reopen
+    cannot touch the runner's StreamingVc directly. Using a single-member Enum as the
+    sentinel lets the runner tell it apart from an audio block by identity
+    (`block is CaptureSignal.REOPEN`) and lets the type narrow honestly to
+    `NDArray | CaptureSignal`.
     """
 
-    REOPEN = 0  # device 再 open の境界。runner は文脈/VAD ゲートを reset する。
+    # The boundary of a device reopen. The runner resets its context and VAD gate.
+    REOPEN = 0
 
 
-# capture_queue が運ぶ要素型:音声ブロック、または帯域内シグナルの番兵。
+# The element type capture_queue carries: an audio block, or an in-band signal sentinel.
 type CaptureItem = NDArray[np.float32] | CaptureSignal
 
 
 def ms_to_samples(ms: float, rate: int = CAPTURE_RATE) -> int:
-    """ms を rate のサンプル数へ(round)。"""
+    """Convert ms into a sample count at rate (rounded)."""
     return round(ms * rate / 1000.0)
 
 
 def pcm16_to_float32(data: bytes) -> NDArray[np.float32]:
-    """int16 PCM バイト列を [-1, 1] の float32 にする。"""
+    """Convert int16 PCM bytes into float32 in [-1, 1]."""
     return np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
 
 
@@ -72,19 +76,21 @@ async def _capture_read_loop(
     out_queue: Queue[CaptureItem],
     running: Event,
 ) -> None:
-    """steady-state: device fault が起きるまで hop サンプルずつ読み続ける。
+    """Steady state: keep reading hop samples at a time until a device fault.
 
-    device loss は stream.read() が (OSError, sd.PortAudioError) を raise する。
-    ここでは捕えず run_with_device_retry へ抜けさせ、close→backoff→再 open で
-    サブシステム内だけで回復する(兄弟 vc/playback や発話系は巻き込まない,
-    ADR-0050)。`while stream.active` だと deactivate が黙って返り get()/recv() で
-    待つ兄弟を無言で stall させうるので `while True` にする。
+    Device loss surfaces as stream.read() raising (OSError, sd.PortAudioError). It is not
+    caught here; it escapes to run_with_device_retry, which recovers within the subsystem
+    via close -> backoff -> reopen (without dragging in the sibling vc/playback tasks or
+    the utterance path, ADR-0050). `while stream.active` would return silently on
+    deactivate and could stall siblings waiting in get()/recv() without a word, so this
+    is `while True`.
 
-    `running` は発話系と共有の pause/resume ゲート(`context.running`)。capture は
-    これで**止まらない** — pause 中も回り続けて drop_oldest_put が backlog を捨てる
-    のが ADR-0050 の決定で、ここではその drop を「異常」と誤報しないためだけに見る。
+    `running` is the pause/resume gate shared with the utterance path
+    (`context.running`). Capture is **not** stopped by it -- ADR-0050 decided that
+    capture keeps running while paused and drop_oldest_put discards the backlog; it is
+    consulted here only to avoid misreporting those drops as an anomaly.
     """
-    # running 中の drop = 本物のバックプレッシャ。時間で絞る(ADR-0062)。
+    # A drop while running = real backpressure. Throttle by time (ADR-0062).
     drop_throttle = LogThrottle()
     while True:
         data, overflowed = await to_thread(stream.read, hop)
@@ -93,13 +99,15 @@ async def _capture_read_loop(
         block = pcm16_to_float32(bytes(data))
         if not drop_oldest_put(out_queue, block):
             if not running.is_set():
-                # pause 中は vc_loop が消費を止めるのでキューは満杯のまま = 以降の
-                # ブロックは 100% drop する。これは ADR-0050 が意図した挙動そのもの
-                # (paused 音声を溜めない)であって異常ではないので警告しない。毎回
-                # 出すと block_ms=160 で ~6 行/秒が pause の間ずっと流れ、警告が
-                # 意味を失う。黙って捨てはせず、pause 専用の stage で数える —
-                # 同じ stage に混ぜると、バックプレッシャ指標(RTF 評価に使う
-                # stream_vc_capture_drop)が pause 時間の長さで汚れる。
+                # While paused vc_loop stops consuming, so the queue stays full and every
+                # subsequent block is dropped. That is exactly the behaviour ADR-0050
+                # intended (do not accumulate paused audio) and not an anomaly, so no
+                # warning. Warning every time would emit about 6 lines a second at
+                # block_ms=160 for the whole pause and make the warning meaningless.
+                # They are still not discarded silently: they are counted under a
+                # pause-specific stage -- mixing them into the same stage would pollute
+                # the backpressure metric (stream_vc_capture_drop, used to assess RTF)
+                # with the length of the pause.
                 telemetry.record("stream_vc_capture_drop_paused", 1.0)
                 continue
             telemetry.record("stream_vc_capture_drop", 1.0)
@@ -117,26 +125,30 @@ async def capture_loop(
     ready: Event,
     running: Event,
 ) -> None:
-    """マイクから hop サンプルずつ読み、float32 ブロックを out_queue へ。
+    """Read hop samples at a time from the mic and push float32 blocks to out_queue.
 
-    初回 open は fail-loud(worker_startup)、以降の runtime device fault は
-    自力で再接続する(ADR-0050)。capture 自体は再 open で引き継ぐ状態を持たないが、
-    runner(vc_loop, 別タスク)は数秒前の rolling 文脈/クロスフェード tail を抱えた
-    ままなので、再 open 境界に CaptureSignal.REOPEN 番兵を capture_queue へ積んで
-    runner に文脈 reset を促す(直接触れないので帯域内で知らせる)。fault 時点で
-    積むため、番兵は queue 内の「fault 前の stale ブロック」と「再 open 後の fresh
-    ブロック」のちょうど境界に入る。満杯でも必ず入るよう drop_oldest_put を使う。
+    The first open is fail-loud (worker_startup); runtime device faults after that
+    reconnect on their own (ADR-0050). Capture itself carries no state across a reopen,
+    but the runner (vc_loop, a separate task) is still holding a rolling context and
+    crossfade tail from seconds ago, so a CaptureSignal.REOPEN sentinel is pushed onto
+    capture_queue at the reopen boundary to prompt the runner to reset its context (it
+    cannot be touched directly, hence the in-band signal). Pushing it at fault time puts
+    the sentinel exactly at the boundary between the "stale pre-fault blocks" and the
+    "fresh post-reopen blocks" in the queue. drop_oldest_put is used so it always gets
+    in, even when the queue is full.
 
-    `running`(= 発話系と共有の pause/resume ゲート)はキャプチャを止めるためでは
-    なく、pause 中の drop を異常として警告しないための判定に使う(_capture_read_loop)。
+    `running` (the pause/resume gate shared with the utterance path) is not used to stop
+    capture; it is consulted so that drops during a pause are not warned about as an
+    anomaly (see _capture_read_loop).
     """
 
     def _signal_reopen() -> None:
         drop_oldest_put(out_queue, CaptureSignal.REOPEN)
 
-    # VC の warmup 完了まで待ってからマイクを開く。先に開くと、モデルロード中に
-    # 実時間で溜まった音声が起動直後にキューへ殺到して drop の嵐になり、
-    # 最初の数百 ms が stale な音声で埋まる(実機ログで確認済み)。
+    # Wait for the VC warmup to finish before opening the mic. Opening earlier lets the
+    # audio that accumulated in real time during model loading flood the queue right
+    # after startup, causing a storm of drops and filling the first few hundred ms with
+    # stale audio (confirmed in the logs on real hardware).
     await ready.wait()
     await run_with_device_retry(
         open_stream=lambda: open_stream_vc_input_stream(config, hop),

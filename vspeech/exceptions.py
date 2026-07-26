@@ -32,10 +32,10 @@ def shutdown_worker(e: BaseException):
 class ConfigProblem:
     worker: str
     detail: str
-    # 問題の設定箇所のドット path (例 "rvc.model_file")。どの設定が悪いのかを散文の
-    # detail と別に名指す。現在の読み手は tests/test_preflight.py だけ (GUI がここへ
-    # ジャンプするのに使っていた: ADR-0045 → ADR-0061 で撤去)。テストが prose ではなく
-    # field で表明できるので残している。
+    # Dotted path of the offending setting (e.g. "rvc.model_file"). Names the bad
+    # setting apart from the prose in `detail`. The only reader today is
+    # tests/test_preflight.py (the GUI used it to jump here: ADR-0045, removed by
+    # ADR-0061). Kept because it lets tests assert on the field instead of the prose.
     field: str | None = None
 
     def __str__(self) -> str:
@@ -43,7 +43,7 @@ class ConfigProblem:
 
 
 class ConfigError(Exception):
-    """preflight が集約した致命的な設定不備（タスク spawn 前に送出）。"""
+    """Fatal config problems aggregated by preflight (raised before spawning tasks)."""
 
     def __init__(self, problems: list[ConfigProblem]):
         self.problems = problems
@@ -51,7 +51,7 @@ class ConfigError(Exception):
 
 
 class WorkerStartupError(Exception):
-    """worker が起動時に実リソースを取得できなかった（層B の深層失敗）。"""
+    """A worker could not acquire a real resource at startup (layer B, deep failure)."""
 
     def __init__(self, worker: str, detail: str):
         self.worker = worker
@@ -60,14 +60,15 @@ class WorkerStartupError(Exception):
 
 
 class DeviceNotFoundError(Exception):
-    """設定で指定したオーディオデバイスが解決できない。"""
+    """The audio device named in the config cannot be resolved."""
 
     pass
 
 
 @contextmanager
 def worker_startup(worker: str):
-    """worker 起動時のリソース取得失敗を WorkerStartupError へ変換する (層B, ADR-0038)。"""
+    """Convert a resource-acquisition failure at worker startup into a
+    WorkerStartupError (layer B, ADR-0038)."""
     try:
         yield
     except WorkerStartupError:

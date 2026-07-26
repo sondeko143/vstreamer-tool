@@ -1,19 +1,20 @@
-"""streaming VC の device 自力再接続ループ(ADR-0050)。
+"""The self-healing device reconnect loop of streaming VC (ADR-0050).
 
-capture/playback の steady-state で起きる runtime device fault
-(OSError / PortAudioError = マイク抜け・フォーマット変更・出力先消失など)を、
-兄弟タスクや発話系パイプラインを巻き込まずにサブシステム内で吸収する。
+Absorbs runtime device faults that occur in capture/playback steady state (OSError /
+PortAudioError = the mic being unplugged, a format change, the output sink disappearing,
+...) inside the subsystem, without dragging in sibling tasks or the utterance pipeline.
 
-- **初回 open は fail-loud**(worker_startup で WorkerStartupError 化 = ADR-0038)。
-  モデル/デバイス不在は設定不備であって、無限 retry で隠すべきではない。
-- **steady-state の device fault だけ** catch して close→backoff→再 open する。
-  発話系 recording worker(vspeech/worker/recording.py)の
-  `(OSError, sd.PortAudioError)` retry パターンを踏襲する(あちらは無改変で再利用)。
-- **CancelledError は握らない**。bare except / except Exception は使わず
-  DEVICE_ERRORS のみ捕える(cancellation は必ず propagate → shutdown_worker)。
+- **The first open is fail-loud** (worker_startup turns it into WorkerStartupError =
+  ADR-0038). A missing model or device is a config problem and must not be hidden behind
+  infinite retries.
+- **Only steady-state device faults** are caught, then close -> backoff -> reopen. This
+  follows the `(OSError, sd.PortAudioError)` retry pattern of the utterance-path
+  recording worker (vspeech/worker/recording.py), which is reused unmodified.
+- **CancelledError is never swallowed.** No bare except / except Exception; only
+  DEVICE_ERRORS is caught (cancellation always propagates -> shutdown_worker).
 
-このモジュールは capture/playback からのみ lazy import される(subsystem.py は
-import しない)ので、sounddevice を引いても subsystem の CPU-light 性は保たれる。
+This module is lazily imported only from capture/playback (subsystem.py does not import
+it), so pulling in sounddevice does not cost the subsystem its CPU-light property.
 """
 
 from __future__ import annotations
@@ -31,18 +32,19 @@ from vspeech.exceptions import worker_startup
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
 
-# steady-state で自力回復する device fault。CUDA 例外(RuntimeError 系)や
-# CancelledError は **含めない** — 前者は runner が別に扱い、後者は propagate する。
+# Device faults we recover from on our own in steady state. CUDA exceptions (the
+# RuntimeError family) and CancelledError are **excluded** -- the runner handles the
+# former separately and the latter must propagate.
 DEVICE_ERRORS = (OSError, sd.PortAudioError)
 
-# 再接続バックオフ(秒)。start から factor 倍で増え MAX で頭打ち。
+# Reconnect backoff (seconds). Grows from start by factor and saturates at MAX.
 BACKOFF_START = 0.5
 BACKOFF_MAX = 5.0
 BACKOFF_FACTOR = 2.0
 
 
 def next_backoff(prev: float) -> float:
-    """指数バックオフの次値(BACKOFF_MAX で clamp)。pure(CPU テスト対象)。"""
+    """The next exponential-backoff value (clamped at BACKOFF_MAX). Pure (CPU-testable)."""
     return min(prev * BACKOFF_FACTOR, BACKOFF_MAX)
 
 
@@ -51,10 +53,11 @@ class _Closable(Protocol):
 
 
 def close_quietly(stream: _Closable) -> None:
-    """stream.close() の device 例外を握り潰す。
+    """Swallow device exceptions raised by stream.close().
 
-    既に壊れた/閉じたデバイスを二重 close する経路(fault→close→finally 再close)が
-    あるので、close 自体の DEVICE_ERRORS はログだけ残して無視する。
+    There is a path that double-closes an already broken/closed device
+    (fault -> close -> close again in finally), so DEVICE_ERRORS from close itself are
+    logged and ignored.
     """
     try:
         stream.close()
@@ -67,11 +70,11 @@ async def _reopen_with_backoff[T: _Closable](
     sleep: Callable[[float], Awaitable[None]],
     label: str,
 ) -> T:
-    """backoff を挟みながら open_stream() が成功するまで再試行して返す。
+    """Retry open_stream() with backoff in between until it succeeds, then return it.
 
-    再 open は **runtime retry** なので worker_startup で包まない(fail-loud に
-    しない)。open 自体が DEVICE_ERRORS で失敗しても backoff を伸ばして粘る。
-    CancelledError は sleep から素通しで propagate する。
+    A reopen is a **runtime retry**, so it is not wrapped in worker_startup (not made
+    fail-loud). Even when the open itself fails with DEVICE_ERRORS we extend the backoff
+    and keep going. CancelledError propagates straight through the sleep.
     """
     backoff = BACKOFF_START
     while True:
@@ -98,27 +101,27 @@ async def run_with_device_retry[T: _Closable](
     reopen_metric: str | None = None,
     sleep: Callable[[float], Awaitable[None]] = _async_sleep,
 ) -> None:
-    """初回 open → steady-state → device fault で再接続、を回す device ループ。
+    """The device loop: first open -> steady state -> reconnect on a device fault.
 
-    - `open_stream`: ストリームを開いて返す。初回だけ worker_startup で包んで
-      fail-loud にする(それ以降の再 open は runtime retry)。
-    - `run`: 与えたストリームで steady-state を回す coroutine を返す。device
-      fault(DEVICE_ERRORS)を投げて戻ってきたら close→backoff→再 open する。
-    - `on_reopen`: 再 open の直前に呼ぶフック(per-connection state のリセット等)。
-    - `reopen_metric`: 与えると再接続ごとに telemetry へ 1.0 を記録する。
+    - `open_stream`: open and return the stream. Only the first call is wrapped in
+      worker_startup and made fail-loud (every reopen after that is a runtime retry).
+    - `run`: return a coroutine that runs steady state on the given stream. When it comes
+      back having raised a device fault (DEVICE_ERRORS), close -> backoff -> reopen.
+    - `on_reopen`: hook called just before a reopen (to reset per-connection state, etc).
+    - `reopen_metric`: when given, records 1.0 to telemetry on every reconnect.
 
-    CancelledError は捕らえず shutdown_worker で包んで送出する。
+    CancelledError is not caught; it is wrapped by shutdown_worker and raised.
     """
     with worker_startup(worker):
-        stream = open_stream()  # 初回のみ fail-loud (ADR-0038)
+        stream = open_stream()  # fail-loud on the first open only (ADR-0038)
     logger.info("%s started", label)
     try:
         while True:
             try:
                 await run(stream)
             except DEVICE_ERRORS as e:
-                # runtime device fault。サブシステム内で吸収し、発話系や兄弟タスクを
-                # 巻き込まない(ADR-0050)。
+                # A runtime device fault. Absorb it inside the subsystem without dragging
+                # in the utterance path or sibling tasks (ADR-0050).
                 logger.warning("%s device fault; retry for %r", label, e)
                 if reopen_metric:
                     telemetry.record(reopen_metric, 1.0)

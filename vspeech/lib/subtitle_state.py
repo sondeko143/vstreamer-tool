@@ -1,7 +1,8 @@
-"""subtitle の純粋な状態機械 (ADR-0040)。
+"""The pure state machine of subtitle (ADR-0040).
 
-TK / OBS 両バックエンドがこれを共有するので、履歴・トリム・区切り文字・
-表示時間の意味はバックエンドによらず同一になる。tkinter に依存しない。
+Both the TK and OBS backends share it, so the meaning of history, trimming,
+separators and display duration is identical regardless of backend. Has no
+dependency on tkinter.
 """
 
 from collections import deque
@@ -13,9 +14,10 @@ from vspeech.config import Anchor
 from vspeech.config import SubtitleTextConfig
 from vspeech.shared_context import WorkerInput
 
-# tk では win32 の -transparentcolor に化ける番兵。OBS では背景の不透明度 0
-# に写す (カラーキー自体が不要になる)。tkinter に依存しないここが両バック
-# エンドの共有元 -- subtitle_tk と obs_text_settings の双方が import する。
+# A sentinel that turns into win32's -transparentcolor under tk. Under OBS it maps to a
+# background opacity of 0 (the color key itself becomes unnecessary). This module is
+# where both backends share it because it does not depend on tkinter -- both
+# subtitle_tk and obs_text_settings import it from here.
 TRANSPARENT_BG_COLOR = "systemTransparent"
 
 

@@ -1,4 +1,4 @@
-"""scripts/hubert_metrics の純関数テスト（資産・GPU 不要）。"""
+"""Tests for the pure functions of scripts/hubert_metrics (no assets, no GPU)."""
 
 import warnings
 
@@ -40,7 +40,8 @@ def test_feature_cosine_both_zero_frames_match():
 
 
 def test_feature_cosine_one_side_all_zero_is_not_a_match():
-    """片方だけが全ゼロなら不一致。ゼロノルムのフレームを一律除外すると 1.0 を返してしまう。"""
+    """One side being all zeros is a mismatch. Excluding zero-norm frames wholesale would
+    return 1.0."""
     a = np.ones((3, 4), dtype=np.float32)
     z = np.zeros((3, 4), dtype=np.float32)
     assert feature_cosine(a, z) == pytest.approx(0.0)
@@ -59,7 +60,7 @@ def test_waveform_correlation_identical_and_inverted():
 
 
 def test_waveform_snr_identical_is_inf_and_emits_no_warning():
-    """完全一致 = 無限 SNR。除算しないので numpy 警告も出ない。"""
+    """An exact match is infinite SNR. No division happens, so numpy emits no warning."""
     x = np.sin(np.linspace(0.0, 10.0, 4096))
     with warnings.catch_warnings():
         warnings.simplefilter("error")
@@ -82,7 +83,8 @@ def test_waveform_snr_all_silent_is_inf():
 
 
 def test_waveform_snr_silent_reference_with_corrupted_test_is_minus_inf():
-    """参照が無音でもテスト側にエネルギーがあれば「完璧」と報告してはならない。"""
+    """A silent reference with energy on the test side must never be reported as
+    "perfect"."""
     ref = np.zeros(2048)
     test = np.zeros(2048)
     test[1024:] = 0.1
@@ -90,21 +92,23 @@ def test_waveform_snr_silent_reference_with_corrupted_test_is_minus_inf():
 
 
 def test_waveform_snr_catches_corruption_at_any_offset():
-    """フレーム分割しないので、末尾端数だろうと破損は必ず検出される。
+    """With no framing, corruption is always detected, even in a trailing partial frame.
 
-    全体 SNR は末尾を捨てないので、長さが frame_len の倍数でなくても、末尾端数
-    だけが壊れているケースを inf（完璧）と誤らず検出する。
+    The overall SNR discards no tail, so even when the length is not a multiple of
+    frame_len, a case where only the trailing partial frame is corrupt is detected rather
+    than misreported as inf (perfect).
     """
     ref = np.sin(np.linspace(0.0, 40.0, 2548))
     test = ref.copy()
-    test[2048:] += 5.0  # frame_len の倍数を超えた末尾端数だけを壊す
+    test[2048:] += 5.0  # corrupt only the tail past the last frame_len multiple
     result = waveform_snr(ref, test)
     assert np.isfinite(result), f"tail corruption was hidden: {result}"
-    assert result < 40.0  # ゲートを通してはならない
+    assert result < 40.0  # must not pass the gate
 
 
 def test_waveform_snr_rejects_non_finite_input():
-    """NaN / inf は破損。`inf`（完璧）と誤報告せず明示的に落とすこと。"""
+    """NaN / inf is corruption. Fail explicitly rather than misreporting `inf`
+    (perfect)."""
     x = np.sin(np.linspace(0.0, 10.0, 2048))
     with pytest.raises(ValueError, match="finite"):
         waveform_snr(x, np.full_like(x, np.nan))
@@ -113,7 +117,7 @@ def test_waveform_snr_rejects_non_finite_input():
 
 
 def test_waveform_snr_rejects_energy_overflow():
-    """エネルギー和が float64 で overflow したら inf を返さず落とすこと。"""
+    """When the energy sum overflows float64, fail instead of returning inf."""
     x = np.full(16, 1e200)
     test = x.copy()
     test[0] = 0.0
@@ -122,10 +126,11 @@ def test_waveform_snr_rejects_energy_overflow():
 
 
 def test_fp16_thresholds_are_looser_than_fp32_but_still_tight():
-    """fp16 ゲートは fp32 より緩いが、無意味に緩くはないこと。
+    """The fp16 gate is looser than fp32, but not meaninglessly loose.
 
-    `1e-1` / `0.999` は**動かさない硬い上限**。実測 x 10 がこれを超えるなら
-    fp16 export が壊れているということなので、しきい値ではなく export を疑う。
+    `1e-1` / `0.999` are **hard limits that do not move**. If 10x the measured value
+    exceeds them, the fp16 export is broken, so suspect the export rather than the
+    threshold.
     """
     from scripts.hubert_metrics import COSINE_MIN
     from scripts.hubert_metrics import COSINE_MIN_FP16

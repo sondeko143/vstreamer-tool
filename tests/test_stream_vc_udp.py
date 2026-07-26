@@ -66,6 +66,7 @@ def test_send_protocol_error_logging_is_throttled():
         with patch("vspeech.stream_vc.udp.telemetry") as mock_telemetry:
             for _ in range(120):
                 proto.error_received(OSError("peer down"))
-    # telemetry は毎回。ログはエピソード先頭の 1 本だけ(タイトループ = 同一エピソード)。
+    # Telemetry every time. Only one log line at the head of the episode (a tight loop is
+    # a single episode).
     assert mock_telemetry.record.call_count == 120
     assert mock_logger.warning.call_count == 1

@@ -33,10 +33,10 @@ def test_pcm16_to_float32_empty():
 
 
 class _FakeStream:
-    """hop サンプルを n_blocks 回返し、以降は device fault を模して OSError。
+    """Returns hop samples n_blocks times, then raises OSError to mimic a device fault.
 
-    `_capture_read_loop` は `while True` で device fault のときだけ抜ける
-    (run_with_device_retry へ委ねる)ので、テストもその出口で止める。
+    `_capture_read_loop` is a `while True` that only exits on a device fault (delegating to
+    run_with_device_retry), so the test stops at that same exit.
     """
 
     def __init__(self, n_blocks: int, overflowed: bool = False) -> None:
@@ -51,11 +51,12 @@ class _FakeStream:
 
 
 class _PausingStream(_FakeStream):
-    """`pause_on_read` 回目の read の**最中**に pause 状態へ落ちるマイク。
+    """A mic that drops into the paused state **during** the `pause_on_read`-th read.
 
-    実機の順序(バックプレッシャで警告 → pause が来て沈黙)を 1 ループ内で再現する。
-    gate はそのブロックが queue へ渡る前に落ちるので、`pause_on_read` 回目の
-    ブロック自体が既に paused 側。running 側の drop は `pause_on_read - 1` 個になる。
+    It reproduces the real-hardware ordering (warn on backpressure, then a pause arrives
+    and it goes quiet) within a single loop. The gate closes before that block reaches the
+    queue, so the `pause_on_read`-th block is already on the paused side, and the drops on
+    the running side number `pause_on_read - 1`.
     """
 
     def __init__(self, n_blocks: int, running: Event, pause_on_read: int) -> None:
@@ -67,8 +68,8 @@ class _PausingStream(_FakeStream):
     def read(self, frames: int) -> tuple[bytes, bool]:
         self._read_count += 1
         if self._read_count == self._pause_on_read:
-            # Event.clear() は待機者を起こさないので、to_thread のワーカースレッド
-            # から触ってもループには触れない(set() と違い call_soon を使わない)。
+            # Event.clear() wakes no waiters, so touching it from a to_thread worker
+            # thread does not touch the loop (unlike set(), it uses no call_soon).
             self._running.clear()
         return super().read(frames)
 
@@ -83,18 +84,18 @@ def enabled_telemetry():
 
 
 def _full_queue(hop: int) -> Queue[CaptureItem]:
-    """満杯 = 以降の put は必ず最古を捨てる(= 毎ブロック drop)。"""
+    """Full = every subsequent put discards the oldest (i.e. a drop on every block)."""
     q: Queue[CaptureItem] = Queue(maxsize=1)
     q.put_nowait(np.zeros(hop, dtype=np.float32))
     return q
 
 
 async def test_capture_drop_while_paused_does_not_warn(caplog, enabled_telemetry):
-    """pause 中の drop は設計どおり(ADR-0050)なので警告を出さない。
+    """Drops during a pause are by design (ADR-0050), so no warning is emitted.
 
-    pause 中は vc_loop が消費を止めるため capture_queue は満杯のままで、以降の
-    ブロックは 100% drop する。ここで毎回警告すると block_ms=160 で ~6 行/秒が
-    pause の間ずっと出続ける(実機で報告された症状)。
+    While paused, vc_loop stops consuming, so capture_queue stays full and every
+    subsequent block is dropped. Warning every time here would emit about 6 lines a second
+    at block_ms=160 for the whole pause (the symptom reported on real hardware).
     """
     hop = 4
     running = Event()  # clear = paused
@@ -107,17 +108,18 @@ async def test_capture_drop_while_paused_does_not_warn(caplog, enabled_telemetry
                 running,
             )
     assert not [r for r in caplog.records if "capture queue full" in r.getMessage()]
-    # 黙って捨てるのではなく、pause 専用の stage で観測可能にしておく。
+    # Rather than discarding silently, keep them observable under a pause-specific stage.
     summary = enabled_telemetry.summary()
     assert summary["stream_vc_capture_drop_paused"]["count"] == 5
-    # バックプレッシャ指標(RTF 評価に使う)は pause の drop で汚さない。
+    # The backpressure metric (used to assess RTF) is not polluted by pause drops.
     assert "stream_vc_capture_drop" not in summary
 
 
 async def test_capture_drop_while_running_warns_once_per_episode(
     caplog, enabled_telemetry
 ):
-    """running 中の drop は本物のバックプレッシャ。エピソード先頭の 1 本だけ出す。"""
+    """Drops while running are real backpressure. Only one line at the head of the
+    episode."""
     hop = 4
     running = Event()
     running.set()
@@ -131,24 +133,27 @@ async def test_capture_drop_while_running_warns_once_per_episode(
                 running,
             )
     warnings = [r for r in caplog.records if "capture queue full" in r.getMessage()]
-    assert len(warnings) == 1  # タイトループ = すべて min_interval_s 内
+    assert len(warnings) == 1  # a tight loop = all within min_interval_s
     assert "(total 1)" in warnings[0].getMessage()
     summary = enabled_telemetry.summary()
-    assert summary["stream_vc_capture_drop"]["count"] == n  # telemetry は毎回
+    assert summary["stream_vc_capture_drop"]["count"] == n  # telemetry every time
     assert "stream_vc_capture_drop_paused" not in summary
 
 
 async def test_capture_drop_switches_side_when_pause_arrives(caplog, enabled_telemetry):
-    """running → pause の遷移をまたいでも、drop はブロックごとに正しい側へ振り分かる。
+    """Across a running -> pause transition, each block's drop is still attributed to the
+    right side.
 
-    実機で起きる順序そのもの(バックプレッシャで警告 → pause で沈黙)。遷移後に
-    警告が増えないこと、そして pause 前の drop がバックプレッシャ指標に残ることを見る。
+    Exactly the ordering that happens on real hardware (warn on backpressure, then go
+    quiet on pause). This checks that no further warnings appear after the transition and
+    that the drops from before the pause remain in the backpressure metric.
     """
     hop = 4
     running = Event()
     running.set()
     total_blocks = 10
-    pause_on_read = 4  # この read の最中に pause → 4 個目のブロックは既に paused 側
+    # pause happens during this read -> the 4th block is already on the paused side
+    pause_on_read = 4
     running_drops = pause_on_read - 1
     stream = _PausingStream(total_blocks, running, pause_on_read=pause_on_read)
     with caplog.at_level(logging.WARNING):
@@ -160,7 +165,7 @@ async def test_capture_drop_switches_side_when_pause_arrives(caplog, enabled_tel
                 running,
             )
     warnings = [r for r in caplog.records if "capture queue full" in r.getMessage()]
-    assert len(warnings) == 1  # running 側のエピソード先頭のみ
+    assert len(warnings) == 1  # only the head of the episode on the running side
     summary = enabled_telemetry.summary()
     assert summary["stream_vc_capture_drop"]["count"] == running_drops
     assert summary["stream_vc_capture_drop_paused"]["count"] == (

@@ -11,5 +11,5 @@ def test_recording_positive_bounds_reject_zero():
         RecordingConfig(channels=0)
     with pytest.raises(ValidationError):
         RecordingConfig(chunk=0)
-    # 既定は許容
+    # the default is accepted
     RecordingConfig()

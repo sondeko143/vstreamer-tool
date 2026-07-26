@@ -1,9 +1,10 @@
-"""streaming VC の変換ループ(ADR-0053)。
+"""The conversion loop of streaming VC (ADR-0053).
 
-capture の float32 ブロックを StreamingVc(固定ブロック+左文脈+クロスフェード)
-で変換し、StreamPacket にして transport へ送る。モデルの構築は
-発話系 rvc_worker(vspeech/worker/vc.py)と同じ手順を [stream_vc.rvc] から行う
-(発話系は無改変)。重い import は関数内。
+Converts capture's float32 blocks through StreamingVc (fixed block + left context +
+crossfade), wraps them in a StreamPacket and sends them to the transport. Models are
+built by the same procedure as the utterance-path rvc_worker (vspeech/worker/vc.py), but
+from [stream_vc.rvc] (the utterance path is untouched). Heavy imports live inside the
+functions.
 """
 
 from __future__ import annotations
@@ -37,19 +38,21 @@ if TYPE_CHECKING:
     from vspeech.stream_vc.envelope import StreamingEnvelope
     from vspeech.stream_vc.gate import StreamingVadGate
 
-# ORT のログ閾値: 0=VERBOSE / 1=INFO / 2=WARNING / 3=ERROR / 4=FATAL。
-# SessionOptions().log_severity_level の既定は -1 = Env のレベルを継承 (onnx_session.py)。
+# ORT log threshold: 0=VERBOSE / 1=INFO / 2=WARNING / 3=ERROR / 4=FATAL.
+# The default of SessionOptions().log_severity_level is -1 = inherit the Env level
+# (onnx_session.py).
 _ORT_LOG_ERROR = 3
 
-# process_block の transient GPU error をこの回数まで連続で許して drop する。
-# 超えたら黙って spin せず落とす(下記 vc_loop の error handling 参照)。
+# Allow this many consecutive transient GPU errors from process_block and drop the
+# blocks. Past that, fail instead of spinning silently (see vc_loop's error handling
+# below).
 _MAX_CONSECUTIVE_VC_ERRORS = 10
 
 
 def make_stream_packet(
     session_id: str, seq: int, hop_seconds: float, pcm: bytes, sample_rate: int
 ) -> StreamPacket:
-    """seq/pts 付きの StreamPacket(pts = seq * hop_seconds)。"""
+    """A StreamPacket carrying seq/pts (pts = seq * hop_seconds)."""
     return StreamPacket(
         session_id=session_id,
         seq=seq,
@@ -60,10 +63,11 @@ def make_stream_packet(
 
 
 def apply_input_boost(block, boost):
-    """入力ブロックに input_boost gain をかける([-1,1] へ clip = 発話系 vc.py の
-    int16 `mul` 飽和相当)。発話系は `change_voice` の外(worker)で gain をかけるので、
-    streaming も `StreamingVc` の外(この runner)でかけて対称にする。boost==1.0 は
-    恒等(既定値なので、既定 config では挙動が変わらない)。"""
+    """Apply the input_boost gain to the input block (clipping to [-1,1], equivalent to
+    the int16 `mul` saturation in the utterance path's vc.py). The utterance path applies
+    the gain outside `change_voice` (in the worker), so streaming applies it outside
+    `StreamingVc` (in this runner) for symmetry. boost==1.0 is the identity (and is the
+    default, so the default config behaves unchanged)."""
     import numpy as np
 
     if boost == 1.0:
@@ -72,7 +76,7 @@ def apply_input_boost(block, boost):
 
 
 def make_stream_envelope(sv_config: StreamVcConfig) -> StreamingEnvelope | None:
-    """envelope_follow のとき StreamingEnvelope を作る (off なら None)。純関数。"""
+    """Build a StreamingEnvelope when envelope_follow is on (None when off). Pure."""
     if not sv_config.envelope_follow:
         return None
     from vspeech.stream_vc.envelope import StreamingEnvelope
@@ -90,21 +94,24 @@ def make_stream_envelope(sv_config: StreamVcConfig) -> StreamingEnvelope | None:
 async def gate_window_gains(
     gate: StreamingVadGate, vad_session: Any, block: NDArray[np.float32]
 ) -> NDArray[np.float64]:
-    """**入力**ブロックの VAD 判定から 32ms 窓ごとのゲインを返す(ADR-0059)。
+    """Return the 32ms per-window gains from the VAD decision on the **input** block
+    (ADR-0059).
 
-    判定は入力側(素のマイクレベル。input_boost をかける前 = 実際の S/N で
-    判定する)、適用は出力側。推論そのものはスキップしない: `StreamingVc` は
-    rolling 左文脈とクロスフェード tail を持つので、ブロックを飛ばすと文脈に
-    穴が開き発話再開時の seam が壊れる(GPU 余力は実測 RTF 0.24 で十分)。
+    The decision is made on the input side (the bare mic level, before input_boost, i.e.
+    at the actual S/N) and applied on the output side. Inference itself is never skipped:
+    `StreamingVc` carries a rolling left context and a crossfade tail, so skipping a block
+    punches a hole in the context and breaks the seam when speech resumes (the GPU has
+    plenty of headroom -- measured RTF 0.24).
 
-    Silero は RNN なので、再帰状態はブロックをまたいで持ち越す(`gate.vad_carry`)。
-    ブロックごとに作り直すと毎回コールドスタートし、明確な有声窓まで低い確率を
-    返す(実測で 34 窓中 15 窓が 0.3 を割る)。窓単位ゲートはその確率を 1 窓ずつ
-    直接使うので、持ち越しは必須(lib/vad.py の VadCarry 参照)。
+    Silero is an RNN, so its recurrent state is carried across blocks
+    (`gate.vad_carry`). Rebuilding it per block cold-starts it every time and returns low
+    probabilities even for clearly voiced windows (measured: 15 of 34 windows below 0.3).
+    A per-window gate uses those probabilities directly, one window at a time, so
+    carrying the state over is mandatory (see VadCarry in lib/vad.py).
 
-    ONNX 推論はブロッキングなので、発話系 worker/vc.py と同じく `to_thread`
-    へ逃がす。失敗しても音は素通し(fail-open = 全開の 1 窓マスク)で、警告は
-    最初の 1 回だけ。
+    ONNX inference blocks, so it is offloaded to `to_thread`, as in the utterance path's
+    worker/vc.py. On failure the audio passes through (fail-open = a fully open one-window
+    mask) and the warning is emitted only once.
     """
     import numpy as np
 
@@ -117,11 +124,12 @@ async def gate_window_gains(
         if not gate.warned:
             gate.warned = True
             logger.warning("stream_vc vad gate failed; passing audio ungated: %s", e)
-        # window_gains を通さないので hangover 予算(`_since_speech`)は据え置き。
-        # fail-open 中はどのみち全開なので害は無く、回復したら直前の予算から続く。
-        # 長さは**本来の窓数**に揃える。1 要素で返すと、次の成功ブロックがそれを
-        # 「前ブロックのマスク」として hop ぶん手前へ置くので窓中心が -144ms まで
-        # ずれ、継ぎ目に 0.59 のゲイン段差(= クリック)が出る。
+        # window_gains is not run, so the hangover budget (`_since_speech`) is left as is.
+        # While failing open everything is wide open anyway, so it does no harm, and on
+        # recovery it continues from the previous budget. The length must match **the real
+        # window count**: returning a single element makes the next successful block place
+        # it as "the previous block's mask" one hop earlier, shifting the window centre to
+        # -144ms and producing a 0.59 gain step (a click) at the seam.
         from math import ceil
 
         from vspeech.lib.vad import VAD_WINDOW_SAMPLES
@@ -131,7 +139,7 @@ async def gate_window_gains(
 
 
 def build_stream_vc_runtime(sv_config: StreamVcConfig) -> dict[str, Any]:
-    """[stream_vc.rvc] から device + モデル + metadata を構築する。"""
+    """Build the device, models and metadata from [stream_vc.rvc]."""
     import json
 
     from vspeech.config import F0ExtractorType
@@ -148,17 +156,19 @@ def build_stream_vc_runtime(sv_config: StreamVcConfig) -> dict[str, Any]:
         file_name=rvc.hubert_model_file, device=device, is_half=half_available
     )
     session = create_session(rvc.model_file, device)
-    # f0 セッションだけ ORT の警告を落とす。fcpe.onnx (poe export-fcpe-onnx, ADR-0049) は
-    # torchfcpe を dynamic_axes 付きでトレースした都合で中間ノード /bundled/Squeeze_1 の
-    # 推論 rank が実際と食い違い、ORT が VerifyOutputSizes 警告を **毎推論** stdout に出す。
-    # 良性(実 shape で確保され f0 は正しい)だが streaming では ~6 行/秒になり、
-    # ログを埋める。グラフ側の修正は torchfcpe のトレース由来なので
-    # graph surgery か上流パッチが要り、割に合わない(過去に ONNX graph surgery を
-    # 試して徒労に終わっている)。
-    # 代償: この f0 セッション固有の ORT 警告 (provider fallback 等) も見えなくなる。
-    # そのため、握り潰したうちで実害のある「CUDA を要求したのに CPU へ落ちた」だけは
-    # vc_loop 側の check_cuda_provider(f0_session) でプログラム的に捕まえる
-    # (WorkerStartupError = fail-loud)。ログの間引きで診断を失わないための対。
+    # Silence ORT's warnings for the f0 session only. Because fcpe.onnx
+    # (poe export-fcpe-onnx, ADR-0049) traces torchfcpe with dynamic_axes, the inferred
+    # rank of the intermediate node /bundled/Squeeze_1 disagrees with the real one and ORT
+    # prints a VerifyOutputSizes warning to stdout on **every inference**. It is benign
+    # (the real shape is allocated and f0 is correct) but in streaming it becomes about 6
+    # lines a second and buries the log. Fixing the graph would need graph surgery or an
+    # upstream patch since it comes from torchfcpe's tracing, which is not worth it (a
+    # past attempt at ONNX graph surgery went nowhere).
+    # The cost: ORT warnings specific to this f0 session (provider fallback, etc.) become
+    # invisible too. So the one silenced warning that does real harm -- "CUDA was
+    # requested but it fell back to CPU" -- is caught programmatically by
+    # check_cuda_provider(f0_session) in vc_loop (WorkerStartupError = fail-loud). That is
+    # the counterpart that keeps the log thinning from costing us the diagnosis.
     if rvc.f0_extractor_type == F0ExtractorType.rmvpe:
         f0_session = create_session(
             rvc.rmvpe_model_file, device, log_severity=_ORT_LOG_ERROR
@@ -169,9 +179,10 @@ def build_stream_vc_runtime(sv_config: StreamVcConfig) -> dict[str, Any]:
         )
     else:
         f0_session = None
-    # VAD ノイズゲート(既定 off)。発話系 [vc] と同じ silero_vad.onnx を CPU で開く
-    # (vspeech/lib/vad.py を読み取り専用で再利用)。worker_startup スコープ内で
-    # 呼ばれるので、モデルが無い/壊れているときは起動時に fail-loud (ADR-0038)。
+    # The VAD noise gate (off by default). Opens the same silero_vad.onnx as the utterance
+    # path's [vc] on CPU (reusing vspeech/lib/vad.py read-only). It is called inside the
+    # worker_startup scope, so a missing or corrupt model fails loud at startup
+    # (ADR-0038).
     if sv_config.vad_gate:
         from vspeech.lib.vad import create_vad_session
 
@@ -198,10 +209,11 @@ def build_stream_vc_runtime(sv_config: StreamVcConfig) -> dict[str, Any]:
 def make_streaming_vc(rt: dict[str, Any], sv_config: StreamVcConfig) -> StreamingVc:
     from vspeech.lib.stream_vc import StreamingVc
 
-    # rvc.quality(発話系の reflect-pad 量)は固定ブロック streaming コアには本質的に
-    # 非該当なので意図的に適用しない: streaming は reflect-pad ではなく実際のローリング
-    # 左文脈(context_len)を使うため、pad 量というパラメタが意味を持たない。一方
-    # input_boost は発話系と対称に honor する(vc_loop でブロックへ適用)。
+    # rvc.quality (the utterance path's reflect-pad amount) is deliberately not applied:
+    # it is fundamentally inapplicable to the fixed-block streaming core, because
+    # streaming uses a real rolling left context (context_len) rather than reflect-pad, so
+    # a pad amount is meaningless. input_boost, on the other hand, is honoured
+    # symmetrically with the utterance path (applied to the block in vc_loop).
     return StreamingVc(
         rvc_config=rt["rvc_config"],
         device=rt["device"],
@@ -227,33 +239,36 @@ async def vc_loop(
     session_id: str,
     ready: Event,
 ) -> None:
-    """capture ブロックを変換し StreamPacket として transport へ送る。
+    """Convert capture blocks and send them to the transport as StreamPackets.
 
-    サブシステムは Command routing の外だが、発話系と同じ全体停止ゲート
-    `context.running` は尊重する:pause 中は消費/変換を止め、capture の
-    drop_oldest_put が backlog を捨てるので paused 音声は溜まらない(ADR-0050)。
+    The subsystem lives outside Command routing but still respects the same global stop
+    gate as the utterance path, `context.running`: while paused it stops consuming and
+    converting, and capture's drop_oldest_put discards the backlog so paused audio never
+    accumulates (ADR-0050).
     """
     with worker_startup("stream_vc"):
-        # check_cuda_provider は worker/vc.py の pure helper を import 再利用
-        # (relocate は vc.py 編集=非ゴール違反ゆえ不可; ADR-0050/0053 の内部部品
-        # import 再利用に沿う)。
+        # check_cuda_provider is reused by importing the pure helper from worker/vc.py
+        # (relocating it would mean editing vc.py, which violates a non-goal; this follows
+        # ADR-0050/0053's practice of reusing internals by import).
         from vspeech.worker.vc import check_cuda_provider
 
         rt = await to_thread(build_stream_vc_runtime, sv_config)
         check_cuda_provider(rt["session"].get_providers())
-        # f0 セッションは ORT の警告を落としてある(build_stream_vc_runtime 参照)ので、
-        # provider fallback をログでは検知できない。ここで明示的に見る。
-        # 偽陽性は無い: create_session が CUDA を要求するのは device.type == "cuda"
-        # のときだけで、意図的な CPU 実行なら 1 行上の decoder 検査で先に落ちる。
+        # The f0 session has ORT's warnings silenced (see build_stream_vc_runtime), so a
+        # provider fallback cannot be detected from the log. Check it explicitly here.
+        # There are no false positives: create_session only requests CUDA when
+        # device.type == "cuda", and a deliberate CPU run would already have failed on the
+        # decoder check one line above.
         if rt["f0_session"] is not None:
             check_cuda_provider(rt["f0_session"].get_providers())
         sv = make_streaming_vc(rt, sv_config)
-        # warmup 失敗(固定 shape グラフ構築の失敗)は起動時失敗として fail-loud に
-        # する(ADR-0038)。loop 内 process_block は guard していないので、ここで
-        # 落として WorkerStartupError にするのが正しい。
+        # A warmup failure (failing to build the fixed-shape graph) is a startup failure
+        # and is made fail-loud (ADR-0038). process_block inside the loop is not guarded,
+        # so failing here as a WorkerStartupError is the right thing.
         await to_thread(sv.warmup)
     logger.info("stream vc worker started")
-    ready.set()  # ここで初めて capture がマイクを開く(起動時の drop 嵐を防ぐ)
+    # only now does capture open the mic (preventing the startup drop storm)
+    ready.set()
     hop_seconds = sv_config.block_ms / 1000.0
     sample_rate = rt["target_sample_rate"]
     vad_session = rt["vad_session"]
@@ -269,19 +284,22 @@ async def vc_loop(
     envelope = make_stream_envelope(sv_config)
     seq = 0
     consecutive_errors = 0
-    # transient な process_block drop の警告を時間で絞る(ADR-0062)。連続失敗の
-    # tear-down 判定(consecutive_errors / _MAX_CONSECUTIVE_VC_ERRORS)とは別物なので
-    # 混ぜない。telemetry(stream_vc_process_error)は毎 drop 記録する。
+    # Throttle warnings about transient process_block drops by time (ADR-0062). This is a
+    # different thing from the consecutive-failure tear-down decision
+    # (consecutive_errors / _MAX_CONSECUTIVE_VC_ERRORS), so do not mix them. Telemetry
+    # (stream_vc_process_error) is recorded on every drop.
     vc_error_throttle = LogThrottle()
     try:
         while True:
             block = await in_queue.get()
-            # capture が device 再 open した境界の番兵(capture と runner は別タスクで
-            # capture の on_reopen から sv へ直接触れないので帯域内で知らせる)。ここに
-            # 至るまで sv は数秒前の rolling 文脈/クロスフェード tail を抱えたままで、
-            # 再 open 直後の fresh block をそれと crossfade すると seam がプチる。
-            # pause/resume と同じく文脈と VAD ゲートを捨て、次の fresh block を無音から
-            # 始める。番兵は音声ではないので変換せず continue する。
+            # The sentinel marking the boundary where capture reopened the device (capture
+            # and the runner are separate tasks and capture's on_reopen cannot touch sv
+            # directly, hence the in-band signal). Up to this point sv is still holding a
+            # rolling context and crossfade tail from seconds ago, and crossfading the
+            # fresh post-reopen block against those clicks at the seam. As with
+            # pause/resume, discard the context and the VAD gate so the next fresh block
+            # starts from silence. The sentinel is not audio, so skip conversion and
+            # continue.
             if block is CaptureSignal.REOPEN:
                 sv._reset_context()
                 if gate is not None:
@@ -290,61 +308,67 @@ async def vc_loop(
                     envelope.reset()
                 telemetry.record("stream_vc_capture_reopen_reset", 1.0)
                 continue
-            # 全体停止ゲート(発話系 worker/playback.py と同じ idiom)。paused の間は
-            # 消費/変換を止める — capture は回り続け drop_oldest_put が backlog を
-            # 捨てるので paused 音声は溜まらない。get() 済みの block は pause 前後の
-            # stale なものなので、resume 後は捨てて次の fresh block から始める。
+            # The global stop gate (the same idiom as the utterance path's
+            # worker/playback.py). While paused, stop consuming and converting -- capture
+            # keeps running and drop_oldest_put discards the backlog, so paused audio does
+            # not accumulate. The block already taken by get() straddles the pause and is
+            # stale, so after resuming it is discarded and we start from the next fresh
+            # block.
             if not context.running.is_set():
                 await context.running.wait()
-                # not-set -> set の遷移(= resume)。実時間が飛んでいるので rolling
-                # 文脈/クロスフェード tail(_reset_context)と VAD ゲートを捨て、
-                # 最初の post-resume block を pre-pause の尾ではなく無音から fade-in
-                # させる。
+                # The not-set -> set transition (= resume). Real time has jumped, so
+                # discard the rolling context and crossfade tail (_reset_context) and the
+                # VAD gate, and let the first post-resume block fade in from silence
+                # rather than from the pre-pause tail.
                 sv._reset_context()
                 if gate is not None:
                     gate.reset()
                 if envelope is not None:
                     envelope.reset()
                 continue
-            # ゲート/エンベロープ判定は input_boost **前**の素のブロックで行う
-            # (ブースト後の見かけのレベルではなく実際のマイクレベルで判定/整形する)。
-            # raw を保持してから boost する (boost==1.0 の identity fast-path でも安全)。
+            # The gate/envelope decisions are made on the raw block, **before**
+            # input_boost (deciding and shaping at the actual mic level rather than the
+            # apparent post-boost level). Keep the raw block, then boost (safe even on
+            # the boost==1.0 identity fast path).
             raw_block = block
             gains = None
             if gate is not None:
                 gains = await gate_window_gains(gate, vad_session, raw_block)
             block = apply_input_boost(raw_block, sv_config.rvc.input_boost)
             t0 = perf_counter()
-            # transient GPU error(CUDA error / OOM 等)は torch/CUDA 由来の
-            # RuntimeError(torch.cuda.OutOfMemoryError も RuntimeError 派生)で
-            # 上がってくる。**tear down せず 1 ブロック drop して継続**する:
-            #   - CUDA OOM を tight loop で retry すると thrash する。
-            #   - 単発は回復可能なので 1 ブロック drop で十分。ここで tear down まで
-            #     すると(= 連続失敗が _MAX_ に達したときの raise がそうなるように)
-            #     内側 TaskGroup → main の外側 TaskGroup 経由でプロセスごと落ち、
-            #     発話系も道連れになる。それは opt-in で有効化した機能が
-            #     unrecoverable な障害を起こしたときに **意図した** fail-loud
-            #     (daemon が再起動する; ADR-0050)だが、単発の transient には過剰。
-            #   - _reset_context も不要 — process_block は infer で raise すると
-            #     self._context を更新しないので、次の成功ブロックが直前の good な
-            #     文脈から続く。drop したぶん音は 1 ブロック欠け、次tickの SOLA は
-            #     本来非連続な 2 区間を crossfade するので、稀に 1 回のプチっとした
-            #     不連続が残りうる(crossfade はこれを透明に隠すわけではない)。ただ
-            #     OOM は稀で、ここで reset しても改善はしないので許容する。seq も
-            #     進めない(欠落を playback に偽装しない)。
-            #   - **VAD ゲートの `_prev_gains` も更新しない**(apply を通らないので
-            #     自動的にそうなる)。これは意図どおり: process_block は infer で
-            #     raise すると self._context を更新しないので、次の成功ブロックの
-            #     emit 先頭(遅延ぶん)は drop したブロックではなく **最後に成功した
-            #     ブロックの尾**の再描画になる。実測(f0 マーカ付き合成入力で block 4
-            #     を drop): 次 emit 先頭 45ms の f0 は 522Hz = block 3 の期待値
-            #     530Hz であって、drop した block 4 の 699Hz ではない。つまり据え置き
-            #     の `_prev_gains`(= block 3 のマスク)が正しい相手に当たる。ここで
-            #     マスクだけ進めると drop したブロックのマスクを別の音に当てる。
-            # ただし連続失敗が続くなら黙って spin せず落とす(下 _MAX_...)。
-            # ORT ネイティブ例外(onnxruntime の Fail/RuntimeException)は RuntimeError
-            # 派生ではないので **捕えない** — あれは大抵グラフ/モデルの恒久的な不備で
-            # fail-loud が正しい。broad な except Exception は使わない。
+            # Transient GPU errors (CUDA errors, OOM, ...) surface as a RuntimeError from
+            # torch/CUDA (torch.cuda.OutOfMemoryError also derives from RuntimeError).
+            # **Do not tear down: drop one block and carry on**:
+            #   - Retrying CUDA OOM in a tight loop thrashes.
+            #   - A one-off is recoverable, so dropping one block is enough. Tearing down
+            #     here (as the raise does once consecutive failures reach _MAX_) would
+            #     take the whole process down through the inner TaskGroup and main's outer
+            #     TaskGroup, dragging the utterance path with it. That is the **intended**
+            #     fail-loud when an opt-in feature hits an unrecoverable fault (a daemon
+            #     restarts it; ADR-0050), but it is excessive for a one-off transient.
+            #   - _reset_context is unnecessary either -- when process_block raises inside
+            #     infer it does not update self._context, so the next successful block
+            #     continues from the last good context. The audio is one block short, and
+            #     the next tick's SOLA crossfades two spans that are genuinely
+            #     discontinuous, so a single faint click can occasionally remain (the
+            #     crossfade does not hide this transparently). But OOM is rare and
+            #     resetting here would not improve it, so it is accepted. seq is not
+            #     advanced either (never disguise a loss to playback).
+            #   - **The VAD gate's `_prev_gains` is not updated either** (automatically so,
+            #     since apply is never reached). That is intended: because process_block
+            #     leaves self._context untouched when infer raises, the head of the next
+            #     successful emit (the delay portion) is a re-render of **the tail of the
+            #     last successful block**, not of the dropped one. Measured (dropping
+            #     block 4 with a synthetic input carrying f0 markers): the f0 over the
+            #     first 45ms of the next emit is 522Hz, matching block 3's expected 530Hz,
+            #     not the dropped block 4's 699Hz. So the retained `_prev_gains` (block 3's
+            #     mask) lands on the right audio. Advancing the mask alone here would apply
+            #     the dropped block's mask to different audio.
+            # If failures do keep coming, fail rather than spin silently (see _MAX_ below).
+            # Native ORT exceptions (onnxruntime's Fail/RuntimeException) do not derive
+            # from RuntimeError and are therefore **not caught** -- those are usually
+            # permanent graph/model defects where fail-loud is right. No broad
+            # except Exception here.
             try:
                 out_i16 = await to_thread(sv.process_block, block)
             except RuntimeError as e:
@@ -366,19 +390,21 @@ async def vc_loop(
                     )
                     raise
                 continue
-            # 連続失敗カウンタだけ回復でリセットする(tear-down 判定用)。警告の間引きは
-            # LogThrottle が自前でエピソードを見るので、ここでは触らない(fail/success
-            # 交互でも毎 drop 警告しない)。
+            # Only the consecutive-failure counter is reset on recovery (it drives the
+            # tear-down decision). The warning thinning is left alone: LogThrottle tracks
+            # episodes itself, so alternating fail/success does not warn on every drop.
             consecutive_errors = 0
             telemetry.record("stream_vc", perf_counter() - t0)
-            # 入力エンベロープ追従 (ADR-0057) → VAD ゲートの順 (バッチ apply_input_envelope
-            # と同じ順)。envelope は安価な numpy 演算なので inline (to_thread 不要)。
+            # Input envelope following (ADR-0057) first, then the VAD gate (the same order
+            # as the batch apply_input_envelope). The envelope is cheap numpy work, so it
+            # runs inline (no to_thread needed).
             if envelope is not None:
                 out_i16 = envelope.apply(out_i16, raw_block)
             if gate is not None and gains is not None:
-                # マスクは emit 遅延を補正して重ねる(ADR-0059)。遅延は公称の読み出し
-                # 位置から導いた値で tick 間一定(SOLA の lag は載せない — 載せると
-                # マスクの時刻軸が tick ごとに再アンカーされ継ぎ目でゲインが跳ぶ)。
+                # The mask is overlaid with the emit delay corrected (ADR-0059). The delay
+                # is derived from the nominal read position and is constant across ticks
+                # (SOLA's lag is excluded -- including it would re-anchor the mask's time
+                # axis every tick and make the gain jump at the seam).
                 out_i16 = gate.apply(out_i16, gains, sv.emit_delay_samples, sample_rate)
                 if float(gains.min()) < 1.0:
                     telemetry.record("stream_vc_vad_gated", 1.0)

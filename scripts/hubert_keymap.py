@@ -1,13 +1,14 @@
-"""fairseq HuBERT/ContentVec の state_dict キーを transformers HubertModel 名へ写す。
+"""Map fairseq HuBERT/ContentVec state_dict keys onto transformers HubertModel names.
 
-構造的に strict: `build_key_map` は transformers 側のパラメータに供給元が
-1 つでも無ければ例外を投げる。黙って誤変換された encoder が runtime に届く経路を塞ぐ。
+Structurally strict: `build_key_map` raises if even one parameter on the transformers side
+has no source. This closes the path by which a silently mis-converted encoder could reach
+the runtime.
 """
 
 import re
 from collections.abc import Iterable
 
-# fairseq -> transformers。先頭から順に最初にマッチした 1 本だけを適用する。
+# fairseq -> transformers. Applied top to bottom; only the first matching rule is used.
 _RULES: tuple[tuple[str, str], ...] = (
     (
         r"^feature_extractor\.conv_layers\.(\d+)\.0\.",
@@ -36,12 +37,12 @@ _RULES: tuple[tuple[str, str], ...] = (
     (r"^mask_emb$", "masked_spec_embed"),
 )
 
-# transformers HubertModel に対応物が無い fairseq パラメータ。
-# final_proj は別テンソルとして抽出するのでここでは捨てる。
-# label_embs_concat は HuBERT の事前学習用ラベル埋め込みで、推論では使わない。
+# fairseq parameters with no counterpart in transformers' HubertModel.
+# final_proj is extracted as a separate tensor, so it is dropped here.
+# label_embs_concat is HuBERT's pre-training label embedding and is unused at inference.
 DROPPED_PREFIXES: tuple[str, ...] = ("final_proj.", "label_embs_concat")
 
-# torch>=2.1 の weight_norm は parametrizations.* として state_dict に現れる。
+# On torch>=2.1, weight_norm appears in the state_dict as parametrizations.*.
 _WEIGHT_NORM_ALIASES: dict[str, str] = {
     "encoder.pos_conv_embed.conv.weight_g": "encoder.pos_conv_embed.conv.parametrizations.weight.original0",
     "encoder.pos_conv_embed.conv.weight_v": "encoder.pos_conv_embed.conv.parametrizations.weight.original1",
@@ -49,10 +50,11 @@ _WEIGHT_NORM_ALIASES: dict[str, str] = {
 
 
 def translate_key(fairseq_key: str) -> str | None:
-    """fairseq のキー名を transformers のキー名へ。
+    """Translate a fairseq key name into a transformers key name.
 
-    `None` は「意図的に捨てるキー（DROPPED_PREFIXES）」の意味であって、「規則に一致しなかった」
-    の意味ではない。規則に一致しないキーはそのまま素通しする（両者で同名のキーがあるため）。
+    `None` means "a key we deliberately drop (DROPPED_PREFIXES)", not "no rule matched".
+    Keys that match no rule are passed through unchanged (some keys have the same name on
+    both sides).
     """
     if fairseq_key.startswith(DROPPED_PREFIXES):
         return None
@@ -60,20 +62,22 @@ def translate_key(fairseq_key: str) -> str | None:
         translated, hits = re.subn(pattern, replacement, fairseq_key)
         if hits:
             return translated
-    # encoder.layer_norm.* / encoder.layers.N.final_layer_norm.* は両者で同名。
+    # encoder.layer_norm.* and encoder.layers.N.final_layer_norm.* have the same name on
+    # both sides.
     return fairseq_key
 
 
 def build_key_map(
     hf_keys: Iterable[str], fairseq_keys: Iterable[str]
 ) -> dict[str, str]:
-    """{transformers_key: fairseq_key} を返す。
+    """Return {transformers_key: fairseq_key}.
 
-    fail-closed の網は二重に張る:
-      - 未充足: transformers 側のパラメータに供給元が 1 つも無ければ KeyError。
-      - 衝突: 2 つの fairseq パラメータが同じ transformers パラメータに着地したら KeyError。
-        素の dict 代入だと後勝ちで黙って上書きされる。「供給元が無い」網はこれを捕まえられない
-        （間違った規則の出力が別の正当なキーと偶然一致するケース）ので、専用に検出する。
+    The fail-closed net is cast twice:
+      - Unfilled: KeyError if any parameter on the transformers side has no source at all.
+      - Collision: KeyError if two fairseq parameters land on the same transformers
+        parameter. A plain dict assignment would silently let the last one win. The
+        "no source" net cannot catch this (the case where a wrong rule's output happens to
+        coincide with another legitimate key), so it is detected separately.
     """
     hf_key_set = set(hf_keys)
     mapping: dict[str, str] = {}

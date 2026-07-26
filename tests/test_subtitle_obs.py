@@ -27,7 +27,7 @@ from vspeech.worker.subtitle_obs import validate_sources
 
 
 class FakeObsClient:
-    """ObsWsClient の狭い口だけを真似る。ネットワークも OBS も無し。"""
+    """Imitates only the narrow surface of ObsWsClient. No network and no OBS."""
 
     def __init__(self, missing: set[str] | None = None):
         self.calls: list[tuple[str, dict]] = []
@@ -88,9 +88,9 @@ def make_message(text: str, position=None) -> WorkerInput:
 
 
 class SucceedingClient(FakeObsClient):
-    """`FakeObsClient` を `ObsWsClient(ws)` の代わりに差し込めるようにする
-    最小拡張。`identify()` を追加するだけで、`subtitle_obs_worker` レベルの
-    結合テストで `ObsWsClient` の代わりに使える (ネットワークも OBS も無し)。
+    """The minimal extension that lets `FakeObsClient` stand in for `ObsWsClient(ws)`.
+    Adding `identify()` alone is enough to use it instead of `ObsWsClient` in integration
+    tests at the `subtitle_obs_worker` level (no network and no OBS).
     """
 
     def __init__(self, _ws=None, missing: set[str] | None = None):
@@ -154,9 +154,10 @@ class RetryableIdentifyTimeoutClient:
 
 
 class AlwaysFailingSetClient:
-    """identify/GetInputSettings は毎回成功するが、SetInputSettings は毎回
-    失敗する -- typo ではなく持続的な OBS 側の拒否を模す。「識別できた直後に
-    毎回壊れる」失敗が、backoff/warn-once を無効化しないことを確かめる。
+    """identify/GetInputSettings always succeed while SetInputSettings always fails --
+    modelling a persistent rejection from OBS rather than a typo. It verifies that a
+    failure that "breaks every time right after identifying" does not defeat the
+    backoff/warn-once.
     """
 
     def __init__(self, _ws):
@@ -174,10 +175,10 @@ class AlwaysFailingSetClient:
 
 
 def make_tick_hoist_client(pushed: list[tuple[int, str, str]], crash_text: str):
-    """セッションごとに `pushed` へ (session_index, source, text) を記録する
-    `ObsWsClient` 代替のファクトリ。セッション 0 で `crash_text` そのものを
-    push しようとした瞬間に切断を起こす -- 「字幕が表示された直後に OBS が
-    落ちた」を模す。
+    """A factory for an `ObsWsClient` stand-in that records (session_index, source, text)
+    into `pushed` per session. In session 0 it triggers a disconnect the moment
+    `crash_text` itself is pushed -- modelling "OBS died right after the subtitle was
+    displayed".
     """
     session_counter = {"n": -1}
 
@@ -232,8 +233,8 @@ def make_mid_session_disconnect_client(after_n_text_pushes: int):
 
 
 def make_recording_client(pushed: list[tuple[str, str]]):
-    """`pushed` へ (source, text) を記録するだけの `ObsWsClient` 代替。切断も
-    クラッシュもしない -- pause gate のテスト専用。
+    """An `ObsWsClient` stand-in that merely records (source, text) into `pushed`. It
+    neither disconnects nor crashes -- for the pause-gate tests only.
     """
 
     class Client(SucceedingClient):
@@ -249,10 +250,10 @@ def make_recording_client(pushed: list[tuple[str, str]]):
 
 
 def make_session_health_client(clock: FakeClock):
-    """セッション 0 は接続直後 (elapsed=0) に即死する。セッション 1 は、死ぬ
-    直前に clock を `SESSION_HEALTHY_SEC` 超まで進めてから同じように死ぬ --
-    「健全に生き延びてから落ちた」を実時間を待たずに表現する。backoff の
-    リセット枝を狙って踏むためのテスト専用。
+    """Session 0 dies immediately after connecting (elapsed=0). Session 1 advances the
+    clock past `SESSION_HEALTHY_SEC` just before dying the same way -- expressing "lived
+    healthily, then dropped" without waiting in real time. For deliberately exercising the
+    backoff reset branch in tests only.
     """
     session_counter = {"n": -1}
 
@@ -384,9 +385,9 @@ def make_style_recording_crash_on_text_client(
 
 
 class RecordingLogger:
-    """`vspeech.worker.subtitle_obs.logger` の代わりに差し込む記録専用の偽
-    logger。標準 logging のハンドラ/レベル設定に依存せず、warn/backoff の
-    呼び出し内容を直接アサートできるようにする。
+    """A recording-only fake logger to stand in for
+    `vspeech.worker.subtitle_obs.logger`. It lets the tests assert directly on the
+    warn/backoff calls without depending on standard logging's handler/level setup.
     """
 
     def __init__(self):
@@ -409,7 +410,7 @@ class RecordingLogger:
 
 
 class FakeClock:
-    """`monotonic` の代わりに差し込める、テストが手で進める時計。"""
+    """A clock the tests advance by hand, to stand in for `monotonic`."""
 
     def __init__(self, t: float = 0.0):
         self.t = t
@@ -430,9 +431,9 @@ class _FakeConnection:
 
 
 def make_fake_connect():
-    """`websockets.asyncio.client.connect` の代わりに差し込む。実ネットワーク
-    に触れず、常に (中身の無い) 接続として振る舞う `async with` 対応の
-    コンテキストマネージャを返す。
+    """Stands in for `websockets.asyncio.client.connect`. Returns an `async with`-capable
+    context manager that touches no real network and always behaves as an (empty)
+    connection.
     """
 
     def fake_connect(url: str):
@@ -548,10 +549,10 @@ def make_fake_wait_for(in_queue: Queue[WorkerInput], clock: FakeClock):
 
 
 async def _settle(ticks: int = 200) -> None:
-    """バックグラウンドタスクへ、実時間を待たずにイベントループの制御を
-    何度か明け渡す。ここで使う fake はどれも実際に await でブロックしない
-    (キューが空でタイムアウト無しに待つ場合を除く) ので、数十 tick もあれば
-    十分ここまで進む。
+    """Yield control of the event loop to the background tasks several times, without
+    waiting in real time. None of the fakes used here actually block in an await (except
+    when waiting on an empty queue with no timeout), so a few dozen ticks is more than
+    enough to get this far.
     """
     for _ in range(ticks):
         await asyncio.sleep(0)
@@ -2163,7 +2164,7 @@ async def test_refresh_panel_configs_repoints_anchor_not_just_config():
 # `ObsIdentifyError`) uncaught, so it fell through the worker's inner
 # fail-loud catch (`ObsIdentifyError`/`ObsResourceNotFoundError`) into the
 # *outer* fail-open catch (which does catch `WebSocketException`) and
-# retried forever -- ADR-0042's Alternatives-rejected #1 ("全て
+# retried forever -- ADR-0042's Alternatives-rejected #1 ("everything
 # fail-open"), shipped by accident. Every fail-loud test above
 # (`test_an_auth_rejection_becomes_a_worker_startup_error`) monkeypatches
 # `ObsWsClient` itself to raise `ObsIdentifyError` directly, which only

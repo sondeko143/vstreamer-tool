@@ -1,27 +1,31 @@
-"""fairseq ContentVec (hubert_base.pt) を transformers HubertModel 資産へ変換する。
+"""Convert fairseq ContentVec (hubert_base.pt) into transformers HubertModel assets.
 
-Python 3.11 + fairseq で **一度だけ** 走らせるオフライン処理。runtime には含めない。
-fairseq / transformers は pyproject にも uv.lock にも無い。poe task が `uv run --with` で
-使い捨ての 3.11 環境に供給する（`--python 3.11` は必須。省くとプロジェクトの処理系に落ち、
-cp311 の fairseq wheel が入らない）。
+An offline step run **exactly once** on Python 3.11 with fairseq. It is not part of the
+runtime: neither fairseq nor transformers appears in pyproject or uv.lock. The poe task
+supplies them to a throwaway 3.11 environment via `uv run --with` (`--python 3.11` is
+mandatory -- omitting it falls back to the project interpreter, where no cp311 fairseq
+wheel can be installed).
 
     uv run poe convert-hubert \
         --input  <path>/hubert_base.pt \
         --output <path>/hubert_contentvec \
         --golden <path>/hubert_golden
 
-poe task は `python -m scripts.convert_hubert` の形で起動する。ファイルパスで叩くと
-sys.path[0] が scripts/ になり `from scripts.hubert_metrics import ...` を解決できない。
+The poe task launches it as `python -m scripts.convert_hubert`. Invoking it by file path
+makes sys.path[0] be scripts/, which cannot resolve
+`from scripts.hubert_metrics import ...`.
 
-このあと `uv run poe export-hubert-onnx` で ONNX を書き出すまで、runtime は資産を読めない。
+The runtime cannot read the assets until `uv run poe export-hubert-onnx` writes the ONNX
+afterwards.
 
-出力:
-  <output>/config.json, model.safetensors  transformers HubertModel の encoder
-  <output>/final_proj.safetensors          fairseq の final_proj (768->256)
-  <output>/mapping.json                    fairseq output_layer -> hidden_states の対応
-  <golden>/hubert_golden.npz               fairseq 側の正解特徴量（fp32）
+Outputs:
+  <output>/config.json, model.safetensors  the transformers HubertModel encoder
+  <output>/final_proj.safetensors          fairseq's final_proj (768->256)
+  <output>/mapping.json                    fairseq output_layer -> hidden_states mapping
+  <golden>/hubert_golden.npz               the reference features from fairseq (fp32)
 
-変換の正しさはこのスクリプト自身がアサートする。通らなければ資産を書かない。
+This script asserts the correctness of the conversion itself. If the assertions fail, no
+assets are written.
 """
 
 import argparse
@@ -41,16 +45,17 @@ from scripts.hubert_metrics import MAX_ABS_MAX
 from scripts.hubert_metrics import feature_cosine
 from scripts.hubert_metrics import feature_max_abs_diff
 
-# しきい値は scripts/hubert_metrics.py が単一情報源。ここで再定義しないこと。
-# 変換時点でこれを満たさなければ資産を書き出さない。
+# scripts/hubert_metrics.py is the single source of truth for the thresholds. Never
+# redefine them here. If they are not met at conversion time, no assets are written.
 
-# 検証・golden 捕獲に使う代表音声（決定論的。RNG を使わない）。
+# The representative audio used for verification and golden capture (deterministic; uses
+# no RNG).
 GOLDEN_SAMPLE_RATE = 16000
 GOLDEN_SECONDS = 1.0
 
 
 def make_fixed_audio() -> np.ndarray:
-    """220Hz + 440Hz の決定論的な mono float32 波形（[-1, 1]）。"""
+    """A deterministic 220Hz + 440Hz mono float32 waveform in [-1, 1]."""
     n = int(GOLDEN_SAMPLE_RATE * GOLDEN_SECONDS)
     t = np.arange(n, dtype=np.float64) / GOLDEN_SAMPLE_RATE
     wave = 0.3 * np.sin(2 * np.pi * 220.0 * t) + 0.15 * np.sin(2 * np.pi * 440.0 * t)
@@ -58,10 +63,11 @@ def make_fixed_audio() -> np.ndarray:
 
 
 def load_fairseq_model(checkpoint: Path):
-    """fairseq 側の ContentVec を eval モードで読む（現行 rvc.py と同一手順）。
+    """Load fairseq's ContentVec in eval mode (the same procedure as the current rvc.py).
 
-    saved_cfg も返す。HubertConfig の一部（活性化関数名）はモジュール属性からは
-    綺麗に取れないため、チェックポイントが保持している設定値から読む。
+    Also returns saved_cfg: part of HubertConfig (the activation function name) cannot be
+    read cleanly from module attributes, so it is taken from the settings the checkpoint
+    holds.
     """
     import fairseq.data.dictionary
     from fairseq import checkpoint_utils
@@ -76,7 +82,8 @@ def load_fairseq_model(checkpoint: Path):
 
 
 def derive_hf_config(fs_model, saved_cfg) -> HubertConfig:
-    """fairseq モデルの実属性 / 保存済み設定から HubertConfig を組む（ハードコードしない）。"""
+    """Build a HubertConfig from the fairseq model's real attributes and saved settings
+    (nothing is hard-coded)."""
     conv_dim: list[int] = []
     conv_kernel: list[int] = []
     conv_stride: list[int] = []
@@ -108,7 +115,7 @@ def derive_hf_config(fs_model, saved_cfg) -> HubertConfig:
         do_stable_layer_norm=bool(getattr(fs_model.encoder, "layer_norm_first", False)),
         num_conv_pos_embeddings=int(pos_conv.kernel_size[0]),
         num_conv_pos_embedding_groups=int(pos_conv.groups),
-        # 推論専用。dropout は全て 0 にして eval と一致させる。
+        # Inference only. All dropout is 0 so it matches eval.
         hidden_dropout=0.0,
         activation_dropout=0.0,
         attention_dropout=0.0,
@@ -120,7 +127,7 @@ def derive_hf_config(fs_model, saved_cfg) -> HubertConfig:
 
 
 def convert_encoder(fs_model, hf_config: HubertConfig) -> HubertModel:
-    """fairseq の重みを transformers HubertModel へ strict に流し込む。"""
+    """Load fairseq's weights into a transformers HubertModel strictly."""
     hf_model = HubertModel(hf_config)
     hf_model.eval()
 
@@ -135,7 +142,8 @@ def convert_encoder(fs_model, hf_config: HubertConfig) -> HubertModel:
 def fairseq_features(
     fs_model, source: torch.Tensor, layer: int, use_final_proj: bool
 ) -> np.ndarray:
-    """現行 rvc.py の extract_features と同一の呼び出しで fp32 特徴量を得る。"""
+    """Obtain fp32 features through exactly the call the current rvc.py's extract_features
+    makes."""
     padding_mask = torch.zeros(source.shape, dtype=torch.bool)
     with torch.inference_mode():
         logits = fs_model.extract_features(
@@ -149,16 +157,19 @@ def hf_hidden_states(
     hf_model: HubertModel, source: torch.Tensor
 ) -> tuple[torch.Tensor, ...]:
     with torch.inference_mode():
-        # fairseq の padding_mask (True=パディング) と transformers の attention_mask
-        # (1=有効) は意味が反転している。パディング無しなので何も渡さない = 全有効。
+        # fairseq's padding_mask (True=padding) and transformers' attention_mask
+        # (1=valid) have inverted meanings. There is no padding, so pass nothing = all
+        # valid.
         outputs = hf_model(input_values=source, output_hidden_states=True)
     return outputs.hidden_states
 
 
 def resolve_layer_offset(fs_model, hf_model: HubertModel, source: torch.Tensor) -> int:
-    """fairseq output_layer=N が transformers hidden_states[N + offset] に対応する offset。
+    """The offset for which fairseq's output_layer=N corresponds to transformers'
+    hidden_states[N + offset].
 
-    候補を総当たりして誤差最小を選び、複数の層で一致することを要求する（off-by-one 対策）。
+    Every candidate is tried, the one with the smallest error wins, and it is required to
+    agree across several layers (a guard against off-by-one).
     """
     hidden_states = hf_hidden_states(hf_model, source)
     resolved: set[int] = set()
@@ -191,7 +202,7 @@ def resolve_layer_offset(fs_model, hf_model: HubertModel, source: torch.Tensor) 
 def verify(
     fs_model, hf_model: HubertModel, source: torch.Tensor, layer_offset: int
 ) -> dict[str, np.ndarray]:
-    """(9,True) と (12,False) で等価をアサートし、fairseq 側の golden を返す。"""
+    """Assert equivalence at (9,True) and (12,False) and return fairseq's golden."""
     final_proj = fs_model.final_proj
     hidden_states = hf_hidden_states(hf_model, source)
     golden: dict[str, np.ndarray] = {}
@@ -218,10 +229,11 @@ def verify(
 
 
 def main() -> None:
-    # 日本語の --help epilog (stdout) と検証失敗時の SystemExit 診断 (stderr) を Windows の
-    # cp1252 console でも壊さない（プロジェクト頻出の encoding 対策。sibling の
-    # export_hubert_onnx.py と同型で stdout/stderr 両方）。typeshed は sys.stdout/stderr を
-    # .reconfigure を持たない TextIO とするが、runtime は TextIOWrapper。
+    # Keeps the Japanese --help epilog (stdout) and the SystemExit diagnostics on a
+    # verification failure (stderr) from breaking on a Windows cp1252 console (the
+    # encoding guard this project keeps needing; the same shape as the sibling
+    # export_hubert_onnx.py, on both stdout and stderr). typeshed types sys.stdout/stderr
+    # as a TextIO without .reconfigure, but at runtime they are TextIOWrapper.
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # ty: ignore[unresolved-attribute]
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # ty: ignore[unresolved-attribute]
     parser = argparse.ArgumentParser(
@@ -284,7 +296,9 @@ def main() -> None:
         )
 
     args.golden.mkdir(parents=True, exist_ok=True)
-    # numpy 2 の savez スタブは allow_pickle:bool を持ち、**golden(ndarray dict)展開と衝突する型誤検知。実行時は正しい。
+    # numpy 2's savez stub declares allow_pickle:bool, which collides with the **golden
+    # (dict of ndarrays) expansion -- a false positive from the type checker. It is
+    # correct at runtime.
     np.savez(args.golden / "hubert_golden.npz", wav=wav, **golden)  # ty: ignore[invalid-argument-type]
 
     print(f"wrote asset -> {args.output}")

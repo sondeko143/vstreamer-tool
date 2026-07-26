@@ -1,17 +1,17 @@
-"""GCP の OAuth トークン更新が、プールされた死んだ接続を生き延びること。
+"""GCP's OAuth token refresh survives a dead pooled connection.
 
-本番で観測した失敗:
+The failure observed in production (the quoted message is the Windows text verbatim):
 
     ConnectionResetError(10054, '既存の接続はリモート ホストに強制的に切断されました。')
     -> google.auth.exceptions.TransportError
     -> 503 Getting metadata from plugin failed
 
-トークンの有効期限ぶん (約 1 時間) idle した TLS 接続がプールに残り、Google 側は
-既に閉じているので、次の更新でそれを掴む。urllib3 は貸し出し前に
-`is_connection_dropped()` で死活を見るが、それで拾えるのは「貸す前に既に死んで
-いた」接続だけで、本番の traceback は `getresponse()` -> `recv_into` で落ちて
-いる = リクエストを書いた後に RST が来ている。この窓は死活チェックでは塞げず、
-トランスポート層の retry でしか救えない。
+A TLS connection that sat idle for the token lifetime (about an hour) remains in the pool
+and Google has already closed it, so the next refresh grabs it. urllib3 checks liveness
+with `is_connection_dropped()` before handing it out, but that only catches connections
+that were already dead before the loan, whereas the production traceback dies in
+`getresponse()` -> `recv_into` = the RST arrives after the request was written. That
+window cannot be closed by a liveness check; only a transport-layer retry can save it.
 """
 
 import socket
@@ -31,9 +31,10 @@ TOKEN_BODY = b'{"access_token": "ok", "expires_in": 3599, "token_type": "Bearer"
 
 
 class _ResetOnSecondRequest(BaseHTTPRequestHandler):
-    """1 回目は普通に応答して keep-alive 接続をプールに残し、2 回目は
-    リクエストを受け切ってから応答せずに RST する (= 本番の窓)。3 回目以降
-    (retry が張り直した新しい接続) は普通に応答する。"""
+    """The first request is answered normally, leaving a keep-alive connection in the
+    pool; the second reads the request fully and then RSTs without answering (= the
+    production window). From the third on (the fresh connection the retry establishes) it
+    answers normally again."""
 
     protocol_version = "HTTP/1.1"
     counter: list[int] = []
@@ -43,8 +44,8 @@ class _ResetOnSecondRequest(BaseHTTPRequestHandler):
         n = len(type(self).counter)
         self.rfile.read(int(self.headers.get("Content-Length", 0)))
         if n == 2:
-            # SO_LINGER 0 にして FIN ではなく RST を送る -- 本番と同じ
-            # WinError 10054 をクライアントに観測させるため。
+            # Set SO_LINGER 0 so an RST is sent instead of a FIN -- so the client observes
+            # the same WinError 10054 as in production.
             self.connection.setsockopt(
                 socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
             )
@@ -64,8 +65,8 @@ class _ResetOnSecondRequest(BaseHTTPRequestHandler):
 @pytest.fixture
 def token_endpoint():
     _ResetOnSecondRequest.counter = []
-    # ThreadingHTTPServer でないと keep-alive 接続を掴んだまま retry の新規
-    # 接続を accept できず、テストがデッドロックする。
+    # Without a ThreadingHTTPServer it cannot accept the retry's new connection while
+    # still holding the keep-alive one, and the test deadlocks.
     server = ThreadingHTTPServer(("127.0.0.1", 0), _ResetOnSecondRequest)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
@@ -76,17 +77,18 @@ def token_endpoint():
 
 
 def _refresh_twice(session, url):
-    """更新 2 回。1 回目で接続がプールに入り、2 回目がその死んだ接続を掴む。"""
+    """Two refreshes. The first puts a connection in the pool; the second grabs that dead
+    connection."""
     body = {"grant_type": "refresh_token"}
     session.post(url, data=body, timeout=5).raise_for_status()
     return session.post(url, data=body, timeout=5)
 
 
 def test_plain_session_fails_on_a_reset_pooled_connection(token_endpoint):
-    """前提の確認: google.auth が既定で作る素の Session はここで落ちる。
+    """Confirms the premise: the bare Session google.auth builds by default dies here.
 
-    これが落ちなくなったら (requests/urllib3 側がこの窓を塞いだら)、下の
-    テストは何も証明しなくなるので、一緒に置いておく。
+    If this stops failing (i.e. requests/urllib3 closes the window), the test below proves
+    nothing any more, so it is kept alongside it.
     """
     with pytest.raises(requests.exceptions.ConnectionError):
         _refresh_twice(requests.Session(), token_endpoint)
@@ -95,23 +97,23 @@ def test_plain_session_fails_on_a_reset_pooled_connection(token_endpoint):
 def test_auth_session_survives_a_reset_pooled_connection(token_endpoint):
     response = _refresh_twice(build_auth_session(), token_endpoint)
     assert response.status_code == 200
-    # 3 = 成功, RST, retry が新しい接続で成功。retry が起きた証拠。
+    # 3 = success, RST, then the retry succeeding on a new connection. Proof a retry
+    # happened.
     assert len(_ResetOnSecondRequest.counter) == 3
 
 
 def test_auth_plugin_refreshes_over_the_retrying_session():
-    """plugin が実際に retry 付き session でトークンを更新すること。
+    """The plugin really does refresh the token over the session with retries.
 
-    これが無いと、修正の本体である
-    `Request(session=build_auth_session())` を `Request()` に戻しても
-    全テストが GREEN のままになる (実測) -- つまり本番のバグをそのまま
-    復活させても誰も気付かない。他のテストは
-    「session 単体の性質」と「チャネルの同一性」しか見ておらず、その 2 つを
-    繋ぐ継ぎ目がどこにも縛られていなかった。
+    Without this, reverting the substance of the fix --
+    `Request(session=build_auth_session())` back to `Request()` -- leaves every test GREEN
+    (measured), i.e. the production bug could be reinstated and nobody would notice. The
+    other tests only look at "properties of the session alone" and "identity of the
+    channel", leaving the seam between those two unpinned.
 
-    アダプタは **https:// で** 引く。他のテストはローカルの http:// サーバを
-    叩くので、https:// 側だけ retry の無いアダプタに差し替えても
-    素通りしてしまう (これも実測)。実運用のトークンエンドポイントは https。
+    Look the adapter up **under https://**. The other tests hit a local http:// server, so
+    replacing only the https:// side with a retry-less adapter would slip through (also
+    measured). The real token endpoint is https.
     """
     from google.auth.credentials import AnonymousCredentials
 
@@ -128,12 +130,12 @@ def test_auth_plugin_refreshes_over_the_retrying_session():
 
 
 def test_auth_plugin_passes_the_default_host():
-    """`default_host` が plugin まで届いていること。
+    """`default_host` reaches the plugin.
 
-    これを落としてもサービスアカウントの self-signed JWT 経路が変わるだけで
-    他のテストは全部 GREEN のまま通る (実測)。`create_auth_channel` の呼び出し
-    引数を見ているテストはあるが、それは「渡した値」を見ているだけで、
-    plugin に届いたことは誰も確かめていなかった。
+    Dropping it only changes the service account's self-signed JWT path, and every other
+    test still passes GREEN (measured). A test does look at `create_auth_channel`'s call
+    arguments, but that only observes "the value passed in" -- nobody was checking that it
+    reached the plugin.
     """
     from google.auth.credentials import AnonymousCredentials
 
@@ -163,16 +165,18 @@ class _ServiceUnavailableWithRetryAfter(BaseHTTPRequestHandler):
 
 
 def test_auth_session_does_not_swallow_retry_after_responses():
-    """Retry-After 付きの 503 を、応答のまま google.auth へ返すこと。
+    """A 503 with Retry-After is handed back to google.auth as the response it is.
 
-    urllib3 の `is_retry()` は respect_retry_after_header (既定 True) が有効で
-    Retry-After ヘッダが付いていると、status_forcelist を一切見ずに「retry
-    すべき」と判断する。そこへ status=0 が重なると 0 -> -1 で即 is_exhausted に
-    なり、応答が「retry もされず本文も失われた RetryError」に化ける。
+    When respect_retry_after_header (default True) is on and a Retry-After header is
+    present, urllib3's `is_retry()` decides "should retry" without consulting
+    status_forcelist at all. Combined with status=0 that goes 0 -> -1 and is immediately
+    exhausted, so the response mutates into "a RetryError that was never retried and lost
+    its body".
 
-    429/503 は google.auth 自身が `_client` の ExponentialBackoff で retry する
-    対象なので、これを握り潰すと接続層の窓を塞ぐ代わりに google.auth が持って
-    いた retry を奪う -- 直したつもりで可用性を下げる取り違え。
+    429/503 are exactly what google.auth itself retries through `_client`'s
+    ExponentialBackoff, so swallowing them steals the retry google.auth had in exchange
+    for closing the connection-layer window -- a mix-up that lowers availability while
+    appearing to fix something.
     """
     server = ThreadingHTTPServer(("127.0.0.1", 0), _ServiceUnavailableWithRetryAfter)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -190,12 +194,13 @@ def test_auth_session_does_not_swallow_retry_after_responses():
 
 
 def test_auth_session_caps_each_attempt_timeout():
-    """1 試行あたりの時間に上限をかけていること。
+    """A ceiling is applied to the time of each attempt.
 
-    google.auth はトークン更新の POST に timeout を渡さず、`Request.__call__` の
-    既定 120 秒が効く。そこへ retry を足すと最悪時間が試行回数ぶん伸び、応答を
-    返さないエンドポイント相手では gRPC の認証スレッドが積み上がる。この上限が、
-    retry を足しても最悪時間を有界に保つ当の仕掛けなので、ここで固定する。
+    google.auth passes no timeout to the token-refresh POST, so `Request.__call__`'s
+    default of 120 seconds applies. Adding retries multiplies the worst case by the number
+    of attempts, and against an endpoint that never answers, gRPC's auth threads pile up.
+    This ceiling is the very mechanism that keeps the worst case bounded despite the
+    retries, so it is pinned here.
     """
     from unittest.mock import patch
 
@@ -210,7 +215,8 @@ def test_auth_session_caps_each_attempt_timeout():
 
     seen: list[float] = []
     with patch.object(HTTPAdapter, "send", return_value=None) as parent_send:
-        # google.auth が実際に渡してくる形 (既定 120 秒) と、渡されない形。
+        # The shapes google.auth actually passes (the 120-second default) and the absent
+        # one.
         for given in (120.0, None, (120.0, 120.0)):
             adapter.send(prepared, timeout=given)
         for call in parent_send.call_args_list:
@@ -219,17 +225,18 @@ def test_auth_session_caps_each_attempt_timeout():
 
     assert seen, "adapter.send never reached the parent"
     assert all(v <= _AUTH_REQUEST_TIMEOUT_SEC for v in seen)
-    # 上限が実質無しに緩められたら落ちるよう、絶対値でも縛る。
+    # Also bound it in absolute terms so relaxing the ceiling to effectively nothing
+    # fails.
     assert _AUTH_REQUEST_TIMEOUT_SEC <= 30.0
 
 
 def test_compute_engine_id_token_credentials_use_the_retrying_session(monkeypatch):
-    """CE credentials の Request も retry 付きであること。
+    """The CE credentials' Request carries retries too.
 
-    ここの Request は `iam.Signer` に抱え込まれ、更新のたびにメタデータ GET と
-    iamcredentials への signBlob POST を、トークン POST より **先に** 行う。
-    素の Request() だとその 2 本が retry 無しのままで、1 回の更新に走る 3 本の
-    うち 1 本しか直っていない状態になる (実測でそうなっていた)。
+    That Request is held by `iam.Signer` and, on every refresh, issues a metadata GET and a
+    signBlob POST to iamcredentials **before** the token POST. With a bare Request() those
+    two have no retries and only one of the three calls per refresh is fixed (which is
+    what was measured).
     """
     from typing import Any
 
@@ -251,17 +258,17 @@ def test_compute_engine_id_token_credentials_use_the_retrying_session(monkeypatc
     session = captured["request"].session
     adapter = session.get_adapter("https://iamcredentials.googleapis.com/")
     assert adapter.max_retries is _AUTH_RETRY
-    # メタデータサーバは http:// なので、そちらにも同じ adapter が要る。
+    # The metadata server is http://, so it needs the same adapter too.
     assert session.get_adapter("http://metadata.google.internal/") is adapter
 
 
 def test_create_auth_channel_requires_a_running_loop():
-    """実行中のループが無いまま呼んだら声を上げること。
+    """Calling it with no running loop must speak up.
 
-    grpc.aio のチャネルは生成時点のループに束縛されるが、ループが走って
-    いなくても例外にはならず、走っていない新しいループが黙って結び付き、
-    以後の RPC が永久に返らなくなる。preflight (ADR-0045) は同期なので、
-    そこに GCP の生存確認を足した誰かが静かに踏みうる。
+    A grpc.aio channel binds to the loop at construction time, but with no loop running it
+    does not raise: a new, not-running loop is silently bound and every later RPC hangs
+    forever. preflight (ADR-0045) is synchronous, so whoever adds a GCP liveness check
+    there could quietly step into it.
     """
     from google.auth.credentials import AnonymousCredentials
 
@@ -274,15 +281,14 @@ def test_create_auth_channel_requires_a_running_loop():
 
 
 def test_auth_plugin_applies_the_service_scopes():
-    """api_core と同じ scopes を credentials に適用していること。
+    """The same scopes api_core applies are applied to the credentials.
 
-    `_create_composite_credentials` を手で組み直した以上、api_core がやって
-    いて我々が落とした処理があれば本番だけで壊れる。中でも
-    `with_scopes_if_required` は、落としてもここまでの他のテストが全部 GREEN の
-    まま (AnonymousCredentials は Scoped ではないので何も起きない) なのに、
-    実際のサービスアカウントではスコープ無しトークンになって拒否される --
-    このプロジェクトの認証情報を持たないマシンでは実接続で検出できない種類の
-    退行なので、型どおりに検査しておく。
+    Having rebuilt `_create_composite_credentials` by hand, anything api_core does that we
+    dropped breaks in production only. `with_scopes_if_required` in particular can be
+    dropped with every other test above still GREEN (AnonymousCredentials is not Scoped, so
+    nothing happens), while a real service account would fetch a scopeless token and be
+    rejected -- a regression that cannot be detected by a real connection on a machine
+    without this project's credentials, so it is checked structurally.
     """
     from google.auth.credentials import Credentials as BaseCredentials
     from google.auth.credentials import Scoped
@@ -317,12 +323,12 @@ def test_auth_plugin_applies_the_service_scopes():
 async def test_translation_client_authenticates_through_the_retrying_channel(
     monkeypatch,
 ):
-    """翻訳クライアントの認証が `create_auth_channel` の産物であること。
+    """The translation client's auth is the product of `create_auth_channel`.
 
-    上の 2 つは session 単体の性質しか見ていないので、これが無いと
-    `TranslationServiceAsyncClient(credentials=...)` の 1 行に戻されたときに
-    (retry 付き session が誰にも使われなくなっても) 全部 GREEN のままになる。
-    チャネル生成には動いているイベントループが要るので async テスト。
+    The two tests above only look at properties of the session alone, so without this,
+    reverting to the one-line `TranslationServiceAsyncClient(credentials=...)` leaves
+    everything GREEN even though nobody uses the retrying session any more. Channel
+    construction needs a running event loop, hence an async test.
     """
     from typing import Any
 
@@ -349,17 +355,18 @@ async def test_translation_client_authenticates_through_the_retrying_channel(
     assert transport.grpc_channel is built["channel"]
     assert built["host"] == "translate.googleapis.com"
     assert any("cloud-translation" in s for s in built["scopes"])
-    # transport が自前でチャネルを作るときの options は、チャネルを渡した
-    # 時点で適用されなくなる。渡し直さないと受信上限が gRPC 既定の 4 MiB に
-    # 戻るので、ここで運ばれていることを縛る。
+    # The options the transport uses when it builds the channel itself stop applying the
+    # moment we hand it a channel. Without passing them again the receive limit reverts to
+    # gRPC's default 4 MiB, so this pins that they are carried through.
     assert dict(built["options"])["grpc.max_receive_message_length"] == -1
 
 
 async def test_speech_client_authenticates_through_the_retrying_channel(monkeypatch):
-    """transcription の GCP バックエンドも同じ認証チャネルに載っていること。
+    """The transcription GCP backend rides the same auth channel.
 
-    translation と同型。`SpeechAsyncClient(credentials=...)` の 1 行に戻されても
-    他のテストは全部 GREEN のままなので、ここで縛る。
+    The same shape as translation. Reverting to the one-line
+    `SpeechAsyncClient(credentials=...)` leaves every other test GREEN, so it is pinned
+    here.
     """
     from typing import Any
 
@@ -385,27 +392,27 @@ async def test_speech_client_authenticates_through_the_retrying_channel(monkeypa
     assert isinstance(transport, SpeechGrpcAsyncIOTransport)
     assert transport.grpc_channel is built["channel"]
     assert built["host"] == "speech.googleapis.com"
-    # scopes まで見ること。Speech は cloud-platform だけ、Translate は
-    # cloud-translation も持つ別物なので、host だけ見ていると Translate の
-    # scopes を渡す取り違えが素通りする (共有定数の導入でその取り違えは
-    # 起きやすくなっている)。
+    # Check the scopes too. Speech has cloud-platform only while Translate also has
+    # cloud-translation, so watching the host alone would let a mix-up that passes
+    # Translate's scopes slip through (and introducing a shared constant makes that mix-up
+    # more likely).
     assert built["scopes"] == SpeechGrpcAsyncIOTransport.AUTH_SCOPES
     assert dict(built["options"])["grpc.max_receive_message_length"] == -1
 
 
 async def _start_and_stop(generator):
-    """ワーカーの async generator をクライアント構築の先まで進めて止める。
+    """Advance the worker's async generator past client construction and stop it.
 
-    どのワーカーも `worker_startup` の中でクライアントを作り、直後に
-    `in_queue.get()` で待つので、短い timeout で 1 回 __anext__ を試せば
-    「構築だけ済んだ状態」に到達できる。
+    Every worker builds its client inside `worker_startup` and then immediately waits in
+    `in_queue.get()`, so a single __anext__ attempt with a short timeout reaches the state
+    where construction alone has happened.
     """
     from asyncio import wait_for
 
-    # timeout はどれだけ短くてもよい: ワーカーは最初の await に達する前に
-    # 同期でクライアントを構築し、その後 `in_queue.get()` で永久に待つので、
-    # この wait_for は必ずタイムアウトする (= 決まった長さの sleep)。1 秒に
-    # すると 2 テストで 2 秒を捨てるだけなので短く取る。
+    # The timeout can be arbitrarily short: the worker builds the client synchronously
+    # before reaching its first await and then waits forever in `in_queue.get()`, so this
+    # wait_for always times out (i.e. it is a sleep of a fixed length). Making it 1 second
+    # would just throw away 2 seconds across the two tests, so keep it short.
     try:
         await wait_for(generator.__anext__(), timeout=0.05)
     except TimeoutError:
@@ -415,12 +422,12 @@ async def _start_and_stop(generator):
 
 
 async def test_translation_worker_builds_its_client_through_the_factory(monkeypatch):
-    """ワーカーが実際に `create_translation_client` を通ること。
+    """The worker really does go through `create_translation_client`.
 
-    ファクトリ単体のテストだけでは、**呼び出し側**が
-    `TranslationServiceAsyncClient(credentials=...)` の 1 行に戻されたときに
-    素通りする (実測: ファクトリを残したまま呼び出し箇所だけ戻すと全部 GREEN)。
-    直った経路が実際に使われていることまで縛る。
+    A test of the factory alone slips through when the **call site** is reverted to the
+    one-line `TranslationServiceAsyncClient(credentials=...)` (measured: leaving the
+    factory in place and reverting only the call site keeps everything GREEN). This pins
+    that the fixed path is actually used.
     """
     from asyncio import Queue
 
@@ -444,7 +451,7 @@ async def test_translation_worker_builds_its_client_through_the_factory(monkeypa
 
 
 async def test_transcription_worker_builds_its_client_through_the_factory(monkeypatch):
-    """transcription 側も同じ (上のテストと同じ理由)。"""
+    """The same on the transcription side (for the same reason as the test above)."""
     from asyncio import Queue
 
     from vspeech.config import GcpConfig
@@ -459,7 +466,7 @@ async def test_transcription_worker_builds_its_client_through_the_factory(monkey
         lambda credentials: used.setdefault("via_factory", True) and object(),
     )
     config = TranscriptionConfig()
-    config.vad_gate = False  # モデル実体を要求しない
+    config.vad_gate = False  # requires no actual model
     await _start_and_stop(
         transcription.transcript_worker_google(
             config=config, gcp_config=GcpConfig(), in_queue=Queue()
@@ -471,15 +478,16 @@ async def test_transcription_worker_builds_its_client_through_the_factory(monkey
 async def test_sender_secure_channel_authenticates_with_the_retrying_session(
     monkeypatch,
 ):
-    """sender の ID トークン経路を、**本物の** チャネル組み立てごと検証する。
+    """Verify the sender's ID-token path together with the **real** channel construction.
 
-    差し替えるのは grpc の `secure_channel` だけに留め、認証プラグインの組み立て
-    (`AuthMetadataPlugin(credentials, request)`) は本物を走らせる。こうしないと
-    その組み立てが assertion の下を通らず、`AuthMetadataPlugin(credentials,
-    Request())` のような本番のバグを取りこぼす。
+    Only grpc's `secure_channel` is substituted; the auth plugin construction
+    (`AuthMetadataPlugin(credentials, request)`) runs for real. Otherwise that construction
+    never passes under an assertion and a production bug such as
+    `AuthMetadataPlugin(credentials, Request())` is missed.
 
-    同時に「認証がチャネルに載っていること」も見る: `composite_credentials` を
-    `ssl_credentials` だけにする (= 資格情報を一切送らなくなる) 変異を捕まえる。
+    It also checks that the credentials really ride on the channel: it catches a mutation
+    that reduces `composite_credentials` to `ssl_credentials` alone (i.e. sends no
+    credentials at all).
     """
     from typing import Any
 
@@ -522,11 +530,11 @@ async def test_sender_secure_channel_authenticates_with_the_retrying_session(
         "https://securehost/", cast(GcpIDTokenCredentials, FakeIdTokenCredentials())
     )
 
-    # 以後の更新を行う plugin が retry 付き session を持っていること。
+    # The plugin that performs later refreshes carries the session with retries.
     plugin_request = captured["plugin_request"]
     adapter = plugin_request.session.get_adapter("https://oauth2.googleapis.com/token")
     assert adapter.max_retries is _AUTH_RETRY
-    # 初回 refresh と plugin が同じ Request を共有していること。
+    # The first refresh and the plugin share the same Request.
     assert captured["refresh_request"] is plugin_request
-    # 認証がチャネルに実際に載っていること (ssl だけに落ちていない)。
+    # The credentials really ride on the channel (it has not fallen back to ssl alone).
     assert captured["channel_credentials"] is captured["composed"]

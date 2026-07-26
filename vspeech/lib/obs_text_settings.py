@@ -1,8 +1,8 @@
-"""config -> OBS `text_gdiplus` 設定 dict のマッピング (ADR-0041)。
+"""Mapping from config to the OBS `text_gdiplus` settings dict (ADR-0041).
 
-config を表示スタイルの権威とするため、tk 版の設定キーをすべて OBS 側の
-設定へ写す。OBS のバージョンに依存する形式 (色の int の並び、font flags の
-ビット) はこのファイルだけに閉じ込める。
+The config is the authority on display style, so every settings key of the tk version
+is mapped onto its OBS counterpart. Formats that depend on the OBS version (the byte
+order of the color int, the font-flag bits) are confined to this file.
 """
 
 import re
@@ -17,21 +17,21 @@ from vspeech.lib.subtitle_state import anchor_to_justify
 from vspeech.lib.subtitle_state import anchor_to_vertical
 from vspeech.lib.subtitle_state import font_style_is_bold
 
-# obs-properties.h の enum obs_font_style。
+# enum obs_font_style from obs-properties.h.
 OBS_FONT_BOLD = 1
 
 _HEX_COLOR = re.compile(r"\A#?([0-9a-fA-F]{6})\Z")
 
 
 def hex_color_to_obs_int(hex_color: str) -> int:
-    """`#rrggbb` を OBS が設定に持つ int へ変換する。
+    """Convert `#rrggbb` into the int OBS keeps in its settings.
 
-    OBS は色を **0x00BBGGRR (BGR)** で保存する。実機 (OBS 32.1.2 /
-    obs-websocket 5.7.3) で測定した: `0xFF8000` を書き込むと rgb(0,128,255)
-    にレンダリングされ、`0x0080FF` を書き込むと rgb(255,128,0) になる。
+    OBS stores colors as **0x00BBGGRR (BGR)**. Measured on real hardware (OBS 32.1.2 /
+    obs-websocket 5.7.3): writing `0xFF8000` renders as rgb(0,128,255), and writing
+    `0x0080FF` renders as rgb(255,128,0).
 
-    出荷デフォルトの #ffffff / #000000 は回文なので、この並びを取り違えても
-    素通りする。並びを守れるのは非対称な色のテストだけ。
+    The shipped defaults #ffffff / #000000 are palindromes, so getting this order wrong
+    still passes with them. Only a test using an asymmetric color protects the order.
     """
     m = _HEX_COLOR.match(hex_color)
     if not m:
@@ -42,22 +42,24 @@ def hex_color_to_obs_int(hex_color: str) -> int:
 
 
 def font_size_to_obs_lfheight(font_size: int) -> int:
-    """Tk の `font_size` 符号規約のまま OBS の `font.size` (=`LOGFONT.lfHeight`)
-    へ渡す (ADR-0044)。
+    """Pass Tk's `font_size` sign convention through to OBS's `font.size`
+    (=`LOGFONT.lfHeight`) unchanged (ADR-0044).
 
-    正 (Tk のポイント指定) だけ 96 DPI でピクセルへ換算し、符号を負にして
-    返す -- `LOGFONT.lfHeight` は負が em 高、正がセル高（内部レディング込み）
-    という規約を持ち、Tk の符号規約はこれと同一。負 (=既にピクセル/em 高の
-    指定) はそのまま素通しする。
+    Only positive values (Tk's point spec) are converted to pixels at 96 DPI and
+    returned negated -- `LOGFONT.lfHeight` uses the convention that a negative value is
+    the em height and a positive one is the cell height (including internal leading),
+    which is exactly Tk's convention. Negative values (already a pixel/em-height spec)
+    pass through untouched.
 
-    ここを符号で分岐せず一律 `-round(size * 96/72)` に通すと、既存の負値
-    設定 (例: -32) が +43 になり、OBS が「セル高 43px」と誤読して Tk の
-    見た目 (em 32px) からずれる -- 分岐はここを守るためにある
-    (test_font_size_to_obs_lfheight_passes_negative_through_unchanged)。
+    Running everything through `-round(size * 96/72)` without branching on the sign
+    would turn an existing negative setting (e.g. -32) into +43, which OBS would misread
+    as "cell height 43px" and diverge from Tk's look (em 32px) -- the branch exists to
+    protect exactly that
+    (test_font_size_to_obs_lfheight_passes_negative_through_unchanged).
 
-    0 は Tk 自身が「プラットフォーム既定サイズ」として扱う値で、変換対象の
-    ポイント数が無い。素通しする -- もっとも `-round(0 * 96/72)` も `-0.0`
-    経由で 0 になるので、これは算術上の特別扱いではなく理由づけの話でしかない。
+    0 is the value Tk itself treats as "the platform default size", so there is no point
+    count to convert. Pass it through -- although `-round(0 * 96/72)` also reaches 0 via
+    `-0.0`, so this is a matter of reasoning rather than an arithmetic special case.
     """
     if font_size > 0:
         return -round(font_size * 96 / 72)
@@ -65,24 +67,25 @@ def font_size_to_obs_lfheight(font_size: int) -> int:
 
 
 def anchor_to_align(anchor: Anchor) -> Literal["left", "center", "right"]:
-    """OBS の `align` は tk の `justify` と同じ規則 (lib/subtitle_state
-    .anchor_to_justify) を使う。二重管理を避けるためここでは再実装しない。
+    """OBS's `align` follows the same rule as tk's `justify`
+    (lib/subtitle_state.anchor_to_justify). Not reimplemented here, to avoid keeping the
+    rule in two places.
 
-    `"center"` は `"e"` を部分文字列として含むため、素の `"e" in anchor`
-    判定だと誤って `"right"` になる -- `anchor_to_justify` 側がその
-    `anchor == "center"` ガードを持つ理由。
+    `"center"` contains `"e"` as a substring, so a naive `"e" in anchor` test would
+    wrongly yield `"right"` -- that is why `anchor_to_justify` carries the
+    `anchor == "center"` guard.
     """
     return anchor_to_justify(anchor)
 
 
 def anchor_to_valign(anchor: Anchor) -> Literal["top", "center", "bottom"]:
-    """OBS の `valign` は `lib/subtitle_state.anchor_to_vertical`
-    (`Texts.coord_y` と同じ縦位置の判定) を使う。二重管理を避けるためここで
-    は再実装しない。
+    """OBS's `valign` follows `lib/subtitle_state.anchor_to_vertical` (the same vertical
+    placement rule as `Texts.coord_y`). Not reimplemented here, to avoid keeping the
+    rule in two places.
 
-    `"center"` は `"n"` を部分文字列として含むため、素の `"n" in anchor`
-    判定だと誤って `"top"` になる -- `anchor_to_vertical` 側がその
-    `anchor == "center"` ガードを持つ理由。
+    `"center"` contains `"n"` as a substring, so a naive `"n" in anchor` test would
+    wrongly yield `"top"` -- that is why `anchor_to_vertical` carries the
+    `anchor == "center"` guard.
     """
     return anchor_to_vertical(anchor)
 
@@ -90,7 +93,8 @@ def anchor_to_valign(anchor: Anchor) -> Literal["top", "center", "bottom"]:
 def build_text_settings(
     text_config: SubtitleTextConfig, subtitle_config: SubtitleConfig
 ) -> dict[str, Any]:
-    """1 パネル分のスタイル設定を組む。`text` は含めない (別経路で push する)。"""
+    """Build the style settings for one panel. `text` is not included (it is pushed
+    through a separate path)."""
     bg = subtitle_config.bg_color
     transparent = bg == TRANSPARENT_BG_COLOR
     margin = text_config.margin
@@ -107,7 +111,8 @@ def build_text_settings(
         "color": hex_color_to_obs_int(text_config.font_color),
         "opacity": 100,
         "outline": True,
-        # tk は 1px オフセットの 4 隅コピーで輪郭を描く。それに相当する太さ。
+        # tk draws its outline as four copies offset by 1px. This is the equivalent
+        # thickness.
         "outline_size": 1,
         "outline_color": hex_color_to_obs_int(text_config.outline_color),
         "outline_opacity": 100,

@@ -1,7 +1,8 @@
-"""streaming VC の VAD ノイズゲート(vspeech/stream_vc/gate.py)。
+"""The VAD noise gate of streaming VC (vspeech/stream_vc/gate.py).
 
-窓単位マスクと emit 遅延補正はモデル非依存の純ロジックなので CPU・onnxruntime
-無しで走る。末尾の vc_loop 配線テストも実モデルを差し替えて CPU で回す。
+The per-window mask and the emit-delay correction are model-independent pure logic, so
+they run on CPU with no onnxruntime. The vc_loop wiring tests at the end also run on CPU,
+with the real models substituted.
 """
 
 import numpy as np
@@ -14,7 +15,7 @@ from vspeech.stream_vc.packet import StreamPacket
 from vspeech.stream_vc.transport import Transport
 
 _RATE = 48000
-# 出力サンプルでの 1 窓ぶん(32ms)。マスク補間の格子間隔。
+# One window (32ms) in output samples. The grid spacing of the mask interpolation.
 _STEP = round(VAD_WINDOW_SAMPLES * _RATE / VAD_SAMPLE_RATE)
 
 
@@ -24,16 +25,18 @@ def _gate(**kw) -> StreamingVadGate:
     return StreamingVadGate(**params)
 
 
-# --- 窓単位マスク -----------------------------------------------------------
+# --- the per-window mask ----------------------------------------------------
 
 
 def test_window_gains_duck_non_speech_windows_inside_a_speech_block():
-    """発話を含むブロックでも、その中の非音声窓は個別に落とす。
+    """Even in a block containing speech, the non-speech windows inside it are ducked
+    individually.
 
-    実録音の語頭ブロック(t=3.52s)で実測した確率列。ブロック粒度(窓確率の max)
-    判定だと 1 窓 (0.868) のせいでブロック全体が 1.0 で通り、解析窓の中身に依存して
-    増幅された発声直前の微小入力(batch 経路比 +43dB、機序の内訳は ADR-0059)が
-    ブレスとして出ていた。
+    The probability series measured on a real recording's onset block (t=3.52s). Deciding
+    at block granularity (the max window probability) let a single window (0.868) pass the
+    whole block at 1.0, and the tiny pre-phonation input -- amplified depending on the
+    contents of the analysis window (+43dB over the batch path; the mechanism is broken
+    down in ADR-0059) -- came out as a breath.
     """
     g = _gate(threshold=0.3, hangover_ms=0.0, min_gain=0.0)
     probs = np.array([0.030, 0.222, 0.140, 0.082, 0.868])
@@ -46,23 +49,24 @@ def test_gate_starts_closed_so_silence_never_leaks():
 
 
 def test_hangover_holds_the_gate_open_after_speech():
-    g = _gate(hangover_ms=2 * 32.0, min_gain=0.0)  # 2 窓ぶん
+    g = _gate(hangover_ms=2 * 32.0, min_gain=0.0)  # two windows' worth
     gains = g.window_gains(np.array([0.9, 0.1, 0.1, 0.1]))
     assert list(gains) == [1.0, 1.0, 1.0, 0.0]
 
 
 def test_hangover_does_not_open_windows_before_speech():
-    """前方へは dilate しない。
+    """Never dilate forward.
 
-    バッチ側 speech_gate_mask は前後対称に dilate するが、streaming で前方へ広げると
-    語頭直前のブレスをそのまま開けてしまう(実測: 前方 32ms で +15dB -> +32dB へ悪化)。
+    The batch-side speech_gate_mask dilates symmetrically, but dilating forward in
+    streaming opens the breath right before an onset (measured: 32ms forward makes it
+    worse, +15dB -> +32dB).
     """
     g = _gate(hangover_ms=300.0, min_gain=0.0)
     assert list(g.window_gains(np.array([0.1, 0.1, 0.9]))) == [0.0, 0.0, 1.0]
 
 
 def test_hangover_budget_carries_across_blocks():
-    """hangover はブロック境界をまたいで持ち越す(判定はブロックごとに来る)。"""
+    """The hangover carries across block boundaries (decisions arrive per block)."""
     g = _gate(hangover_ms=2 * 32.0, min_gain=0.0)
     g.window_gains(np.array([0.9]))
     assert list(g.window_gains(np.array([0.1, 0.1, 0.1]))) == [1.0, 1.0, 0.0]
@@ -74,7 +78,8 @@ def test_min_gain_is_the_closed_gain():
 
 
 def test_probability_equal_to_the_threshold_counts_as_speech():
-    """境界は閉区間(>=)。閾値ちょうどで開くか閉じるかを固定する。"""
+    """The boundary is inclusive (>=). Pins whether exactly the threshold opens or
+    closes."""
     g = _gate(threshold=0.5, hangover_ms=0.0, min_gain=0.0)
     assert list(g.window_gains(np.array([0.5]))) == [1.0]
     g.reset()
@@ -82,11 +87,12 @@ def test_probability_equal_to_the_threshold_counts_as_speech():
 
 
 def test_reset_gives_a_fresh_vad_carry():
-    """VAD の再帰状態も reset 対象(実時間が飛んだあとに持ち越さない)。
+    """The VAD's recurrent state is reset too (never carried across a real-time jump).
 
-    残すと「発話中に pause -> 無音へ resume」で古い状態が最初の窓を speech と誤判定
-    しうる。1 窓でも誤ると _since_speech が 0 に戻って hangover が満額で再武装される
-    ので、漏れは 1 窓では止まらない(実測 104 通り中 8 回、最大 320ms)。
+    Keeping it lets "pause mid-speech -> resume into silence" misjudge the first window as
+    speech from the stale state. A single misjudged window resets _since_speech to 0 and
+    rearms the full hangover, so the leak does not stop at one window (measured: 8 of 104
+    cases, up to 320ms).
     """
     g = _gate()
     g.vad_carry.state += 1.0
@@ -96,42 +102,46 @@ def test_reset_gives_a_fresh_vad_carry():
     assert not g.vad_carry.state.any()
 
 
-# --- emit への適用 ----------------------------------------------------------
+# --- application to the emit ------------------------------------------------
 
 
 def test_apply_is_bit_identical_when_every_window_is_open():
-    """常時 speech(と既定 off)では出力が無ゲート時とビット単位で一致する。
+    """With continuous speech (and with the feature off by default), the output is
+    bit-identical to the ungated one.
 
-    ただし起動直後・reset 直後の 1 ブロックは例外: emit の頭は実時間が飛ぶ前 or
-    zeros 文脈から描かれた音なので、閉じた状態から開く。
+    The single block right after startup or a reset is the exception: the head of the emit
+    is audio from before the real-time jump, or rendered from a zeros context, so it opens
+    from the closed state.
     """
     g = _gate()
     block = np.full(5 * _STEP, 1000, dtype=np.int16)
-    g.apply(block, np.ones(5), 0, _RATE)  # 1 ブロック目(閉 -> 開)
+    g.apply(block, np.ones(5), 0, _RATE)  # the first block (closed -> open)
     out = np.array([100, -200, 300], dtype=np.int16)
     assert g.apply(out, np.ones(5), 0, _RATE) is out
 
 
 def test_apply_keeps_the_head_closed_on_the_first_block_after_reset():
-    """reset 直後の emit の頭(遅延ぶん)は開かない。
+    """Right after a reset, the head of the emit (the delay portion) does not open.
 
-    そこにあるのは pause 前の音、または zeros 文脈から描かれた音で、まさに
-    ADR-0059 が閉じておきたい区間。`_since_speech` の初期値(閉)と揃える。
+    What sits there is audio from before the pause, or rendered from a zeros context --
+    exactly the span ADR-0059 wants kept closed. It matches `_since_speech`'s initial
+    (closed) value.
     """
     amp = 10000
     block = np.full(5 * _STEP, amp, dtype=np.int16)
     g = _gate(min_gain=0.0)
     out = g.apply(block, np.ones(5), _STEP, _RATE).astype(np.float64)
-    assert out[0] == pytest.approx(0.0, abs=1.0)  # 頭は本当に閉じている
-    assert out[-1] == pytest.approx(amp, abs=1.0)  # 本体は素通し
+    assert out[0] == pytest.approx(0.0, abs=1.0)  # the head really is closed
+    assert out[-1] == pytest.approx(amp, abs=1.0)  # the body passes through
 
 
 def test_apply_shifts_the_mask_by_the_emit_delay():
-    """マスクは emit 遅延ぶんずらして重ねる。
+    """The mask is overlaid shifted by the emit delay.
 
-    emit の内容は入力ブロックより手前から始まる(crossfade + SOLA + HuBERT 受容野で
-    実測 ~52ms)。補正しないとゲート判定が 52ms ずれた音声に当たり、ブレス抑圧が
-    -26dB から -8dB まで落ちる。
+    The emit's content starts earlier than the input block (about 52ms measured, from the
+    crossfade plus SOLA plus HuBERT's receptive field). Without the correction the gate
+    decision lands on audio 52ms out of alignment and breath suppression drops from -26dB
+    to -8dB.
     """
     amp = 10000
     block = np.full(5 * _STEP, amp, dtype=np.int16)
@@ -148,42 +158,48 @@ def test_apply_shifts_the_mask_by_the_emit_delay():
 
 
 def test_apply_anchors_the_mask_at_window_centers():
-    """マスクの絶対位置を固定する(窓中心 = (i+0.5)*窓長)。
+    """Pin the mask's absolute position (window centre = (i+0.5)*window length).
 
-    遅延だけを見るテストは一様なオフセット誤りを打ち消してしまうので、遷移が
-    「窓 0 の中心と窓 1 の中心のちょうど中間」に来ることを直接見る。
+    A test that only looks at the delay would cancel out a uniform offset error, so this
+    directly checks that the transition falls exactly midway between the centre of window
+    0 and the centre of window 1.
     """
     amp = 10000
     block = np.full(3 * _STEP, amp, dtype=np.int16)
     g = _gate(min_gain=0.0)
-    g._prev_gains = np.zeros(3)  # 頭も閉じた状態から始める
+    g._prev_gains = np.zeros(3)  # start with the head closed too
     out = g.apply(block, np.array([0.0, 1.0, 1.0]), 0, _RATE).astype(np.float64)
     crossed = int(np.argmax(out > amp * 0.5))
-    assert crossed == pytest.approx(_STEP, abs=2)  # 0.5*step と 1.5*step の中間
+    assert crossed == pytest.approx(
+        _STEP, abs=2
+    )  # midway between 0.5*step and 1.5*step
 
 
 def test_apply_places_the_previous_block_one_hop_back_not_one_window_grid_back():
-    """前ブロックの原点は emit 長(hop)ぶん手前 — 窓数 x 窓長ではない。
+    """The previous block's origin is one emit length (hop) earlier -- not window count x
+    window length.
 
-    speech_probs は ceil(block_len/512) 窓へゼロパディングするので、block_len が
-    512 の倍数でない設定(config が挙げる block_ms=80 など)では窓の総長がブロック長を
-    超える。窓グリッドでずらすとマスク全体がその差だけ早まる(80ms 設定で 16ms)。
+    speech_probs zero-pads to ceil(block_len/512) windows, so when block_len is not a
+    multiple of 512 (such as the block_ms=80 the config mentions) the windows total more
+    than the block length. Shifting on the window grid moves the whole mask earlier by
+    that difference (16ms at the 80ms setting).
     """
-    # 80ms ブロック相当: 入力 1280 サンプル = 2.5 窓 -> speech_probs は 3 窓返す。
+    # An 80ms block: 1280 input samples = 2.5 windows -> speech_probs returns 3 windows.
     hop = round(2.5 * _STEP)
     amp = 10000
     block = np.full(hop, amp, dtype=np.int16)
     g = _gate(min_gain=0.0)
-    g.apply(block, np.zeros(3), 0, _RATE)  # 前ブロック = 全閉
+    g.apply(block, np.zeros(3), 0, _RATE)  # previous block = fully closed
     out = g.apply(block, np.ones(3), 0, _RATE).astype(np.float64)
-    # 前ブロック末尾窓の中心は -hop + 2.5*step = 0 なので、emit 先頭は既に
-    # 「閉じた窓の中心」ちょうど。窓グリッド基準(-3*step)だと 0.5*step 手前に
-    # ずれて先頭が 0 より上がってしまう。
+    # The centre of the previous block's last window is -hop + 2.5*step = 0, so the head
+    # of the emit already sits exactly on "the centre of a closed window". On the window
+    # grid (-3*step) it would shift 0.5*step earlier and the head would rise above 0.
     assert out[0] == pytest.approx(0.0, abs=1.0)
 
 
 def test_apply_ramps_across_a_window_without_a_step():
-    """ゲイン遷移は窓間隔(32ms)で線形に渡る = 段差(クリック)を作らない。"""
+    """The gain transition ramps linearly across the window interval (32ms) = it creates
+    no step (no click)."""
     amp = 10000
     block = np.full(4 * _STEP, amp, dtype=np.int16)
     g = _gate(min_gain=0.0)
@@ -192,13 +208,15 @@ def test_apply_ramps_across_a_window_without_a_step():
 
 
 def test_apply_carries_the_previous_block_mask_across_the_boundary():
-    """前ブロック末尾のゲインから連続させる(ブロック境界に段差を作らない)。"""
+    """Continue from the previous block's trailing gain (no step at the block
+    boundary)."""
     amp = 10000
     block = np.full(4 * _STEP, amp, dtype=np.int16)
     g = _gate(min_gain=0.0)
-    g.apply(block, np.zeros(4), 0, _RATE)  # 全閉
+    g.apply(block, np.zeros(4), 0, _RATE)  # fully closed
     reopened = g.apply(block, np.ones(4), 0, _RATE).astype(np.float64)
-    # 直前が閉なので先頭は途中の値から立ち上がる(いきなり full にはならない)。
+    # The previous block was closed, so the head rises from a mid value (it never jumps
+    # straight to full).
     assert reopened[0] < amp * 0.6
     assert np.max(np.abs(np.diff(reopened))) <= 2.0 * amp / _STEP
 
@@ -220,33 +238,38 @@ def test_apply_handles_empty_block():
 
 
 def test_reset_closes_the_gate_and_drops_the_previous_mask_but_keeps_warned():
-    """reset() は閉じた状態へ戻すが、warned(fail-open の障害フラグ)は触らない。"""
+    """reset() returns to the closed state but leaves warned (the fail-open fault flag)
+    alone."""
     g = _gate(hangover_ms=300.0, min_gain=0.0)
     g.window_gains(np.array([0.9]))
     g.apply(np.full(_STEP, 100, dtype=np.int16), np.ones(1), 0, _RATE)
     g.warned = True
     g.reset()
     assert g._prev_gains is None
-    assert list(g.window_gains(np.zeros(2))) == [0.0, 0.0]  # hangover を持ち越さない
+    assert list(g.window_gains(np.zeros(2))) == [
+        0.0,
+        0.0,
+    ]  # the hangover is not carried
     assert g.warned is True
 
 
-# --- vc_loop の配線 ---------------------------------------------------------
+# --- vc_loop wiring ---------------------------------------------------------
 #
-# 実モデル/GPU を読まずに vc_loop を回すため build_stream_vc_runtime と
-# make_streaming_vc だけ差し替える。ゲートの有無を決める分岐
-# (`vad_session is None` なら gate を作らない)は本物のコードを通る。
+# To run vc_loop without loading the real models or a GPU, only
+# build_stream_vc_runtime and make_streaming_vc are substituted. The branch that
+# decides whether there is a gate at all (no gate when `vad_session is None`) runs
+# through the real code.
 
-# 実機同様に「1 hop ぶんの emit」にする(40kHz x 160ms = 6400)。マスクの格子は emit 長
-# 基準なので、窓長より短い作り物の emit だと全域が前ブロック値へ clamp されて、配線の
-# 検証にならない。
+# Make it "one hop's worth of emit" as on real hardware (40kHz x 160ms = 6400). The mask
+# grid is based on the emit length, so a contrived emit shorter than one window would
+# clamp everywhere to the previous block's value and verify nothing about the wiring.
 _VC_OUT = np.tile(
     np.array([1000, -2000, 3000, -4000, 5000, -6000], dtype=np.int16), 1067
 )[:6400]
 
 
 class _FakeStreamingVc:
-    """process_block が決め打ちの int16 ブロックを返す実モデル代役。"""
+    """A stand-in for the real model whose process_block returns a fixed int16 block."""
 
     def __init__(self, emit_delay_samples: int = 0) -> None:
         self.warmed = 0
@@ -276,12 +299,12 @@ class _CollectTransport(Transport):
         self.packets.append(packet)
         return True
 
-    async def recv(self) -> StreamPacket:  # pragma: no cover - vc_loop は使わない
+    async def recv(self) -> StreamPacket:  # pragma: no cover - vc_loop never uses it
         raise NotImplementedError
 
 
 def _context():
-    """running が set(= 非 pause)な最小 SharedContext。"""
+    """A minimal SharedContext with running set (i.e. not paused)."""
     from vspeech.config import Config
     from vspeech.shared_context import SharedContext
 
@@ -291,7 +314,8 @@ def _context():
 async def _run_vc_loop(
     monkeypatch, sv_config, vad_session, n_blocks: int, emit_delay_samples: int = 0
 ):
-    """vc_loop を n_blocks 個だけ回し、(transport, gate.apply の引数記録) を返す。"""
+    """Run vc_loop for exactly n_blocks and return (transport, the recorded gate.apply
+    arguments)."""
     import asyncio
     from asyncio import Event
     from asyncio import Queue
@@ -324,9 +348,9 @@ async def _run_vc_loop(
     real_apply = StreamingVadGate.apply
 
     def spy_apply(self, out_i16, gains, delay_samples, sample_rate):
-        # gains だけでなく **遅延と出力レートも**記録する。ここを見ていないと、
-        # runner が sv.emit_delay_samples の代わりに 0 を渡すようになっても、
-        # あるいは 16kHz を渡すようになっても、テストは緑のまま通る。
+        # Record **the delay and the output rate** as well as gains. Without watching
+        # them, the tests stay green even if the runner starts passing 0 instead of
+        # sv.emit_delay_samples, or starts passing 16kHz.
         applied.append(([float(x) for x in gains], delay_samples, sample_rate))
         return real_apply(self, out_i16, gains, delay_samples, sample_rate)
 
@@ -344,7 +368,7 @@ async def _run_vc_loop(
         if len(transport.packets) >= n_blocks or task.done():
             break
     if task.done():
-        task.result()  # 起動時例外はそのまま浮かせる
+        task.result()  # let a startup exception surface as-is
     task.cancel()
     try:
         await task
@@ -355,19 +379,20 @@ async def _run_vc_loop(
 
 
 async def test_default_off_never_applies_the_gate(monkeypatch):
-    """vad_gate=False では gate を作らず apply も一切通らない = ビット単位で同一。"""
+    """With vad_gate=False no gate is built and apply is never reached = bit-identical."""
     from vspeech.config import StreamVcConfig
 
     sv = StreamVcConfig()
-    assert sv.vad_gate is False  # 既定 off
+    assert sv.vad_gate is False  # off by default
     transport, applied = await _run_vc_loop(monkeypatch, sv, None, 2)
-    assert applied == []  # apply は一度も呼ばれない
-    assert transport.packets[0].pcm == _VC_OUT.tobytes()  # 無ゲート出力そのもの
+    assert applied == []  # apply is never called
+    assert transport.packets[0].pcm == _VC_OUT.tobytes()  # exactly the ungated output
     assert transport.packets[1].pcm == _VC_OUT.tobytes()
 
 
 async def test_gate_enabled_attenuates_silent_blocks(monkeypatch):
-    """vad_gate=True + 無音判定でゲートが閉じ、出力が減衰する。"""
+    """With vad_gate=True and a silence verdict, the gate closes and the output is
+    attenuated."""
     from vspeech.config import StreamVcConfig
 
     sv = StreamVcConfig(
@@ -378,16 +403,17 @@ async def test_gate_enabled_attenuates_silent_blocks(monkeypatch):
         lambda _session, _audio, _carry=None: np.zeros(5),
     )
     transport, applied = await _run_vc_loop(monkeypatch, sv, object(), 2)
-    assert [a[0] for a in applied] == [[0.0] * 5, [0.0] * 5]  # 全窓 min_gain
+    assert [a[0] for a in applied] == [[0.0] * 5, [0.0] * 5]  # min_gain in every window
     for packet in transport.packets:
         assert not np.frombuffer(packet.pcm, dtype=np.int16).any()
 
 
 async def test_vc_loop_forwards_the_emit_delay_and_the_output_sample_rate(monkeypatch):
-    """runner が StreamingVc の emit 遅延と **出力**レートを gate へ渡している。
+    """The runner passes StreamingVc's emit delay and the **output** rate to the gate.
 
-    この 2 引数こそ ADR-0059 が 18dB と見積もった補正の本体。gains だけ見ていると、
-    遅延を 0 に落としても入力レート(16k)を渡しても検出できない。
+    These two arguments are the substance of the correction ADR-0059 estimated at 18dB.
+    Watching gains alone would detect neither dropping the delay to 0 nor passing the
+    input rate (16k).
     """
     from vspeech.config import StreamVcConfig
 
@@ -399,16 +425,16 @@ async def test_vc_loop_forwards_the_emit_delay_and_the_output_sample_rate(monkey
     _, applied = await _run_vc_loop(
         monkeypatch, sv, object(), 2, emit_delay_samples=1234
     )
-    # target_sample_rate=40000 は _run_vc_loop の runtime スタブ由来。
+    # target_sample_rate=40000 comes from _run_vc_loop's runtime stub.
     assert [(a[1], a[2]) for a in applied] == [(1234, 40000), (1234, 40000)]
 
 
 async def test_vc_loop_threads_the_vad_carry_into_speech_probs(monkeypatch):
-    """runner が gate.vad_carry を speech_probs へ渡している(同じ物を毎ブロック)。
+    """The runner passes gate.vad_carry into speech_probs (the same object every block).
 
-    第 3 引数を落とすと Silero が毎ブロックコールドスタートに戻り、実録音で
-    検出できる発話窓が 56 -> 23 に落ちる。渡していることを見ていないと、その
-    退行がテスト緑のまま入る。
+    Dropping the third argument returns Silero to a cold start on every block and the
+    speech windows detectable on a real recording fall from 56 to 23. Without checking
+    that it is passed, that regression lands with the tests still green.
     """
     from vspeech.config import StreamVcConfig
     from vspeech.lib.vad import VadCarry
@@ -423,14 +449,15 @@ async def test_vc_loop_threads_the_vad_carry_into_speech_probs(monkeypatch):
     monkeypatch.setattr("vspeech.lib.vad.speech_probs", spy_probs)
     await _run_vc_loop(monkeypatch, sv, object(), 2)
     assert len(seen) == 2
-    assert isinstance(seen[0], VadCarry)  # None ではない = 引数が渡っている
-    assert seen[0] is seen[1]  # 毎ブロック同じ carry = 状態が持ち越される
+    assert isinstance(seen[0], VadCarry)  # not None = the argument is passed
+    assert seen[0] is seen[1]  # the same carry every block = the state is carried over
 
 
 async def test_gate_open_on_speech_is_bit_identical(monkeypatch):
-    """speech 判定が続くあいだは恒等路で無ゲート出力と一致する。
+    """While the speech verdict holds, the identity path matches the ungated output.
 
-    1 ブロック目だけは例外(閉じた状態から開くので emit の頭が立ち上がる)。
+    The first block is the exception (it opens from the closed state, so the head of the
+    emit ramps up).
     """
     from vspeech.config import StreamVcConfig
 
@@ -446,7 +473,8 @@ async def test_gate_open_on_speech_is_bit_identical(monkeypatch):
 
 
 async def test_gate_failure_is_fail_open_and_warns_once(monkeypatch, caplog):
-    """VAD が失敗しても音は素通し、警告はブロック毎ではなく 1 回だけ。"""
+    """Even when the VAD fails the audio passes through, and the warning is emitted once
+    rather than per block."""
     import logging
 
     from vspeech.config import StreamVcConfig
@@ -454,30 +482,31 @@ async def test_gate_failure_is_fail_open_and_warns_once(monkeypatch, caplog):
     sv = StreamVcConfig(vad_gate=True)
 
     def boom(_session, _audio, _carry=None):
-        # 引数の数を本物(session, audio, carry)に合わせること。合っていないと
-        # TypeError の方が先に出て、fail-open ではなく arity ミスを見るテストになる。
+        # Match the real arity (session, audio, carry). Otherwise a TypeError fires first
+        # and the test observes an arity mistake rather than the fail-open behaviour.
         raise RuntimeError("vad exploded")
 
     monkeypatch.setattr("vspeech.lib.vad.speech_probs", boom)
     with caplog.at_level(logging.WARNING):
         transport, applied = await _run_vc_loop(monkeypatch, sv, object(), 3)
-    # fail-open は**本来の窓数**で全開マスクを返す(2560 サンプル = 5 窓)。1 要素だと
-    # 次ブロックがそれを hop ぶん手前へ置いて継ぎ目に段差が出る。
+    # fail-open returns a fully open mask with **the real window count** (2560 samples =
+    # 5 windows). With a single element the next block would place it one hop earlier and
+    # a step would appear at the seam.
     assert [a[0] for a in applied] == [[1.0] * 5] * 3
     for p in transport.packets[1:]:
-        assert p.pcm == _VC_OUT.tobytes()  # 素通し(恒等の高速路)
+        assert p.pcm == _VC_OUT.tobytes()  # passed through (the identity fast path)
     warnings = [r for r in caplog.records if "vad gate failed" in r.getMessage()]
     assert len(warnings) == 1
-    # 意図した例外を見ていることまで確かめる(スタブの引数不一致で TypeError が
-    # 先に出ていても、上の assert だけなら緑のまま通ってしまう)。
+    # Confirm we are observing the intended exception (with only the assert above, a
+    # TypeError from a stub arity mismatch firing first would still pass green).
     assert "vad exploded" in warnings[0].getMessage()
 
 
-# --- pause/resume ゲート ----------------------------------------------------
+# --- the pause/resume gate --------------------------------------------------
 #
-# vc_loop は Command routing の外だが context.running を尊重する。実モデルを
-# 差し替えて、pause 中は消費/変換が止まり、resume で _reset_context が呼ばれる
-# ことを CPU で検証する。
+# vc_loop lives outside Command routing but still respects context.running. With the
+# real models substituted, this verifies on CPU that consumption/conversion stops
+# while paused and that _reset_context is called on resume.
 
 
 def _patch_runtime(monkeypatch, fake, vad_session=None):
@@ -504,7 +533,8 @@ def _patch_runtime(monkeypatch, fake, vad_session=None):
 
 
 async def test_pause_stops_consuming_and_resets_on_resume(monkeypatch):
-    """pause 中は vc_loop がブロックを変換せず、resume で _reset_context を 1 回呼ぶ。"""
+    """While paused vc_loop converts no blocks, and on resume it calls _reset_context
+    once."""
     import asyncio
     from asyncio import Event
     from asyncio import Queue
@@ -514,8 +544,8 @@ async def test_pause_stops_consuming_and_resets_on_resume(monkeypatch):
     from vspeech.shared_context import SharedContext
 
     fake = _FakeStreamingVc()
-    # gate 有効で回して、resume 遷移が gate.reset も呼ぶことまで見る
-    # (REOPEN 番兵の経路とは別の呼び出し箇所)。
+    # Run with the gate enabled so we also see the resume transition calling gate.reset
+    # (a different call site from the REOPEN sentinel path).
     runner_mod = _patch_runtime(monkeypatch, fake, vad_session=object())
     monkeypatch.setattr(
         "vspeech.lib.vad.speech_probs",
@@ -530,7 +560,7 @@ async def test_pause_stops_consuming_and_resets_on_resume(monkeypatch):
 
     monkeypatch.setattr(StreamingVadGate, "reset", spy_reset)
 
-    context = SharedContext(config=Config())  # 既定で running.set()
+    context = SharedContext(config=Config())  # running.set() by default
     sv = StreamVcConfig(vad_gate=True)
     in_queue: Queue = Queue()
     transport = _CollectTransport()
@@ -538,30 +568,32 @@ async def test_pause_stops_consuming_and_resets_on_resume(monkeypatch):
     task = asyncio.create_task(
         runner_mod.vc_loop(context, sv, in_queue, transport, "sess", ready)
     )
-    # 起動(warmup, to_thread)完了まで待つ。
+    # Wait for startup (warmup, to_thread) to finish.
     await asyncio.wait_for(ready.wait(), timeout=5)
 
-    # pause して 3 ブロック投入。ループは block0 を get したところで running.wait()
-    # に park する(process_block/send はしない)。
+    # Pause and push in 3 blocks. The loop parks in running.wait() right after getting
+    # block0 (it does not process_block or send).
     context.running.clear()
     for _ in range(3):
         in_queue.put_nowait(np.zeros(2560, dtype=np.float32))
     for _ in range(50):
         await asyncio.sleep(0)
-    assert transport.packets == []  # paused: 一切変換していない
-    assert in_queue.qsize() == 2  # block0 だけ消費して park(stale は resume で捨てる)
+    assert transport.packets == []  # paused: nothing was converted at all
+    # consumed only block0 and parked (the stale one is discarded on resume)
+    assert in_queue.qsize() == 2
     assert fake.resets == 0
 
-    # resume: park していた wait() が返り _reset_context → continue で block0 は捨て、
-    # block1/block2 を変換する。
+    # resume: the parked wait() returns, _reset_context runs, continue discards block0,
+    # and block1/block2 are converted.
     context.running.set()
     for _ in range(2000):
         await asyncio.sleep(0)
         if len(transport.packets) >= 2:
             break
-    assert fake.resets == 1  # resume 遷移で 1 回だけ
-    assert gate_resets == [1]  # VAD ゲート(hangover/マスク/再帰状態)も 1 回だけ
-    assert len(transport.packets) == 2  # stale block0 は drop、block1/block2 のみ
+    assert fake.resets == 1  # exactly once on the resume transition
+    # the VAD gate (hangover/mask/recurrent state) is reset exactly once too
+    assert gate_resets == [1]
+    assert len(transport.packets) == 2  # stale block0 dropped; only block1/block2
 
     task.cancel()
     try:
@@ -570,15 +602,16 @@ async def test_pause_stops_consuming_and_resets_on_resume(monkeypatch):
         pass
 
 
-# --- capture 再 open の番兵 -------------------------------------------------
+# --- the capture-reopen sentinel --------------------------------------------
 #
-# capture が device 再 open すると capture_queue に CaptureSignal.REOPEN 番兵が入る。
-# runner はそれを見たら文脈と VAD ゲートを reset し、番兵自体は変換しない(pause と
-# 同じ扱い)。実モデルを差し替えて CPU で検証する。
+# When capture reopens the device, a CaptureSignal.REOPEN sentinel enters capture_queue.
+# On seeing it the runner resets the context and the VAD gate and never converts the
+# sentinel itself (treated like a pause). Verified on CPU with the real models
+# substituted.
 
 
 async def test_capture_reopen_sentinel_resets_context_and_gate(monkeypatch):
-    """再 open 番兵は変換されず、_reset_context + gate.reset を呼ぶ。"""
+    """The reopen sentinel is not converted; it calls _reset_context + gate.reset."""
     import asyncio
     from asyncio import Event
     from asyncio import Queue
@@ -588,7 +621,7 @@ async def test_capture_reopen_sentinel_resets_context_and_gate(monkeypatch):
     from vspeech.stream_vc.capture import CaptureSignal
 
     fake = _FakeStreamingVc()
-    # gate 有効(vad_session != None)にして gate.reset も検証する。
+    # Enable the gate (vad_session != None) so gate.reset is verified too.
     sv = StreamVcConfig(vad_gate=True)
     monkeypatch.setattr(
         runner_mod,
@@ -621,8 +654,8 @@ async def test_capture_reopen_sentinel_resets_context_and_gate(monkeypatch):
     monkeypatch.setattr(StreamingVadGate, "reset", spy_reset)
 
     in_queue: Queue = Queue()
-    in_queue.put_nowait(CaptureSignal.REOPEN)  # 再 open 番兵(先頭)
-    in_queue.put_nowait(np.zeros(2560, dtype=np.float32))  # 続く fresh block
+    in_queue.put_nowait(CaptureSignal.REOPEN)  # the reopen sentinel (first)
+    in_queue.put_nowait(np.zeros(2560, dtype=np.float32))  # the fresh block after it
     transport = _CollectTransport()
     task = asyncio.create_task(
         runner_mod.vc_loop(_context(), sv, in_queue, transport, "sess", Event())
@@ -632,18 +665,21 @@ async def test_capture_reopen_sentinel_resets_context_and_gate(monkeypatch):
         if len(transport.packets) >= 1 or task.done():
             break
     if task.done():
-        task.result()  # 起動時例外はそのまま浮かせる
+        task.result()  # let a startup exception surface as-is
     task.cancel()
     try:
         await task
     except BaseException:
         pass
 
-    assert fake.resets == 1  # 番兵で _reset_context を 1 回
-    assert reset_calls == [1]  # gate.reset も 1 回
-    assert len(transport.packets) == 1  # 番兵は packet を生まない(fresh block だけ)
-    # reset 直後なので emit の頭だけ閉から立ち上がる(そこにあるのは再 open 前の音、
-    # または zeros 文脈から描かれた音)。本体は素通し。
+    assert fake.resets == 1  # the sentinel triggers _reset_context once
+    assert reset_calls == [1]  # gate.reset once as well
+    assert (
+        len(transport.packets) == 1
+    )  # the sentinel produces no packet (only the block)
+    # Right after the reset, only the head of the emit ramps up from closed (what sits
+    # there is audio from before the reopen, or rendered from a zeros context). The body
+    # passes through.
     got = np.frombuffer(transport.packets[0].pcm, dtype=np.int16)
     assert abs(int(got[0])) < abs(int(_VC_OUT[0]))
     assert got[-1] == _VC_OUT[-1]

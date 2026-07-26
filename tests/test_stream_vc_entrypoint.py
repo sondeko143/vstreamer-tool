@@ -32,7 +32,7 @@ def _cuda_available() -> bool:
     reason=f"CUDA / ${_STREAM_ENV} (real mic+speaker+model config) not available",
 )
 def test_entrypoint_boots_stream_vc():
-    # エントリポイントを実際に起動する(「テストだけでなくエントリポイントを走らせる」)。
+    # Actually launch the entry point ("run the entry point, not just the tests").
     repo_root = Path(__file__).resolve().parents[1]
     proc = subprocess.Popen(
         [sys.executable, "-m", "vspeech", "--config", str(_stream_config)],

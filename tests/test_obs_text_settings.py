@@ -10,9 +10,10 @@ from vspeech.lib.obs_text_settings import hex_color_to_obs_int
 
 
 def test_hex_color_to_obs_int_reverses_rgb_to_bgr():
-    # OBS は 0x00BBGGRR で保存する (実機 32.1.2 で GetSourceScreenshot により測定)。
-    # #ffffff / #000000 は回文なので取り違えても素通りする -- この 1 本と次の 1 本
-    # だけがバイト順を守っている (ADR-0041)。
+    # OBS stores colors as 0x00BBGGRR (measured on a real 32.1.2 via
+    # GetSourceScreenshot). #ffffff / #000000 are palindromes and pass even when the order
+    # is wrong -- this test and the next are the only things protecting the byte order
+    # (ADR-0041).
     assert hex_color_to_obs_int("#ff8000") == 0x0080FF
 
 
@@ -58,8 +59,8 @@ def test_hex_color_to_obs_int_rejects_junk(bad: str):
     ],
 )
 def test_anchor_to_align_matches_the_tk_justify_rule(anchor, expected):
-    # tk の draw_text_with_outline と同じ規則 (lib/subtitle_state
-    # .anchor_to_justify 経由): e -> right, w -> left, else center
+    # The same rule as tk's draw_text_with_outline (through
+    # lib/subtitle_state.anchor_to_justify): e -> right, w -> left, else center
     assert anchor_to_align(anchor) == expected
 
 
@@ -132,7 +133,7 @@ def test_build_text_settings_maps_every_tk_key():
     got = build_text_settings(text, subtitle)
     # font_size=24 (points) -> lfHeight -32 (ADR-0044), not a pass-through 24.
     assert got["font"] == {"face": "Meiryo UI", "size": -32, "flags": 1}
-    # BGR: #ff8000 -> 0x0080FF, #0000ff -> 0xFF0000 (実機で測定, ADR-0041)
+    # BGR: #ff8000 -> 0x0080FF, #0000ff -> 0xFF0000 (measured on real hardware, ADR-0041)
     assert got["color"] == 0x0080FF
     assert got["opacity"] == 100
     assert got["outline"] is True
@@ -180,8 +181,9 @@ def test_build_text_settings_transparent_bg_becomes_zero_opacity():
 
 
 def test_build_text_settings_opaque_bg_is_honoured_like_tk():
-    # tk で bg_color="#00ff00" なら緑の背景になる。OBS でも同じにする。
-    # (緑は回文なのでバイト順は守れない -- 下の非対称ケースがそれを見る)
+    # Under tk, bg_color="#00ff00" gives a green background. OBS must do the same.
+    # (Green is a palindrome and cannot protect the byte order -- the asymmetric case
+    # below does that.)
     subtitle = SubtitleConfig(bg_color="#00ff00")
     got = build_text_settings(SubtitleTextConfig(), subtitle)
     assert got["bk_color"] == 0x00FF00
@@ -196,7 +198,8 @@ def test_build_text_settings_bg_colour_is_also_bgr():
 
 
 def test_build_text_settings_never_sets_a_negative_extent():
-    # margin が窓より大きい病的な config でも OBS に負値を送らない。
+    # Even with a pathological config whose margin exceeds the window, never send OBS a
+    # negative value.
     subtitle = SubtitleConfig(window_width=4, window_height=4)
     got = build_text_settings(SubtitleTextConfig(margin=100), subtitle)
     assert got["extents_cx"] >= 1
@@ -204,5 +207,6 @@ def test_build_text_settings_never_sets_a_negative_extent():
 
 
 def test_build_text_settings_does_not_set_text():
-    # テキストは別経路 (毎回変わる) で push する。スタイルと混ぜない。
+    # The text is pushed through a separate path (it changes every time). Never mix it
+    # with the style.
     assert "text" not in build_text_settings(SubtitleTextConfig(), SubtitleConfig())

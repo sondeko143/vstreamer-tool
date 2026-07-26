@@ -18,8 +18,9 @@ RMVPE_THRESHOLD = 0.3
 
 
 def _pyworld():
-    """pyworld を遅延 import する。cp314 wheel が無く runtime 依存から外したため、
-    dio/harvest を選んだときだけ必要。既定の rmvpe では読み込まない。"""
+    """Import pyworld lazily. It was dropped from the runtime dependencies because it
+    has no cp314 wheel, so it is only needed when dio/harvest is selected. The default
+    rmvpe never loads it."""
     try:
         import pyworld  # ty: ignore[unresolved-import]
     except ImportError as e:
@@ -100,15 +101,15 @@ def pitch_extract_rmvpe(
             },
         )[0],
     )
-    # 単一フレーム (T=1) では squeeze が 0-d に潰れ、呼び出し側の f0[:p_len] が
-    # IndexError になる。atleast_1d で 1-D を保証する。
+    # For a single frame (T=1) squeeze collapses to 0-d and the caller's f0[:p_len]
+    # raises IndexError. atleast_1d guarantees 1-D.
     return cast(NDArray[np.double], np.atleast_1d(onnx_f0.squeeze()))
 
 
-# 焼き込んだ reflect-pad (432) は N>=433 (約27ms @16kHz) を要求する。短い入力での
-# ONNXRuntime クラッシュを避けるためこの最小長まで左ゼロパッドで底上げする。
-# scripts/export_fcpe_onnx.py の FLOOR と同値 (どちらも win_size-hop の pad から導かれる)。
-# mel config を変えて再 export するときは両方を見直すこと。
+# The baked-in reflect-pad (432) requires N>=433 (about 27ms @16kHz). Left-zero-pad up
+# to this minimum length to avoid an ONNXRuntime crash on short input. Same value as
+# FLOOR in scripts/export_fcpe_onnx.py (both derive from the win_size-hop pad). Revisit
+# both when re-exporting with a different mel config.
 FCPE_MIN_SAMPLES = 433
 
 
@@ -116,19 +117,21 @@ def pitch_extract_fcpe(
     audio: Tensor,
     session: InferenceSession,
 ) -> NDArray[np.double]:
-    """FCPE onnx から f0 を取る。
+    """Extract f0 from the FCPE onnx.
 
-    export 時に threshold / sample_rate / decoder_mode を焼き込んであるので、runtime の
-    入力は 16kHz mono 波形 (batched ``(1, N)``) のみ。出力は f0 (Hz)。FCPE の閾値デコード
-    (threshold=0.006) が無声フレームを 0 にする。
+    threshold / sample_rate / decoder_mode are baked in at export time, so the only
+    runtime input is a 16kHz mono waveform (batched ``(1, N)``) and the output is f0
+    (Hz). FCPE's threshold decode (threshold=0.006) zeroes unvoiced frames.
 
-    `.infer()` の f0_min/f0_max 後処理は焼き込まない = rmvpe.onnx と同じ「mel -> net ->
-    閾値 voicing -> f0」契約に揃える (rmvpe も pitch_extract_rmvpe で生の f0 を返す)。この
-    対称性が forward-only を安全とみなす根拠。閾値や後処理を変えたいときは export し直す。
+    `.infer()`'s f0_min/f0_max post-processing is deliberately not baked in, which
+    aligns this with rmvpe.onnx's "mel -> net -> threshold voicing -> f0" contract
+    (rmvpe also returns raw f0 from pitch_extract_rmvpe). That symmetry is what makes
+    forward-only safe here. Re-export when you want to change the threshold or the
+    post-processing.
 
-    N < FCPE_MIN_SAMPLES は焼き込んだ reflect-pad が要求する最小長に満たず onnx が落ちる
-    ので左ゼロパッドで底上げする (実際の vc 経路は _quality_padding で十分長いので通常は
-    発生しない防御)。
+    N < FCPE_MIN_SAMPLES is below the minimum length the baked-in reflect-pad requires
+    and would crash onnx, so pad it up with left zeros (a defence that normally never
+    fires: the real vc path is long enough thanks to _quality_padding).
     """
     audio_np = audio.detach().cpu().numpy().astype(np.float32)
     if audio_np.shape[-1] < FCPE_MIN_SAMPLES:
@@ -138,9 +141,10 @@ def pitch_extract_fcpe(
         NDArray[np.float32],
         session.run(None, {"waveform": audio_num})[0],
     )
-    # FCPE の decode は完全無声フレームで NaN (0/0) を出しうる。新しい export はグラフ内で
-    # 0 に潰すが、古い/別の fcpe.onnx から NaN が来ても RVC の NSF (pitchf) に漏らさない
-    # よう runtime でも 0 に潰す (無声=0 で rmvpe と同契約)。
+    # FCPE's decode can produce NaN (0/0) on a fully unvoiced frame. Newer exports
+    # collapse that to 0 inside the graph, but collapse it at runtime too so a NaN from
+    # an older/foreign fcpe.onnx never leaks into RVC's NSF (pitchf) (unvoiced=0, the
+    # same contract as rmvpe).
     f0 = np.nan_to_num(
         np.atleast_1d(onnx_f0.squeeze()), nan=0.0, posinf=0.0, neginf=0.0
     )

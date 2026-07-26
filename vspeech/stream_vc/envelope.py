@@ -1,12 +1,15 @@
-"""ストリーミング VC の入力エンベロープ追従 (ADR-0057)。
+"""Input envelope following for streaming VC (ADR-0057).
 
-入力ブロックの相対ラウドネス包絡を、入力平均 RMS の rolling EMA を参照に正規化し、
-duck ゲイン (clip(shape^strength, min_gain, max_gain)) として出力ブロックへ掛ける。
-バッチ apply_input_envelope (worker/vc.py) と同じダック思想だが、参照を「発話全体の
-平均」→「rolling EMA」に置換したストリーミング版 (単一ブロックしか手に入らない)。
+Normalizes the input block's relative loudness envelope against a rolling EMA of the
+mean input RMS and applies it to the output block as a duck gain
+(clip(shape^strength, min_gain, max_gain)). Same ducking idea as the batch
+apply_input_envelope (worker/vc.py), but this streaming version replaces the reference
+"mean over the whole utterance" with a rolling EMA (only one block is available at a
+time).
 
-判定と適用だけの pure ロジックで、numpy はメソッド内 import (torch/sounddevice を
-引かず CPU・モデル無しで単体テストできる。gate.py と同型)。
+Pure decide-and-apply logic; numpy is imported inside the method (so it can be unit
+tested on CPU with no model and without pulling in torch/sounddevice -- the same shape
+as gate.py).
 """
 
 from __future__ import annotations
@@ -18,17 +21,18 @@ if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
 
-# 入力ブロックのサンプルレート (capture.py CAPTURE_RATE と同じ 16k)。capture.py を
-# import すると sounddevice を引くのでここでは定数で持つ (この module を CPU で単体
-# テストできるようにするため)。
+# Sample rate of the input block (16k, the same as capture.py's CAPTURE_RATE). Importing
+# capture.py would pull in sounddevice, so it is kept as a constant here (to keep this
+# module unit-testable on CPU).
 _INPUT_RATE = 16000
 
 
 class StreamingEnvelope:
-    """rolling-EMA 参照の入力エンベロープ追従 (duck, ADR-0057)。
+    """Input envelope following against a rolling-EMA reference (duck, ADR-0057).
 
-    状態は参照レベル `_ema_level` (スカラ) のみ。`apply()` が出力ブロックへ現在の
-    入力ブロックの相対ラウドネス包絡を掛け、参照 EMA を次ブロック用に更新する。
+    The only state is the reference level `_ema_level` (a scalar). `apply()` multiplies
+    the output block by the current input block's relative loudness envelope and updates
+    the reference EMA for the next block.
     """
 
     def __init__(
@@ -44,41 +48,49 @@ class StreamingEnvelope:
         self.min_gain = min_gain
         self.max_gain = max_gain
         self.window_ms = window_ms
-        # 時定数 ema_ms の per-block EMA 係数 alpha = 1 - exp(-block_ms/ema_ms)。
+        # Per-block EMA coefficient for time constant ema_ms:
+        # alpha = 1 - exp(-block_ms/ema_ms).
         self._alpha = 1.0 - math.exp(-block_ms / ema_ms) if ema_ms > 0 else 1.0
-        self._ema_level: float | None = None  # 初回 apply で block mean から init
+        # initialized from the block mean on the first apply
+        self._ema_level: float | None = None
 
     def reset(self) -> None:
-        """参照レベルを未初期化へ戻す (pause/resume・capture 再 open で runner が呼ぶ)。
+        """Return the reference level to uninitialized (called by the runner on
+        pause/resume and on a capture reopen).
 
-        実時間が飛んだあと古い参照レベルが次ブロックを妙に duck しないよう、
-        次の apply で改めて cold start (block mean で init) させる。
+        So that a stale reference level does not oddly duck the next block after
+        real time has jumped, force the next apply to cold start again (initializing from
+        the block mean).
         """
         self._ema_level = None
 
     def apply(
         self, out_i16: NDArray[np.int16], in_block: NDArray[np.float32]
     ) -> NDArray[np.int16]:
-        """出力ブロック out_i16 に、入力ブロック in_block (16k float32) の相対
-        ラウドネス包絡を rolling EMA 参照で duck 適用する。
+        """Duck the output block out_i16 by the relative loudness envelope of the input
+        block in_block (16k float32), against the rolling EMA reference.
 
-        参照は **過去の** EMA (履歴)。cold start / reset 直後は現ブロックの平均で
-        初期化する (初回ブロックが不自然に duck されないため)。参照を更新してから
-        返すので、次ブロックはこのブロックを織り込んだ EMA を使う。
+        The reference is the **past** EMA (history). On a cold start, or right after
+        reset, it is initialized from the current block's mean (so the first block is not
+        ducked unnaturally). The reference is updated before returning, so the next block
+        uses an EMA that already includes this one.
 
-        **既知の特性 (ADR-0057, 実機耳確認で調整):** 長い無音では参照 EMA が入力の
-        ノイズ床へ寄る (envelope_ema_ms で減衰)。その直後の発話頭 (phrase onset) は
-        低い参照に対して全フレームが loud 判定になり duck されにくい = このブロック
-        単独では整形が弱い。連続発話中の語間 dip / decay tail は参照が発話レベルに
-        あるので正しく整形される。phrase onset は VAD ゲートが受け持つ。ema_ms を
-        長くすると参照が無音を跨いで発話レベルを保ち、onset 整形が効きやすくなる。
+        **Known characteristic (ADR-0057, tuned by on-hardware ear checks):** during long
+        silence the reference EMA drifts toward the input's noise floor (decaying with
+        envelope_ema_ms). The phrase onset right after that is judged loud on every frame
+        against the low reference and is barely ducked -- i.e. this block alone gets
+        little shaping. Inter-word dips and decay tails within continuous speech are
+        shaped correctly because the reference sits at speech level. The phrase onset is
+        the VAD gate's job. Lengthening ema_ms keeps the reference at speech level across
+        silence and makes onset shaping more effective.
         """
         import numpy as np
 
         out_len = int(out_i16.shape[0])
         if out_len == 0 or in_block.shape[0] == 0 or self.strength <= 0.0:
             return out_i16
-        # 入力の per-frame RMS (絶対スケールは参照正規化で相殺されるので無関係)。
+        # Per-frame RMS of the input (the absolute scale is irrelevant: it cancels in the
+        # reference normalization).
         frame_len = max(1, round(self.window_ms * _INPUT_RATE / 1000.0))
         n_frames = max(1, in_block.shape[0] // frame_len)
         bounds = np.linspace(0, in_block.shape[0], n_frames + 1).astype(np.int64)
@@ -92,15 +104,19 @@ class StreamingEnvelope:
             self._ema_level = block_mean
         ref = self._ema_level
         self._ema_level = self._alpha * block_mean + (1.0 - self._alpha) * ref
-        if ref < 1e-8:  # 実質デジタル無音 (init 直後の完全無音等) → 素通し
+        # effectively digital silence (e.g. pure silence right after init) -> pass through
+        if ref < 1e-8:
             return out_i16
-        # 相対形状 (mean~1 ではなく参照相対) を出力サンプル格子へ線形補間。
-        # 【未対応・別件】この写像は入力ブロックと emit が同じ時刻を占める前提 (0..1 の
-        # 正規化軸) だが、実際の emit は入力より遅れて出る (crossfade + SOLA + HuBERT
-        # 受容野で実測 ~50ms)。ADR-0059 でゲート側は StreamingVc.emit_delay_samples で
-        # 補正したが、こちらは ADR-0057 の範囲なので手を付けていない。影響は
-        # envelope_min/max_gain (既定 0.1/1.0、実機設定 0.6/0.9) に挟まれた整形の
-        # 時刻ずれに限られる。直すなら delay_samples を受け取って dst_x をずらす。
+        # Linearly interpolate the relative shape (relative to the reference, not mean~1)
+        # onto the output sample grid.
+        # [Unhandled, separate concern] This mapping assumes the input block and the emit
+        # occupy the same time (a normalized 0..1 axis), but the real emit comes out later
+        # than the input (about 50ms measured, from crossfade + SOLA + HuBERT's receptive
+        # field). ADR-0059 corrected for that on the gate side via
+        # StreamingVc.emit_delay_samples; this side was left alone because it is within
+        # ADR-0057's scope. The impact is limited to a time offset in the shaping, which
+        # is bounded by envelope_min/max_gain (0.1/1.0 by default, 0.6/0.9 on the real
+        # rig). Fixing it means taking delay_samples and shifting dst_x.
         src_x = (np.arange(n_frames) + 0.5) / n_frames
         dst_x = (np.arange(out_len) + 0.5) / out_len
         shape = np.interp(dst_x, src_x, frame_rms / ref)

@@ -1,12 +1,14 @@
-"""change_voice の音声回帰テスト。
+"""Audio regression test for change_voice.
 
-HuBERT は eval + inference_mode 下で RNG を一切消費しないため、seed_all() 後の
-RNG ストリームは RVC synthesizer の infer だけで決まる。したがって golden との差は
-特徴量の値の差だけに由来する。
+HuBERT consumes no RNG at all under eval + inference_mode, so after seed_all() the RNG
+stream is determined solely by the RVC synthesizer's infer. Any difference from the golden
+therefore comes only from differences in the feature values.
 
-出力は golden と bit-exact にはならないので、判定は許容誤差（相関 + セグメンタル SNR）。
+The output is not bit-exact against the golden, so the verdict uses tolerances
+(correlation + segmental SNR).
 
-golden npz / CUDA / RVC worker config ($VSPEECH_RVC_GOLDEN_CONFIG) が揃わなければ skip。
+Skipped unless the golden npz, CUDA and the RVC worker config
+($VSPEECH_RVC_GOLDEN_CONFIG) are all present.
 """
 
 import os
@@ -55,8 +57,9 @@ def test_change_voice_matches_seeded_golden():
     out = cap.run_change_voice(rt, voice_frames, voice_sample_rate)
 
     assert out.shape == golden.shape, f"length changed: {out.shape} vs {golden.shape}"
-    # out は golden と bit-exact にはならないので、許容誤差で照合する。
-    # 緩めるときは実測値をこのコメントに残すこと（実測の 10 倍まで）。
+    # out is not bit-exact against the golden, so it is matched with tolerances.
+    # When relaxing them, leave the measured value in this comment (up to 10x the
+    # measurement).
     correlation = waveform_correlation(out, golden)
     snr_db = waveform_snr(golden, out)
     assert correlation >= CORR_MIN, f"correlation {correlation:.6f} < {CORR_MIN}"

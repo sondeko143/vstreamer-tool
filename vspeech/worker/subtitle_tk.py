@@ -1,10 +1,10 @@
-"""subtitle の TK バックエンド (ADR-0040)。
+"""The TK backend of subtitle (ADR-0040).
 
-tkinter への依存はこのファイルだけに閉じ込める。OBS バックエンドの追加に
-あたり、ここのロジックは原則として変えない (ADR-0040 の非ゴール)。例外は
-`anchor = "center"` が右寄せになるバグの修正 1 件だけで、これは移植中に
-発覚し、両バックエンドが同じ寄せ方をする必要がある (ADR-0041) ため同時に
-直した。判定規則は lib/subtitle_state.anchor_to_justify に 1 つだけ置く。
+The dependency on tkinter is confined to this file. Adding the OBS backend was not
+supposed to change the logic here (a non-goal of ADR-0040). The single exception is a fix
+for the bug where `anchor = "center"` justified right, which surfaced during the port and
+was fixed at the same time because both backends must justify identically (ADR-0041). The
+rule lives in exactly one place, lib/subtitle_state.anchor_to_justify.
 """
 
 from asyncio import CancelledError

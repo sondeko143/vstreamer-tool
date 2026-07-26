@@ -1,10 +1,11 @@
-"""ストリーミング VC の consumer 再生ループ(role=consumer, ADR-0055/0056)。
+"""The consumer playback loop of streaming VC (role=consumer, ADR-0055/0056).
 
-torch/RVC/GPU を一切 import しない(再生専任マシンは変換音声を鳴らすだけ)。
-transport.recv → jitter buffer push → poll で残りも push → pop 1 ブロック → 出力 write。
-遅延の計測は skew 免疫の量だけ: 到着間隔ジッタと seq gap(片道遅延は clock skew に
-汚染されるので測らない, ADR-0056)。出力デバイス障害は playback.py と同じく
-self-heal(次パケットで lazy 再 open)。
+Imports nothing from torch/RVC/GPU (a playback-only machine merely sounds the converted
+audio). transport.recv -> push into the jitter buffer -> poll and push the rest -> pop
+one block -> write to the output. Only skew-immune quantities are measured: interarrival
+jitter and seq gaps (one-way delay is contaminated by clock skew and is deliberately not
+measured, ADR-0056). Output device faults self-heal exactly as in playback.py (lazy
+reopen on the next packet).
 """
 
 from __future__ import annotations
@@ -35,12 +36,14 @@ from vspeech.stream_vc.transport import Transport
 def consume_into_buffer(
     transport: Transport, buffer: JitterBuffer, first: StreamPacket, session: str
 ) -> None:
-    """recv した first と、poll した現セッション packet を jitter buffer へ push する。
+    """Push the recv'd `first` plus the polled packets of the current session into the
+    jitter buffer.
 
-    poll 分は session_id で filter する: producer 再起動直後は旧セッションの高 seq が
-    socket queue に残りうるが、それを push すると overflow fast-forward が cursor を
-    旧 seq へ飛ばし新セッションを late 落ちさせる(永久無音)。late/dup(push False)は
-    reorder の観測用に記録する。"""
+    The polled ones are filtered by session_id: right after a producer restart the socket
+    queue can still hold high seqs from the old session, and pushing those would make the
+    overflow fast-forward jump the cursor to an old seq and drop the new session as late
+    (permanent silence). late/dup (push returning False) is recorded to observe
+    reordering."""
     if not buffer.push(first):
         telemetry.record("stream_vc_reorder_drop", 1.0)
     for packet in transport.poll():
@@ -52,10 +55,11 @@ def consume_into_buffer(
 
 
 async def network_playback_loop(config: StreamVcConfig, transport: Transport) -> None:
-    # 意図的に context.running (pause) gate を持たない: consumer は vc_loop を回さず
-    # 変換音声を鳴らすだけ。全体 pause は producer 側を止めることで達成する(producer の
-    # vc_loop が送信を止める → consumer は starve して無音になる)。ADR-0050 の single-check
-    # モデルに従い、pause 判定は producer 一箇所だけに置く。
+    # Deliberately has no context.running (pause) gate: the consumer does not run vc_loop,
+    # it only sounds the converted audio. A global pause is achieved by stopping the
+    # producer (the producer's vc_loop stops sending -> the consumer starves and goes
+    # silent). Following ADR-0050's single-check model, the pause decision lives in
+    # exactly one place, on the producer.
     target_depth = round(config.jitter_buffer_ms / config.block_ms)
     buffer = JitterBuffer(target_depth=target_depth)
     logger.info("stream_vc consumer jitter buffer depth: %d block(s)", target_depth)
@@ -63,17 +67,18 @@ async def network_playback_loop(config: StreamVcConfig, transport: Transport) ->
     session: str | None = None
     prev_recv: float | None = None
     started = False
-    # playback.py と同じ理由の時間ベース間引き(ADR-0062)。
+    # Time-based thinning for the same reason as playback.py (ADR-0062).
     underflow_throttle = LogThrottle()
     gap_throttle = LogThrottle()
     backoff = BACKOFF_START
     try:
         while True:
-            # concealment は recv 駆動: 到着しているストリーム内の gap にだけ発火する。
-            # ネットワークが完全に停止すると recv() でブロックし、ここでは conceal されない
-            # — 出力デバイスが自力で underflow し、次の成功 write で記録される。有線 LAN
-            # 前提の M3 では許容(ADR-0056 measure-first)。lossy な回線が要るなら出力クロック
-            # 駆動の pacer で再訪する。
+            # Concealment is recv-driven: it only fires on gaps within a stream that is
+            # arriving. If the network stops entirely we block in recv() and nothing is
+            # concealed here -- the output device underflows on its own and that is
+            # recorded on the next successful write. Acceptable for M3, which assumes a
+            # wired LAN (ADR-0056, measure first). Revisit with an output-clock-driven
+            # pacer if a lossy link is ever required.
             packet = await transport.recv()
             now = perf_counter()
             if prev_recv is not None:
@@ -89,8 +94,9 @@ async def network_playback_loop(config: StreamVcConfig, transport: Transport) ->
                         stream = None
                 session = packet.session_id
                 buffer.reset()
-            # session は上のブロックで必ず packet.session_id に揃う(== 現セッション)。
-            # packet.session_id を渡すことで型を str に確定させる(session は str | None)。
+            # The block above always makes session equal packet.session_id (== the current
+            # session). Passing packet.session_id pins the type to str (session is
+            # str | None).
             consume_into_buffer(transport, buffer, packet, packet.session_id)
             result = buffer.pop()
             telemetry.record("stream_vc_jitter_buffer_depth", float(buffer.depth))

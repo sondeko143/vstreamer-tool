@@ -144,7 +144,7 @@ def create_transcription_vad_session(
     """Build the Silero VAD session for the transcription skip gate, or None
     when the gate is disabled. When enabled, a missing or malformed model raises
     in create_vad_session (fail loud at startup, ADR-0019/0037); CPU-fixed
-    session (ADR-0024 の意図的例外).
+    session (the deliberate exception in ADR-0024).
     """
     if not config.vad_gate:
         return None
@@ -264,7 +264,8 @@ async def log_transcribed(log_dir_parent: Path, wav_file: BytesIO, text: str):
         ) as log:
             await log.write(text)
     except OSError as e:
-        # 録音ログは補助機能: 保存先が書込不可でもパイプラインは止めない (DEGRADE)。
+        # The recording log is an auxiliary feature: an unwritable destination must not
+        # stop the pipeline (DEGRADE).
         key = str(log_dir_parent)
         if key in _rec_log_warned:
             logger.debug("recording_log 保存失敗 (継続): %s", e)
@@ -289,15 +290,16 @@ def wav(sound: SoundInput, sample_size: int):
 
 
 def create_speech_client(credentials: BaseCredentials) -> SpeechAsyncClient:
-    """Speech クライアントを、トークン更新が retry される認証チャネルの上に作る。
+    """Build the Speech client on top of an auth channel whose token refresh retries.
 
-    `SpeechAsyncClient(credentials=...)` に任せると api_core が `Request()` を
-    引数無しで作り、トークン更新が retry 無しの素の `requests.Session` で走る。
-    約 1 時間 idle した接続をプールから掴んで ConnectionReset で落ちる窓が
-    そこにある (ADR-0048)。translation 側と同じ理由・同じ組み方。
+    Leaving it to `SpeechAsyncClient(credentials=...)` makes api_core construct
+    `Request()` with no arguments, so the token refresh runs on a bare
+    `requests.Session` with no retries. That is where the window of grabbing a
+    roughly-one-hour-idle pooled connection and dying with ConnectionReset lives
+    (ADR-0048). Same reason and same construction as the translation side.
 
-    options は Speech の transport が自前のチャネル分岐で渡しているものと
-    一致することを確認済み (`speech_v1/.../transports/grpc_asyncio.py`)。
+    The options were confirmed to match what Speech's transport passes in its own
+    channel-building branch (`speech_v1/.../transports/grpc_asyncio.py`).
     """
     transport = SpeechGrpcAsyncIOTransport
     channel = create_auth_channel(

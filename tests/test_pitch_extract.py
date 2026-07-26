@@ -105,7 +105,8 @@ def test_pitch_extract_fcpe_routes_to_session_waveform_only():
     window = 160
     audio = torch.zeros(sr, dtype=torch.float32)
     p_len = sr // window
-    # 実 fcpe.onnx は p_len 以上のフレームを返す (baked hop=160 == window)。realistic に +2。
+    # The real fcpe.onnx returns at least p_len frames (baked hop=160 == window). +2 to
+    # stay realistic.
     session = FakeFcpeSession(np.full(p_len + 2, 220.0, dtype=np.float32))
 
     f0_coarse, f0bak = pitch_extract(
@@ -127,7 +128,7 @@ def test_pitch_extract_fcpe_routes_to_session_waveform_only():
     assert input_feed["waveform"].ndim == 2
     assert input_feed["waveform"].shape[0] == 1
 
-    # 3-D (1, T, 1) を .squeeze() で 1-D に潰し、フレーム数は p_len 以上。
+    # .squeeze() collapses the 3-D (1, T, 1) to 1-D, with at least p_len frames.
     assert f0bak.ndim == 1
     assert len(f0bak) >= p_len
     np.testing.assert_allclose(f0bak, 220.0, rtol=1e-5)
@@ -136,8 +137,8 @@ def test_pitch_extract_fcpe_routes_to_session_waveform_only():
 
 
 def test_pitch_extract_fcpe_single_frame_does_not_collapse_to_0d():
-    # T=1 -> (1,1,1).squeeze() は 0-d になり、呼び出し側の f0[:p_len] が IndexError に
-    # なる。atleast_1d が 1-D を保証することを固定する。
+    # T=1 -> (1,1,1).squeeze() becomes 0-d and the caller's f0[:p_len] raises IndexError.
+    # This pins that atleast_1d guarantees 1-D.
     session = FakeFcpeSession(np.array([220.0], dtype=np.float32))
     _coarse, f0bak = pitch_extract(
         torch.zeros(16000, dtype=torch.float32),
@@ -153,7 +154,8 @@ def test_pitch_extract_fcpe_single_frame_does_not_collapse_to_0d():
 
 
 def test_pitch_extract_fcpe_pads_short_input_to_min_samples():
-    # 焼込み reflect-pad は最小長を要求する。短い入力は onnx に渡す前に底上げされる。
+    # The baked-in reflect-pad requires a minimum length. Short input is padded up before
+    # being handed to onnx.
     from vspeech.lib.pitch_extract import FCPE_MIN_SAMPLES
 
     session = FakeFcpeSession(np.full(3, 220.0, dtype=np.float32))
