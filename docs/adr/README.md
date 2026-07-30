@@ -80,3 +80,4 @@
 | [0061](0061-remote-control-as-cli.md) | 走っている pipeline の操作を GUI ではなく CLI (`vsctl`) で提供する（gui extra と依存 3 つを削除、0060 を supersede） | Accepted | 2026-07-26 |
 | [0062](0062-log-throttle-time-based-episodes.md) | ログ間引きを回数ベースから時間ベース + エピソード境界へ統一する | Accepted | 2026-07-26 |
 | [0063](0063-drop-gui-only-config-fields.md) | GUI 専用だった config フィールド (template_texts / text_send_operations) を互換シムを置かずに削除する | Accepted | 2026-07-26 |
+| [0064](0064-code-comments-in-english.md) | コード内のコメント / docstring を英語に統一し、ユーザーが読む文字列は日本語のまま残す | Accepted | 2026-07-31 |
