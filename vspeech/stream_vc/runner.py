@@ -397,9 +397,11 @@ async def vc_loop(
             telemetry.record("stream_vc", perf_counter() - t0)
             # Input envelope following (ADR-0057) first, then the VAD gate (the same order
             # as the batch apply_input_envelope). The envelope is cheap numpy work, so it
-            # runs inline (no to_thread needed).
+            # runs inline (no to_thread needed). Both take the same emit delay: they
+            # overlay the same emit in time alignment, so neither may skip the correction
+            # (ADR-0065).
             if envelope is not None:
-                out_i16 = envelope.apply(out_i16, raw_block)
+                out_i16 = envelope.apply(out_i16, raw_block, sv.emit_delay_samples)
             if gate is not None and gains is not None:
                 # The mask is overlaid with the emit delay corrected (ADR-0059). The delay
                 # is derived from the nominal read position and is constant across ticks

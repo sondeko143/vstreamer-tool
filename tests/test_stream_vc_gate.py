@@ -429,6 +429,29 @@ async def test_vc_loop_forwards_the_emit_delay_and_the_output_sample_rate(monkey
     assert [(a[1], a[2]) for a in applied] == [(1234, 40000), (1234, 40000)]
 
 
+async def test_vc_loop_forwards_the_emit_delay_to_the_envelope_too(monkeypatch):
+    """The envelope overlays the same emit in time alignment as the gate, so the runner
+    has to hand it the same emit delay (ADR-0065).
+
+    The harness lives in this module, so the envelope's vc_loop wiring is checked here
+    rather than in test_stream_vc_envelope.py (which covers the pure logic).
+    """
+    from vspeech.config import StreamVcConfig
+    from vspeech.stream_vc.envelope import StreamingEnvelope
+
+    sv = StreamVcConfig(envelope_follow=True)
+    seen: list[int] = []
+    real_apply = StreamingEnvelope.apply
+
+    def spy_apply(self, out_i16, in_block, delay_samples):
+        seen.append(delay_samples)
+        return real_apply(self, out_i16, in_block, delay_samples)
+
+    monkeypatch.setattr(StreamingEnvelope, "apply", spy_apply)
+    await _run_vc_loop(monkeypatch, sv, None, 2, emit_delay_samples=1234)
+    assert seen == [1234, 1234]
+
+
 async def test_vc_loop_threads_the_vad_carry_into_speech_probs(monkeypatch):
     """The runner passes gate.vad_carry into speech_probs (the same object every block).
 
