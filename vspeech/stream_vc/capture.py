@@ -92,10 +92,17 @@ async def _capture_read_loop(
     """
     # A drop while running = real backpressure. Throttle by time (ADR-0062).
     drop_throttle = LogThrottle()
+    # An input overflow means the reader was late, which persists once it starts, so this
+    # fires on every block (about 6 a second at block_ms=160) until it clears. Thin it by
+    # time and meter it every occurrence -- exactly what its counterpart on the sink side
+    # (playback.py's paOutputUnderflowed) already does.
+    overflow_throttle = LogThrottle()
     while True:
         data, overflowed = await to_thread(stream.read, hop)
         if overflowed:
-            logger.warning("stream_vc capture input overflow")
+            telemetry.record("stream_vc_capture_overflow", 1.0)
+            if (n := overflow_throttle.hit()) is not None:
+                logger.warning("stream_vc capture input overflow (total %d)", n)
         block = pcm16_to_float32(bytes(data))
         if not drop_oldest_put(out_queue, block):
             if not running.is_set():

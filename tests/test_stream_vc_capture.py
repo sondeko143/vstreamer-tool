@@ -140,6 +140,36 @@ async def test_capture_drop_while_running_warns_once_per_episode(
     assert "stream_vc_capture_drop_paused" not in summary
 
 
+async def test_capture_overflow_warns_once_per_episode_and_is_metered(
+    caplog, enabled_telemetry
+):
+    """An input overflow persists once it starts (the reader is late), so it fires on
+    every block.
+
+    Warning unconditionally would emit about 6 lines a second at block_ms=160 and bury the
+    log -- the symptom ADR-0062 exists to remove. The queue is left un-full here so the
+    drop path stays quiet and only the overflow path is under test.
+    """
+    hop = 4
+    running = Event()
+    running.set()
+    n = 40
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(OSError):
+            await _capture_read_loop(
+                _FakeStream(n, overflowed=True),  # ty: ignore[invalid-argument-type]
+                hop,
+                Queue(),
+                running,
+            )
+    warnings = [r for r in caplog.records if "input overflow" in r.getMessage()]
+    assert len(warnings) == 1  # a tight loop = all within min_interval_s
+    assert "(total 1)" in warnings[0].getMessage()
+    summary = enabled_telemetry.summary()
+    assert summary["stream_vc_capture_overflow"]["count"] == n  # telemetry every time
+    assert "stream_vc_capture_drop" not in summary  # the queue never filled
+
+
 async def test_capture_drop_switches_side_when_pause_arrives(caplog, enabled_telemetry):
     """Across a running -> pause transition, each block's drop is still attributed to the
     right side.
