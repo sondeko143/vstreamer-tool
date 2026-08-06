@@ -25,6 +25,17 @@ def _gate(**kw) -> StreamingVadGate:
     return StreamingVadGate(**params)
 
 
+@pytest.fixture
+def enabled_telemetry():
+    from vspeech.lib.telemetry import telemetry
+
+    telemetry.reset()
+    telemetry.configure(enabled=True, max_samples=1000)
+    yield telemetry
+    telemetry.reset()
+    telemetry.configure(enabled=False, max_samples=5000)
+
+
 # --- the per-window mask ----------------------------------------------------
 
 
@@ -237,20 +248,21 @@ def test_apply_handles_empty_block():
     assert out.shape[0] == 0
 
 
-def test_reset_closes_the_gate_and_drops_the_previous_mask_but_keeps_warned():
-    """reset() returns to the closed state but leaves warned (the fail-open fault flag)
-    alone."""
+def test_reset_closes_the_gate_and_drops_the_previous_mask():
+    """reset() returns to the closed state and drops the previous block's mask.
+
+    It holds no fault state to preserve: the fail-open warning is thinned by a LogThrottle
+    the runner owns (ADR-0062), so a pause cannot restart that episode either.
+    """
     g = _gate(hangover_ms=300.0, min_gain=0.0)
     g.window_gains(np.array([0.9]))
     g.apply(np.full(_STEP, 100, dtype=np.int16), np.ones(1), 0, _RATE)
-    g.warned = True
     g.reset()
     assert g._prev_gains is None
     assert list(g.window_gains(np.zeros(2))) == [
         0.0,
         0.0,
     ]  # the hangover is not carried
-    assert g.warned is True
 
 
 # --- vc_loop wiring ---------------------------------------------------------
@@ -495,9 +507,16 @@ async def test_gate_open_on_speech_is_bit_identical(monkeypatch):
         assert p.pcm == _VC_OUT.tobytes()
 
 
-async def test_gate_failure_is_fail_open_and_warns_once(monkeypatch, caplog):
-    """Even when the VAD fails the audio passes through, and the warning is emitted once
-    rather than per block."""
+async def test_gate_failure_is_fail_open_warns_per_episode_and_is_metered(
+    monkeypatch, caplog, enabled_telemetry
+):
+    """Even when the VAD fails the audio passes through, the warning is thinned to one
+    line per episode rather than one per block, and every occurrence is metered.
+
+    Failing open means the gate stops doing its job, and that sounds like the amplified
+    room noise ADR-0059 exists to remove -- so the fault has to stay visible for as long
+    as it lasts. A boolean warn-once would go permanently quiet and record nothing.
+    """
     import logging
 
     from vspeech.config import StreamVcConfig
@@ -519,10 +538,13 @@ async def test_gate_failure_is_fail_open_and_warns_once(monkeypatch, caplog):
     for p in transport.packets[1:]:
         assert p.pcm == _VC_OUT.tobytes()  # passed through (the identity fast path)
     warnings = [r for r in caplog.records if "vad gate failed" in r.getMessage()]
-    assert len(warnings) == 1
+    assert len(warnings) == 1  # a tight loop = all 3 within min_interval_s
+    assert "(total 1)" in warnings[0].getMessage()
     # Confirm we are observing the intended exception (with only the assert above, a
     # TypeError from a stub arity mismatch firing first would still pass green).
     assert "vad exploded" in warnings[0].getMessage()
+    # Thinning the log must not thin the metric: every failed block is recorded.
+    assert enabled_telemetry.summary()["stream_vc_vad_error"]["count"] == 3
 
 
 # --- the pause/resume gate --------------------------------------------------

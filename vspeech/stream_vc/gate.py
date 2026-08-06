@@ -77,9 +77,6 @@ class StreamingVadGate:
     def __init__(self, threshold: float, hangover_ms: float, min_gain: float) -> None:
         self.threshold = threshold
         self.min_gain = min_gain
-        # Dedup flag for the fail-open warning (used by the runner). Streaming runs at
-        # 6.25Hz, so warning on every block when the VAD is broken would bury the log.
-        self.warned = False
         # Silero's recurrent state. Rebuilding it per block cold-starts the RNN every
         # time and wrecks even the probabilities of clearly voiced windows (see VadCarry
         # in lib/vad.py). The runner passes it to speech_probs.
@@ -99,8 +96,9 @@ class StreamingVadGate:
         Called by the runner on a transition so that, after real time has jumped from a
         pause/resume or a capture reopen, a stale hangover budget, a stale mask, or a VAD
         recurrent state grown on pre-jump audio cannot leak through and oddly open or
-        attenuate the block right after. `warned` (the fail-open warning dedup) is fault
-        state and is deliberately left alone.
+        attenuate the block right after. Fault state is not held here at all: the
+        fail-open warning is thinned by a LogThrottle the runner owns (ADR-0062), so a
+        pause cannot reset the log-thinning episode either.
 
         Keeping `vad_carry` was measured and **rejected** (see ADR-0059's Alternatives).
         Pausing mid-speech and resuming into silence lets the stale "in speech" state

@@ -92,7 +92,10 @@ def make_stream_envelope(sv_config: StreamVcConfig) -> StreamingEnvelope | None:
 
 
 async def gate_window_gains(
-    gate: StreamingVadGate, vad_session: Any, block: NDArray[np.float32]
+    gate: StreamingVadGate,
+    vad_session: Any,
+    block: NDArray[np.float32],
+    error_throttle: LogThrottle,
 ) -> NDArray[np.float64]:
     """Return the 32ms per-window gains from the VAD decision on the **input** block
     (ADR-0059).
@@ -110,8 +113,14 @@ async def gate_window_gains(
     carrying the state over is mandatory (see VadCarry in lib/vad.py).
 
     ONNX inference blocks, so it is offloaded to `to_thread`, as in the utterance path's
-    worker/vc.py. On failure the audio passes through (fail-open = a fully open one-window
-    mask) and the warning is emitted only once.
+    worker/vc.py. On failure the audio passes through (fail-open).
+
+    Failing open means the gate silently stops doing its job, and what that sounds like is
+    precisely the amplified room noise ADR-0059 exists to remove -- so the failure must
+    stay observable however long it lasts. Telemetry is therefore recorded on **every**
+    occurrence and only the log line is thinned, by time and per episode (ADR-0062), the
+    same discipline as every other fault path in this subsystem. A boolean warn-once would
+    go permanently quiet after the first line and record nothing at all.
     """
     import numpy as np
 
@@ -121,9 +130,11 @@ async def gate_window_gains(
         probs = await to_thread(speech_probs, vad_session, block, gate.vad_carry)
         return gate.window_gains(probs)
     except Exception as e:
-        if not gate.warned:
-            gate.warned = True
-            logger.warning("stream_vc vad gate failed; passing audio ungated: %s", e)
+        telemetry.record("stream_vc_vad_error", 1.0)
+        if (n := error_throttle.hit()) is not None:
+            logger.warning(
+                "stream_vc vad gate failed; passing audio ungated (total %d): %s", n, e
+            )
         # window_gains is not run, so the hangover budget (`_since_speech`) is left as is.
         # While failing open everything is wide open anyway, so it does no harm, and on
         # recovery it continues from the previous budget. The length must match **the real
@@ -289,6 +300,9 @@ async def vc_loop(
     # (consecutive_errors / _MAX_CONSECUTIVE_VC_ERRORS), so do not mix them. Telemetry
     # (stream_vc_process_error) is recorded on every drop.
     vc_error_throttle = LogThrottle()
+    # Separate episode bookkeeping for the VAD gate's fail-open (a different condition
+    # from a process_block drop, so it must not share an episode with it).
+    vad_error_throttle = LogThrottle()
     try:
         while True:
             block = await in_queue.get()
@@ -333,7 +347,9 @@ async def vc_loop(
             raw_block = block
             gains = None
             if gate is not None:
-                gains = await gate_window_gains(gate, vad_session, raw_block)
+                gains = await gate_window_gains(
+                    gate, vad_session, raw_block, vad_error_throttle
+                )
             block = apply_input_boost(raw_block, sv_config.rvc.input_boost)
             t0 = perf_counter()
             # Transient GPU errors (CUDA errors, OOM, ...) surface as a RuntimeError from
