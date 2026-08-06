@@ -512,7 +512,12 @@ class StreamVcConfig(BaseModel):
         "ディケイを滑らかに)。off だと RVC 生出力のままで立ち上がりが急峻",
     )
     envelope_strength: float = Field(
-        default=1.0, ge=0, description="包絡形状の指数。>1 で追従を強調、0 で無効相当"
+        default=1.0,
+        ge=0,
+        description="包絡形状の指数。0 で無効相当、>1 で追従を強調。ただし 1.0 でも "
+        "shape が min/max の窓を外れっぱなしになりやすく、ゲインが上下限へ張り付いて "
+        "整形が二値的になる。<1 にすると中間帯が広がって実際に整形が効く"
+        "(実測: 0.3 で下限張り付きが消える)。1.0 との聞き分けは耳では未確定",
     )
     envelope_min_gain: float = Field(
         default=0.1, ge=0.0, le=1.0, description="duck の下限ゲイン (静音部の残し量)"
