@@ -25,7 +25,7 @@ colorama==0.4.6 ; sys_platform == 'win32'
     #   colorlog
 colorlog==6.10.1 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via voicerecog
-cryptography==49.0.0 ; sys_platform == 'linux' or sys_platform == 'win32'
+cryptography==50.0.0 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via google-auth
 ctranslate2==4.8.0 ; sys_platform == 'linux' or sys_platform == 'win32'
     # via voicerecog
