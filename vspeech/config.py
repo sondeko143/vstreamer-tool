@@ -511,6 +511,11 @@ class StreamVcConfig(BaseModel):
         description="出力音量を入力の相対ラウドネス包絡へ追従させる (アタック/"
         "ディケイを滑らかに)。off だと RVC 生出力のままで立ち上がりが急峻",
     )
+    # [Open, deferred 2026-08-06] The default stays 1.0 even though the measurement says
+    # 0.3 is where the shaping actually happens (min rail 36.6% -> 0%, shaping range
+    # 14.7% -> 46.7%). Moving a tuned default wants an ear check to back it, and the
+    # comparison on the rig was inconclusive -- 0.3 and 1.0 were not reliably tellable
+    # apart. Revisit if a later listening session separates them.
     envelope_strength: float = Field(
         default=1.0,
         ge=0,

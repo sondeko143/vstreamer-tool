@@ -123,6 +123,17 @@ class StreamingVadGate:
         """
         import numpy as np
 
+        # [Open, deferred 2026-08-06] A single misjudged window rearms the WHOLE hangover
+        # budget, so one false positive on a pre-phonation breath holds the gate wide open
+        # (gain > 0.5) for 398ms at the rig's vad_hangover_ms=500 (300ms -> 366ms,
+        # 100ms -> 174ms, 0ms -> 78ms; measured on this pure logic). That is the leading
+        # suspect for the onset residual still audible on hardware after ADR-0059, and it
+        # dwarfs the ramp floor noted in `apply`. Deferred rather than guessed at: which of
+        # the two dominates has to be measured (do the windows before phonation actually
+        # cross vad_threshold?), and the ear A/B that would otherwise decide it was
+        # inconclusive on this rig. Raising vad_threshold is not the answer -- it costs
+        # real onsets; the candidate fix is requiring N consecutive speech windows to open
+        # (attack hysteresis), which is an ADR-level change.
         gains = np.empty(probs.shape[0], dtype=np.float64)
         for i in range(probs.shape[0]):
             if probs[i] >= self.threshold:
@@ -203,6 +214,15 @@ class StreamingVadGate:
         # of the first window centre and is clamped to `prev[0]`. Being continuous it does
         # not click, but the mask over that span carries no information from two blocks
         # back.
+        # [Open, deferred 2026-08-06] Interpolating between centres ties the opening ramp
+        # to the 32ms window spacing, which puts a floor under onset suppression: measured
+        # at the rig's settings the gain is already 0.50 (-6dB) at the moment the first
+        # speech window *starts*, and only reaches -26dB 14.4ms before it. So the 16ms of
+        # breath immediately before phonation cannot be held below -6dB no matter what the
+        # VAD decides. A click needs only a few ms of ramp, so an asymmetric attack (short
+        # opening ramp, 32ms closing ramp unchanged) would lower that floor -- an ADR-level
+        # change, deferred until measurement says this rather than the hangover rearm in
+        # `window_gains` is what dominates the residual.
         gain = np.interp(
             np.arange(n, dtype=np.float64) - delay_samples, centers, all_gains
         )
