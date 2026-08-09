@@ -1,6 +1,6 @@
 # 0067. コンテナ / Cloud Run 配備の経路を、Linux 側の依存解決ごと撤去する
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-09
 - Related: [spec](../superpowers/specs/2026-08-09-config-file-only-design.md), [ADR-0066](0066-config-input-file-only.md)
 

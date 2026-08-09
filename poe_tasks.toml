@@ -1,8 +1,8 @@
 # Task automation for this project, run via poethepoet: `uv run poe <task>`.
 # Split out of pyproject.toml (pulled back in via `[tool.poe] include`) so
 # pyproject stays focused on package metadata. This is the single task runner:
-# the former Makefile targets (requirements-pod / voicevox-assets / clean) were
-# folded in here too.
+# the former Makefile's voicevox-assets target was folded in here too; its
+# requirements-pod and clean targets went away with the container deploy (ADR-0067).
 #
 # The `python-health` skill drives the health gates:
 #   uv run poe check   → run every gate report-only (keeps going on failure)

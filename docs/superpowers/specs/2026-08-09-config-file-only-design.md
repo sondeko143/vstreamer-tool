@@ -5,9 +5,11 @@
 config の入力経路が `--config` ファイルと環境変数の2本ある。環境変数側は pydantic-settings の
 `BaseSettings` に依存しているが、使っている機能は `env_prefix` と `env_nested_delimiter` の2つだけ
 にもかかわらず、pydantic-settings は AWS / Azure / GCP Secret Manager・CLI・dotenv・YAML など全
-プロバイダを無条件に import する。実測（2026-08-09）でこの import だけが常駐プロセスに
-**+13.7 MB RSS / +176 modules / 起動 +473 ms** を課しており、これは起動時にロードされるアプリ中核
-（60 MB / 約 1.0 s）の中で単一としては pydantic 本体より大きい。
+プロバイダを無条件に import する。実測（2026-08-09）では、pydantic-settings を単体で import
+した場合の増分が **+13.7 MB RSS / +176 modules / 起動 +473 ms** で、これは起動時にロードされる
+アプリ中核（60 MB / 約 1.0 s）の中で単一としては pydantic 本体より大きい。ただし実際のパイプライン
+起動経路では grpc / google-cloud 系が既に多くを import 済みのため、pydantic-settings 固有の
+削減量は実測で 32 modules / 約 1.6 MB にとどまった。
 
 その環境変数経路の実質的な唯一の利用者はコンテナ配備（イメージの起動コマンドが `--config` を
 渡していない）だが、その配備はすでに機能していない。エディタのクラウド実行構成は最終更新が

@@ -82,5 +82,5 @@
 | [0063](0063-drop-gui-only-config-fields.md) | GUI 専用だった config フィールド (template_texts / text_send_operations) を互換シムを置かずに削除する | Accepted | 2026-07-26 |
 | [0064](0064-code-comments-in-english.md) | コード内のコメント / docstring を英語に統一し、ユーザーが読む文字列は日本語のまま残す | Accepted | 2026-07-31 |
 | [0065](0065-streaming-envelope-seam-handover.md) | ストリーミング入力エンベロープを継ぎ目引き継ぎ + emit 遅延補正にする（0057 の適用部を refine） | Accepted (refines 0057) | 2026-08-06 |
-| [0066](0066-config-input-file-only.md) | config の入力を `--config` ファイル 1 本に統一する（pydantic-settings を撤去し `--config` を必須にする） | Proposed | 2026-08-09 |
-| [0067](0067-drop-container-deploy-path.md) | コンテナ / Cloud Run 配備の経路を、Linux 側の依存解決ごと撤去する | Proposed | 2026-08-09 |
+| [0066](0066-config-input-file-only.md) | config の入力を `--config` ファイル 1 本に統一する（pydantic-settings を撤去し `--config` を必須にする） | Accepted | 2026-08-09 |
+| [0067](0067-drop-container-deploy-path.md) | コンテナ / Cloud Run 配備の経路を、Linux 側の依存解決ごと撤去する | Accepted | 2026-08-09 |

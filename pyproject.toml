@@ -159,8 +159,9 @@ extend-select = ["I", "UP"]
 force-single-line = true
 
 # Task automation lives in poe_tasks.toml (included below), kept out of this file
-# so pyproject stays focused on package metadata. The former Makefile targets
-# (requirements-pod / voicevox-assets / clean) were folded into poe there too.
+# so pyproject stays focused on package metadata. The former Makefile's
+# voicevox-assets target was folded into poe there too; its requirements-pod and
+# clean targets went away with the container deploy (ADR-0067).
 # Run any task via `uv run poe <task>`; `uv run poe` with no task lists them all.
 [tool.poe]
 include = ["poe_tasks.toml"]

@@ -1,6 +1,6 @@
 # 0066. config の入力を `--config` ファイル 1 本に統一する（pydantic-settings を撤去し `--config` を必須にする）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-09
 - Related: [spec](../superpowers/specs/2026-08-09-config-file-only-design.md), [ADR-0067](0067-drop-container-deploy-path.md), [ADR-0038](0038-worker-config-preflight-fail-loud.md)
 
@@ -15,6 +15,13 @@ Manager・Azure Key Vault・GCP Secret Manager・CLI・dotenv・JSON・pyproject
 の全プロバイダを無条件に import することにある。導入済みの 2.14.2 が最新なので、更新では解消
 しない。これは起動時にロードされるアプリ中核（60 MB / 約 1.0 s）の中で単一としては pydantic 本体
 （5.7 MB）より大きい。
+
+ただしこの 13.7 MB / 176 modules は pydantic だけを読み込んだ状態での単体計測であり、そのまま
+パイプラインの削減量にはならない。実際の起動経路では grpc と google-cloud 系が `ssl` /
+`importlib.metadata` / `argparse` / `zoneinfo` などを既に読み込んでいるため、pydantic-settings
+固有だったのは実測で **32 modules / 約 1.6 MB** にとどまった（`import vspeech.main` の増分が
++685 → +653 modules、+45.1 MB → +43.5 MB）。この決定を支えているのは削減量ではなく、下に述べる
+「対価のない経路」の方である。
 
 対して、この依存から実際に使っている機能は `env_prefix="vspeech_"` と
 `env_nested_delimiter="__"` の 2 つだけで、参照箇所も `vspeech/config.py` 1 ファイルに閉じている。
@@ -56,8 +63,9 @@ Cloud Run が注入する契約のためだけに存在していた。
 ## Consequences
 
 設定の入口が 1 つになり、`Config()` が開発者環境に依存しない hermetic な既定値になる。常駐
-プロセスは 13.7 MB / 176 modules / 473 ms 軽くなり、依存が 1 つ（推移的には python-dotenv と
-typing-inspection も）減る。
+プロセスは実測で 32 modules / 約 1.6 MB 軽くなり、依存が 1 つ（推移的に python-dotenv も）減る。
+`typing-inspection` は pydantic 本体の直接依存なので残る。起動コストの削減は当初の見込み
+（13.7 MB / 176 modules）を大きく下回った。
 
 一方で、環境変数だけで設定を差し込む配備は不可能になる。将来必要になったら、config ファイルを
 生成して `--config` で渡す形に寄せる。
