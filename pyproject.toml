@@ -33,9 +33,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# marker は付けない。extra 側で platform を絞ると `uv export --extra voicevox` が
-# requirements-pod.txt から voicevox-core ごと落とし、Docker イメージが
-# `import voicevox_core` で死ぬ。platform ごとの wheel は [tool.uv.sources] で出し分ける。
 voicevox = ["voicevox-core"]
 whisper = [
     "faster-whisper==1.2.1",
@@ -88,12 +85,11 @@ dev = [
 
 [tool.uv]
 default-groups = "all"
-# voicevox-core / torch / torchaudio / pyvcroid2 are Windows-only wheels,
-# and onnxruntime-gpu has no macOS wheel. Restrict resolution to the platforms this
-# project actually targets (Windows for dev, Linux for the Docker image).
+# voicevox-core / torch / torchaudio / pyvcroid2 are Windows-only wheels, and
+# onnxruntime-gpu has no macOS wheel. This project targets Windows only (ADR-0067
+# removed the Linux container deploy), so resolve for that platform alone.
 environments = [
     "sys_platform == 'win32'",
-    "sys_platform == 'linux'",
 ]
 # faster-whisper depends on the CPU `onnxruntime`, which shares the same `onnxruntime`
 # module with `onnxruntime-gpu` and clobbers its CUDA-enabled binary when both are
@@ -110,10 +106,7 @@ explicit = true
 
 [tool.uv.sources]
 vstreamer-protos = { url = "https://github.com/sondeko143/vstreamer-protos/releases/download/v0.1.1/vstreamer_protos-0.1.1-py3-none-any.whl" }
-voicevox-core = [
-    { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl", marker = "sys_platform == 'win32'" },
-    { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-manylinux_2_34_x86_64.whl", marker = "sys_platform == 'linux'" },
-]
+voicevox-core = { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl" }
 torch = { index = "pytorch-cu130" }
 torchaudio = { index = "pytorch-cu130" }
 pyvcroid2 = { git = "https://github.com/Nkyoku/pyvcroid2" }
