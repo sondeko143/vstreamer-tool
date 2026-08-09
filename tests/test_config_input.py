@@ -15,6 +15,7 @@ from vspeech.config import Config
 def test_environment_variables_do_not_reach_the_config(monkeypatch):
     monkeypatch.setenv("vspeech_listen_port", "9999")
     monkeypatch.setenv("vspeech_transcription__enable", "true")
+    monkeypatch.setenv("PORT", "9999")  # the alias that actually worked pre-ADR-0066
 
     config = Config()
 

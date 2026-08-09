@@ -625,8 +625,9 @@ class Config(BaseModel):
     # [Open, deferred 2026-08-09] This only guards the top level. The nested
     # section models (RecordingConfig and friends) are plain BaseModel, so
     # `[recording] enabel = true` is still ignored silently. Tightening them
-    # was left out of ADR-0066 because any stray key in an existing config.toml
-    # would then stop the pipeline from starting.
+    # was left out of ADR-0066 to avoid stacking a second breaking change onto
+    # the top-level one, not because the stricter behaviour is undesirable — it
+    # is the same fail-loud the top level already gets.
     model_config = ConfigDict(extra="forbid")
 
     @staticmethod
