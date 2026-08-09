@@ -4,10 +4,11 @@
   the repository was archived on 2026-03-20). Removed in spec 1.
 - transformers: merely appearing in uv.lock brings three advisories into `uv audit`.
   Removed in spec 2 by moving the content encoder to ONNX.
-- pydantic_settings: importing it costs a resident pipeline +13.7 MB RSS / +176 modules /
-  473 ms at startup, because its provider barrel imports every backend (AWS / Azure / GCP
-  Secret Manager, CLI, dotenv, YAML) unconditionally. Removed in ADR-0066 by taking
-  configuration from the `--config` file only.
+- pydantic_settings: its provider barrel imports every backend (AWS / Azure / GCP Secret
+  Manager, CLI, dotenv, YAML) unconditionally, which costs +13.7 MB RSS / +176 modules to
+  import in isolation — though only 32 modules / ~1.6 MB of that was unique to it on the real
+  startup path, the rest being shared with grpc and google-cloud. Removed in ADR-0066 by
+  taking configuration from the `--config` file only.
 
 Both are fine in the offline tools (scripts/convert_hubert.py,
 scripts/export_hubert_onnx.py). What is forbidden is only `vspeech/`, i.e. the runtime.

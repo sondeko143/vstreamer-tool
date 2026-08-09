@@ -54,8 +54,8 @@ Cloud Run が注入する契約のためだけに存在していた。
 - **`pydantic_settings` を遅延 import にして経路だけ残す** — `Config` が `BaseSettings` を継承
   する以上、クラス定義時点で import が必要になる。`create_model` で動的に `BaseSettings` 派生を
   組めば回避できるが、config スキーマの定義が二重化して読めなくなる。
-- **現状維持** — 常駐プロセスに 13.7 MB / 473 ms を課し続ける。額そのものは小さいが、対価が
-  ゼロの経路に払っている。
+- **現状維持** — テストも文書も利用者も無い経路を保守し続けることになる。常駐プロセスへの
+  負荷そのものは実測 32 modules / 約 1.6 MB で、これ単独では動機にならない。
 - **`--config` 未指定を全デフォルト起動のまま残す** — 全 worker 無効で receiver/sender しか
   起動しない無意味なプロセスが黙って立ち上がる。[ADR-0038](0038-worker-config-preflight-fail-loud.md)
   の fail-loud 方針に反する。
