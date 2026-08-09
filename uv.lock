@@ -955,7 +955,7 @@ wheels = [
 
 [[package]]
 name = "torch"
-version = "2.10.0+cu130"
+version = "2.13.0+cu130"
 source = { registry = "https://download.pytorch.org/whl/cu130" }
 dependencies = [
     { name = "filelock", marker = "sys_platform == 'win32'" },
@@ -967,20 +967,17 @@ dependencies = [
     { name = "typing-extensions", marker = "sys_platform == 'win32'" },
 ]
 wheels = [
-    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.10.0%2Bcu130-cp314-cp314-win_amd64.whl", hash = "sha256:dda35d473dd34cafa0668be176b9ad2cb69b1ff570d0336715a6541e89e27640", upload-time = "2026-01-21T19:00:26Z" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.10.0%2Bcu130-cp314-cp314t-win_amd64.whl", hash = "sha256:d5ea18790a18b660d655f6e75a8ca6e8d6298b55fc338f8c921764b94c886743", upload-time = "2026-01-21T19:01:35Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.13.0%2Bcu130-cp314-cp314-win_amd64.whl", upload-time = "2026-07-08T11:19:40Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.13.0%2Bcu130-cp314-cp314t-win_amd64.whl", upload-time = "2026-07-08T11:19:51Z" },
 ]
 
 [[package]]
 name = "torchaudio"
-version = "2.10.0+cu130"
+version = "2.11.0+cu130"
 source = { registry = "https://download.pytorch.org/whl/cu130" }
-dependencies = [
-    { name = "torch", marker = "sys_platform == 'win32'" },
-]
 wheels = [
-    { url = "https://download-r2.pytorch.org/whl/cu130/torchaudio-2.10.0%2Bcu130-cp314-cp314-win_amd64.whl", hash = "sha256:de12617c42479a56afaac4dca8374148ee070178f5dbcd44d2a838f4fdecdc80", upload-time = "2026-01-21T15:05:51Z" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torchaudio-2.10.0%2Bcu130-cp314-cp314t-win_amd64.whl", hash = "sha256:be34bd71859abea68a54c92a7bc8c46521a72f3ff666f0cdaf1e8483f1b4d087", upload-time = "2026-01-21T15:05:51Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torchaudio-2.11.0%2Bcu130-cp314-cp314-win_amd64.whl", hash = "sha256:b345401d76a371031b2fe965bd9579b9621c9d87902ee3e586be665df04c179e", upload-time = "2026-03-23T15:50:26Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torchaudio-2.11.0%2Bcu130-cp314-cp314t-win_amd64.whl", hash = "sha256:ac4988a74921500f9f2dc6502867876bf1bf15d845a518f4711d21ec81a1efef", upload-time = "2026-03-23T15:50:26Z" },
 ]
 
 [[package]]
@@ -1124,9 +1121,9 @@ requires-dist = [
     { name = "scipy", marker = "extra == 'rvc'", specifier = ">=1.10.1,<2" },
     { name = "sounddevice", marker = "extra == 'audio'", specifier = ">=0.5,<0.6" },
     { name = "toml", specifier = ">=0.10.2,<0.11" },
-    { name = "torch", marker = "sys_platform == 'win32' and extra == 'rvc'", specifier = "==2.10.0", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "torch", marker = "sys_platform == 'win32' and extra == 'whisper'", specifier = "==2.10.0", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "torchaudio", marker = "sys_platform == 'win32' and extra == 'rvc'", specifier = "==2.10.0", index = "https://download.pytorch.org/whl/cu130" },
+    { name = "torch", marker = "sys_platform == 'win32' and extra == 'rvc'", specifier = "==2.13.0", index = "https://download.pytorch.org/whl/cu130" },
+    { name = "torch", marker = "sys_platform == 'win32' and extra == 'whisper'", specifier = "==2.13.0", index = "https://download.pytorch.org/whl/cu130" },
+    { name = "torchaudio", marker = "sys_platform == 'win32' and extra == 'rvc'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cu130" },
     { name = "voicevox-core", marker = "extra == 'voicevox'", url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl" },
     { name = "vstreamer-protos", url = "https://github.com/sondeko143/vstreamer-protos/releases/download/v0.1.1/vstreamer_protos-0.1.1-py3-none-any.whl" },
     { name = "websockets", specifier = ">=14,<17" },

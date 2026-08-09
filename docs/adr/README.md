@@ -85,3 +85,4 @@
 | [0066](0066-config-input-file-only.md) | config の入力を `--config` ファイル 1 本に統一する（pydantic-settings を撤去し `--config` を必須にする） | Accepted | 2026-08-09 |
 | [0067](0067-drop-container-deploy-path.md) | コンテナ / Cloud Run 配備の経路を、Linux 側の依存解決ごと撤去する | Accepted | 2026-08-09 |
 | [0068](0068-config-load-errors-through-preflight-report.md) | 設定ファイルの読み込み失敗も preflight と同じ per-problem レポートで出す（0038 を refine） | Accepted (refines 0038) | 2026-08-09 |
+| [0069](0069-torch-213-and-terminal-torchaudio.md) | torch を 2.13.0 へ上げ、道連れで torchaudio を終端版 2.11.0 に固定する | Accepted | 2026-08-09 |

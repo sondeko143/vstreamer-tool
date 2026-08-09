@@ -36,20 +36,22 @@ dependencies = [
 voicevox = ["voicevox-core"]
 whisper = [
     "faster-whisper==1.2.1",
-    "torch==2.10.0 ; sys_platform == 'win32'",
+    "torch==2.13.0 ; sys_platform == 'win32'",
     # >=1.27: CUDA 13 (nvidia-*-cu13) を採用し torch +cu130 と揃える (roadmap フェーズ2)。
     "onnxruntime-gpu>=1.27,<2",
     "numpy>=2,<3",
 ]
 rvc = [
-    "torch==2.10.0 ; sys_platform == 'win32'",
+    "torch==2.13.0 ; sys_platform == 'win32'",
     # pyworld (dio/harvest の f0 抽出) は runtime 依存から外した: cp314 wheel が無く、
     # 既定は rmvpe。dio/harvest を使う場合のみ手動導入 (`uv pip install pyworld`)。
     # pitch_extract.py が遅延 import する。
     "faiss-cpu>=1.7.2,<2 ; sys_platform == 'win32'",
     # >=1.27: CUDA 13 (nvidia-*-cu13) を採用し torch +cu130 と揃える (roadmap フェーズ2)。
     "onnxruntime-gpu>=1.27,<2",
-    "torchaudio==2.10.0 ; sys_platform == 'win32'",
+    # 2.11.0 は torchaudio の最終リリース (torch 2.12/2.13 に対応版は無い)。torch ピンを
+    # 持たない前方互換版として上流が出したものなので、torch を上げても追随不要 (ADR-0069)。
+    "torchaudio==2.11.0 ; sys_platform == 'win32'",
     "numpy>=2,<3",
     "scipy>=1.10.1,<2",
 ]

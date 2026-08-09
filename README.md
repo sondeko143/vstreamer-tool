@@ -62,7 +62,7 @@ curl -sSfL https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/do
 VOICEVOX は whisper / RVC が使う `onnxruntime-gpu` とは**別ビルド**の
 `voicevox_onnxruntime` を読みます。正しい方が読まれるよう `onnxruntime_path` は明示してください。
 
-GPU を使う場合、torch (`2.10.0+cu130`) と `onnxruntime-gpu` は CUDA 13 ランタイムを同梱するので、
+GPU を使う場合、torch (`2.13.0+cu130`) と `onnxruntime-gpu` は CUDA 13 ランタイムを同梱するので、
 RVC / ボイスチェンジャーだけのホストは **NVIDIA ドライバ R580 以降**があれば足ります
 ([ADR-0028](docs/adr/0028-migrate-to-cuda-13.md))。
 
