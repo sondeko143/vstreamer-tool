@@ -90,14 +90,11 @@ async def vspeech_coro(config: Config):
     "--json-config",
     "config_file",
     type=click.File("rb"),
+    required=True,
 )
-def cmd(config_file: IO[bytes] | None):
-    if config_file:
-        config = Config.read_config_from_file(config_file)
-        config_file.close()
-    else:
-        # from environment variables
-        config = Config()
+def cmd(config_file: IO[bytes]):
+    config = Config.read_config_from_file(config_file)
+    config_file.close()
     configure_logger(config)
     telemetry.configure(
         enabled=config.telemetry.enable,
