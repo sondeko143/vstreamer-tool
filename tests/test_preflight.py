@@ -96,7 +96,7 @@ def test_vad_gate_missing_model_is_reported():
     assert any("vad_model_file" in p.detail for p in ei.value.problems)
 
 
-def test_cmd_exits_on_config_error(monkeypatch):
+def test_cmd_exits_on_config_error(monkeypatch, tmp_path):
     import asyncio
 
     from vspeech.exceptions import ConfigError
@@ -111,8 +111,11 @@ def test_cmd_exits_on_config_error(monkeypatch):
     monkeypatch.setattr("vspeech.main.telemetry.configure", lambda **kw: None)
     asyncio.set_event_loop(None)
     assert cmd.callback is not None
-    with pytest.raises(SystemExit) as ei:
-        cmd.callback(config_file=None)
+    config_file = tmp_path / "config.toml"
+    config_file.write_text("", encoding="utf-8")
+    with config_file.open("rb") as opened:
+        with pytest.raises(SystemExit) as ei:
+            cmd.callback(config_file=opened)
     assert ei.value.code == 1
 
 
