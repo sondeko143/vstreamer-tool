@@ -8,15 +8,12 @@ from typing import Any
 from typing import Literal
 
 import toml
-from pydantic import AliasChoices
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import SecretStr
 from pydantic import field_serializer
 from pydantic import model_validator
-from pydantic_settings import BaseSettings
-from pydantic_settings import SettingsConfigDict
 from toml.encoder import TomlArraySeparatorEncoder
 
 from vspeech.exceptions import ReplaceFilterParseError
@@ -598,7 +595,7 @@ class CustomTomlEncoder(TomlArraySeparatorEncoder):
         return super().dump_value(v)
 
 
-class Config(BaseSettings):
+class Config(BaseModel):
     recording: RecordingConfig = Field(default_factory=RecordingConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
     tts: TtsConfig = Field(default_factory=TtsConfig)
@@ -616,17 +613,21 @@ class Config(BaseSettings):
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
 
     listen_address: str = "[::]"
-    listen_port: int = Field(
-        default=8080, validation_alias=AliasChoices("listen_port", "PORT")
-    )
+    listen_port: int = 8080
     filters: list[ReplaceFilter] = []
     log_file: str = "./voice_%%Y_%%m_%%d.log"
     log_level: int | str = logging.INFO
 
-    model_config = SettingsConfigDict(
-        env_prefix="vspeech_",
-        env_nested_delimiter="__",
-    )
+    # `extra="forbid"` was inherited implicitly from SettingsConfigDict before
+    # ADR-0066. Restate it here or a typo'd key in config.toml starts being
+    # swallowed: plain BaseModel defaults to extra="ignore".
+    #
+    # [Open, deferred 2026-08-09] This only guards the top level. The nested
+    # section models (RecordingConfig and friends) are plain BaseModel, so
+    # `[recording] enabel = true` is still ignored silently. Tightening them
+    # was left out of ADR-0066 because any stray key in an existing config.toml
+    # would then stop the pipeline from starting.
+    model_config = ConfigDict(extra="forbid")
 
     @staticmethod
     def is_file_json(file_path: str | Path):
