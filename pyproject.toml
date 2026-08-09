@@ -14,7 +14,6 @@ dependencies = [
     "google-cloud-translate>=3.11.1,<4",
     "httpx>=0.28.0,<0.29.0",
     "pydantic>=2,<3",
-    "pydantic-settings>=2,<3",
     "aiofiles>=23.1.0,<24",
     "pyhumps>=3.8.0,<4",
     "google-cloud-speech>=2.19.0,<3",

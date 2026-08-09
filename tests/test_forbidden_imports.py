@@ -4,6 +4,10 @@
   the repository was archived on 2026-03-20). Removed in spec 1.
 - transformers: merely appearing in uv.lock brings three advisories into `uv audit`.
   Removed in spec 2 by moving the content encoder to ONNX.
+- pydantic_settings: importing it costs a resident pipeline +13.7 MB RSS / +176 modules /
+  473 ms at startup, because its provider barrel imports every backend (AWS / Azure / GCP
+  Secret Manager, CLI, dotenv, YAML) unconditionally. Removed in ADR-0066 by taking
+  configuration from the `--config` file only.
 
 Both are fine in the offline tools (scripts/convert_hubert.py,
 scripts/export_hubert_onnx.py). What is forbidden is only `vspeech/`, i.e. the runtime.
@@ -18,7 +22,7 @@ import pytest
 
 VSPEECH_DIR = Path(__file__).resolve().parents[1] / "vspeech"
 
-FORBIDDEN = ("fairseq", "transformers")
+FORBIDDEN = ("fairseq", "transformers", "pydantic_settings")
 
 
 def _imported_modules(path: Path):
@@ -99,6 +103,27 @@ def test_consumer_path_is_torch_free():
         "import vspeech.stream_vc.jitter\n"
         "import vspeech.stream_vc.wire\n"
         "assert 'torch' not in sys.modules, sorted(sys.modules)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+
+
+def test_the_entry_point_never_loads_pydantic_settings():
+    """Nothing on the startup path drags the env-config machinery back in (ADR-0066).
+
+    The AST gate above only sees `vspeech/`; this catches a transitive import
+    through a dependency. A sys.modules check inside the test process would be
+    contaminated by test order, so it runs in a pristine child process.
+    """
+    code = (
+        "import sys\n"
+        "import vspeech.main\n"
+        "assert 'pydantic_settings' not in sys.modules, sorted(sys.modules)\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", code],
