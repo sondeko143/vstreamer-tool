@@ -19,7 +19,7 @@ AmiVoice Cloud Platform API, VOICEROID2, Google translation API v3 などと連�
 
 ## 設定
 
-Python 3.12 が必要です (`>=3.12,<3.13`)。uv で依存パッケージをインストールします。
+Python 3.14 が必要です (`>=3.14,<3.15`)。uv で依存パッケージをインストールします。
 
 ```sh
 # 全部入り。迷ったらこれ
@@ -36,7 +36,7 @@ uv sync --extra audio --extra whisper
 | extra | 内容 |
 | --- | --- |
 | (なし) | 文字起こし / 翻訳 / 字幕 |
-| `audio` | 録音・再生 (portaudio が必要) |
+| `audio` | 録音・再生 (sounddevice。PortAudio は wheel に同梱されるので別途インストールは不要) |
 | `whisper` | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) による文字起こし |
 | `vroid2` | VOICEROID2 音声合成 |
 | `voicevox` | VOICEVOX 音声合成 |
@@ -62,7 +62,14 @@ curl -sSfL https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/do
 VOICEVOX は whisper / RVC が使う `onnxruntime-gpu` とは**別ビルド**の
 `voicevox_onnxruntime` を読みます。正しい方が読まれるよう `onnxruntime_path` は明示してください。
 
-whisper, RVC は CUDA 12.8 (`torch 2.10.0+cu128`) がインストールされている必要があります。
+GPU を使う場合、torch (`2.10.0+cu130`) と `onnxruntime-gpu` は CUDA 13 ランタイムを同梱するので、
+RVC / ボイスチェンジャーだけのホストは **NVIDIA ドライバ R580 以降**があれば足ります
+([ADR-0028](docs/adr/0028-migrate-to-cuda-13.md))。
+
+whisper を GPU で回すホストは、それに加えて **CUDA 12 ツールキット (cuBLAS + cuDNN 9)** が要ります。
+faster-whisper が使う ctranslate2 は CUDA 12 専用ビルドしかなく `cublas64_12.dll` を要求しますが、
+torch が cu130 になった時点でこれを同梱しなくなったためです
+([ADR-0039](docs/adr/0039-whisper-hosts-need-cuda12-toolkit.md))。
 
 ## 実行
 

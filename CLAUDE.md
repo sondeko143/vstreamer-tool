@@ -13,7 +13,7 @@ This project uses **uv** (migrated from Poetry). Python **3.14 only** (`>=3.14,<
 ```sh
 # Install. Base = transcription/subtitle only; add extras for other subsystems.
 uv sync
-uv sync --extra audio       # recording/playback (needs portaudio)
+uv sync --extra audio       # recording/playback (sounddevice; PortAudio ships in the wheel)
 uv sync --extra whisper     # faster-whisper; GPU run needs a host CUDA 12 toolkit for ctranslate2 (ADR-0039)
 uv sync --extra vroid2      # VOICEROID2 TTS
 uv sync --extra voicevox    # VOICEVOX TTS
