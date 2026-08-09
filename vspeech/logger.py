@@ -39,7 +39,7 @@ class TaskFileHandler(logging.FileHandler):
         super().emit(record)
 
 
-def configure_logger(config: Config):
+def force_utf8_streams() -> None:
     # When stdout/stderr is not a console (redirected to a file, a pipe, or a
     # non-interactive launch from e.g. the task scheduler) the encoding becomes
     # cp1252 or similar, so a Japanese log line raises UnicodeEncodeError and emit
@@ -47,6 +47,9 @@ def configure_logger(config: Config):
     # ADR-0038 Goal 1). UTF-8 + backslashreplace gives both "readable UTF-8 out" and
     # "never crashes". cli/main.py carries the same fix for the same reason (there it
     # covers click's help/errors, so it has to take effect before this function).
+    #
+    # Split out of configure_logger so the entry point can call it before it holds a
+    # Config at all: a malformed config file is reported before that point (ADR-0068).
     for _stream in (stdout, stderr):
         try:
             _stream.reconfigure(  # ty: ignore[unresolved-attribute]
@@ -54,6 +57,10 @@ def configure_logger(config: Config):
             )
         except AttributeError, ValueError:
             pass
+
+
+def configure_logger(config: Config):
+    force_utf8_streams()
     log_file_format = logging.Formatter(
         "%(asctime)s %(thread)s[%(task)s] %(levelname)s : %(message)s"
     )

@@ -15,7 +15,9 @@ from vspeech.exceptions import WorkerShutdown
 from vspeech.exceptions import WorkerStartupError
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import configure_logger
+from vspeech.logger import force_utf8_streams
 from vspeech.logger import logger
+from vspeech.preflight import load_config
 from vspeech.preflight import preflight
 from vspeech.shared_context import SharedContext
 from vspeech.worker.receiver import create_receiver_task
@@ -84,6 +86,12 @@ async def vspeech_coro(config: Config):
         telemetry.log_summary()
 
 
+def _report_config_error(e: ConfigError) -> None:
+    logger.error("起動中止: 設定不備 %d 件", len(e.problems))
+    for problem in e.problems:
+        logger.error("  %s", problem)
+
+
 @click.command()
 @click.option(
     "--config",
@@ -93,7 +101,14 @@ async def vspeech_coro(config: Config):
     required=True,
 )
 def cmd(config_file: IO[bytes]):
-    config = Config.read_config_from_file(config_file)
+    # Reconfigure the streams first: a malformed config file is reported below,
+    # before there is a Config to configure the logger with (ADR-0068).
+    force_utf8_streams()
+    try:
+        config = load_config(config_file)
+    except ConfigError as e:
+        _report_config_error(e)
+        exit(1)
     config_file.close()
     configure_logger(config)
     telemetry.configure(
@@ -104,9 +119,7 @@ def cmd(config_file: IO[bytes]):
     try:
         preflight(config)
     except ConfigError as e:
-        logger.error("起動中止: 設定不備 %d 件", len(e.problems))
-        for problem in e.problems:
-            logger.error("  %s", problem)
+        _report_config_error(e)
         exit(1)
     # On 3.14 get_event_loop() raises RuntimeError when there is no running loop
     # (implicit creation was removed). Create a new loop explicitly and install it.

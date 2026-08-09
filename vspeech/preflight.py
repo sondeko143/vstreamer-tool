@@ -9,7 +9,12 @@ real load are handled at worker startup (layer B).
 
 from collections.abc import Callable
 from importlib.util import find_spec
+from json import JSONDecodeError
 from pathlib import Path
+from typing import IO
+
+from pydantic import ValidationError
+from toml import TomlDecodeError
 
 from vspeech.config import Config
 from vspeech.config import F0ExtractorType
@@ -440,3 +445,42 @@ def preflight(config: Config) -> None:
     problems = collect_problems(config)
     if problems:
         raise ConfigError(problems)
+
+
+def _dotted(loc: tuple[int | str, ...]) -> str:
+    return ".".join(str(part) for part in loc)
+
+
+def load_config(file: IO[bytes]) -> Config:
+    """Read the --config file, reporting a malformed one as ConfigError (ADR-0068).
+
+    The file has to be parsed and validated before `preflight()` can be run on it,
+    so these failures escaped the aggregation above and reached the user as a raw
+    pydantic/TOML traceback. ADR-0038 makes this module the one place config problems
+    surface; that is only true if the ones found while reading arrive the same way.
+
+    A pydantic ValidationError carries one entry per offending setting, so it maps
+    onto ConfigProblem one-to-one. A decode error is a single problem about the file
+    as a whole, and no setting can be named for it.
+    """
+    try:
+        return Config.read_config_from_file(file)
+    except ValidationError as e:
+        raise ConfigError(
+            [
+                ConfigProblem(
+                    "config",
+                    f"{_dotted(err['loc']) or '(トップレベル)'}: {err['msg']}",
+                    field=_dotted(err["loc"]) or None,
+                )
+                for err in e.errors()
+            ]
+        ) from e
+    except (TomlDecodeError, JSONDecodeError, UnicodeDecodeError) as e:
+        raise ConfigError(
+            [
+                ConfigProblem(
+                    "config", f"設定ファイルとして読めません ({file.name}): {e}"
+                )
+            ]
+        ) from e
