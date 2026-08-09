@@ -21,14 +21,6 @@ audit = { cmd = "uv audit", help = "Dependency vulnerability audit" }
 security = { cmd = "uv run --with bandit bandit -q -r vspeech cli", help = "Security lint (bandit, project interpreter)" }
 deadcode = { cmd = "uv run --with vulture vulture vspeech --min-confidence 80", help = "Dead-code scan (advisory)" }
 
-# Docker デプロイ用の requirements-pod.txt を uv.lock から再生成する（旧 Makefile の
-# 既定ターゲット）。Make と違い入力の更新有無を見ずに毎回再生成するが、uv export は
-# 冪等で速いので実害はない。依存を変えたら実行して結果をコミットする（Dockerfile が
-# この生成物を COPY する）。
-requirements-pod = { cmd = "uv export --no-default-groups --extra voicevox --no-hashes --no-emit-project -o requirements-pod.txt", help = "Regenerate requirements-pod.txt for the Docker image (voicevox extra)" }
-# 生成物の掃除（旧 Makefile の clean）。POSIX shell (Git Bash 等) が要る。
-clean = { shell = "rm -f requirements-pod.txt", help = "Remove generated artifacts (requirements-pod.txt)" }
-
 # 一度きりのオフライン工程。依存 (fairseq / transformers / onnx / onnxscript) は
 # pyproject にも uv.lock にも載せず、`uv run --with` の一時環境で供給する。
 # `poe security` / `poe deadcode` と同じ手口。
