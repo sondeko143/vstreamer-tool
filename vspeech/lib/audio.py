@@ -287,9 +287,13 @@ class ReportsSampleRate(Protocol):
 
     Both `sd.RawInputStream` and `sd.RawOutputStream` satisfy it, which is what lets one
     helper serve the input and the output boundaries without knowing which it is holding.
+    `close` is here (despite the name) because `open_device_stream` must be able to
+    close a stream whose `start()` failed, to avoid leaking the native handle.
     """
 
     def start(self) -> None: ...
+
+    def close(self) -> None: ...
 
     @property
     def samplerate(self) -> float: ...
@@ -338,6 +342,16 @@ def open_device_stream[StreamT: ReportsSampleRate](
     DeviceRateUnresolvedError from step 1 escapes unhandled: it is a config problem no
     retry can fix (ADR-0071), and every caller deliberately keeps it out of its device
     -fault retry path.
+
+    If `open_stream(rate)` itself raises (Pa_OpenStream failing), sounddevice never
+    allocates a native stream -- nothing to close. But if the open succeeds and
+    `stream.start()` (Pa_StartStream) is what fails, sounddevice's stream object has no
+    `__del__` and `close()` is the only caller of Pa_CloseStream, so an unclosed `stream`
+    here leaks the native handle permanently once this function's frame is torn down and
+    the reference is lost. Every caller retries a device fault in a loop (steady-state
+    reconnect in stream_vc, per-utterance reopen in worker/playback.py) -- a persistent
+    fault (e.g. the device held exclusively by another process) would otherwise leak one
+    handle per retry, unboundedly, for as long as the pipeline keeps running.
     """
     rate, how = resolve_device_rate(
         device, override, input=input, config_key=config_key
@@ -358,7 +372,11 @@ def open_device_stream[StreamT: ReportsSampleRate](
             "プロセス内で変換" if rate != pipeline_rate else "変換なし",
         )
     stream = open_stream(rate)
-    stream.start()
+    try:
+        stream.start()
+    except OSError, sd.PortAudioError:
+        stream.close()
+        raise
     reported = float(stream.samplerate)
     if abs(reported - rate) > 0.5:
         logger.warning(

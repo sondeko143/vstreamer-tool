@@ -7,6 +7,7 @@ table differs per machine.
 import logging
 
 import pytest
+import sounddevice as sd
 
 from vspeech.exceptions import DeviceRateUnresolvedError
 from vspeech.lib.audio import DeviceInfo
@@ -304,14 +305,26 @@ def test_counterpart_rate_of_zero_fails_loud() -> None:
 
 
 class _FakeStream:
-    """Stands in for sd.Raw{Input,Output}Stream: records how it was opened."""
+    """Stands in for sd.Raw{Input,Output}Stream: records how it was opened.
 
-    def __init__(self, rate: int) -> None:
+    `start_error`, when given, makes `start()` raise instead of succeeding -- the
+    Pa_OpenStream-succeeds/Pa_StartStream-fails case a real sounddevice stream can hit
+    (e.g. the device grabbed exclusively between open and start).
+    """
+
+    def __init__(self, rate: int, start_error: Exception | None = None) -> None:
         self.samplerate = float(rate)
         self.started = False
+        self.closed = False
+        self._start_error = start_error
 
     def start(self) -> None:
+        if self._start_error is not None:
+            raise self._start_error
         self.started = True
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def test_the_attempted_rate_is_logged_before_the_open(
@@ -366,3 +379,54 @@ def test_an_unresolvable_rate_raises_before_the_device_is_opened() -> None:
             open_stream=_open,
         )
     assert opened == []
+
+
+def test_a_start_failure_still_closes_the_stream() -> None:
+    """Pa_OpenStream succeeding but Pa_StartStream failing must still close the stream.
+
+    sounddevice's stream objects have no `__del__` and `close()` is the sole caller of
+    Pa_CloseStream, so an unclosed stream here leaks the native handle for good once
+    this function's frame is torn down. Every caller of open_device_stream retries a
+    device fault in a loop (stream_vc's steady-state reconnect, worker/playback.py's
+    per-utterance reopen) -- a persistent fault (e.g. the device grabbed exclusively by
+    another process) would otherwise leak one handle per retry, unboundedly, for as
+    long as the pipeline keeps running. Found in review, not by a mutation -- this test
+    asserts the fix directly rather than only proving some other test would fail
+    without it.
+    """
+    made: list[_FakeStream] = []
+
+    def _open(rate: int) -> _FakeStream:
+        stream = _FakeStream(rate, start_error=sd.PortAudioError("device busy"))
+        made.append(stream)
+        return stream
+
+    with pytest.raises(sd.PortAudioError):
+        open_device_stream(
+            device=_device(0),
+            override=None,
+            input=False,
+            config_key="playback.output_device_rate",
+            opening="use output device",
+            subject="playback",
+            open_stream=_open,
+        )
+    assert len(made) == 1
+    assert made[0].closed is True
+
+
+def test_a_successful_start_is_not_closed_by_open_device_stream() -> None:
+    """The success path must NOT close the stream -- the caller needs it open to
+    actually use it. Only the start-failure path (above) closes early."""
+    stream, rate = open_device_stream(
+        device=_device(0),
+        override=None,
+        input=False,
+        config_key="playback.output_device_rate",
+        opening="use output device",
+        subject="playback",
+        open_stream=_FakeStream,
+    )
+    assert rate == 48000
+    assert stream.started is True
+    assert stream.closed is False

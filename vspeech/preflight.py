@@ -36,6 +36,7 @@ from vspeech.exceptions import ConfigError
 from vspeech.exceptions import ConfigProblem
 from vspeech.lib.obs_text_settings import hex_color_to_obs_int
 from vspeech.lib.subtitle_state import TRANSPARENT_BG_COLOR
+from vspeech.logger import logger
 
 if TYPE_CHECKING:
     # Type-only: importing vspeech.lib.audio for real would pull in sounddevice at
@@ -129,16 +130,23 @@ def _check_device_rate(
     two separate steps, each with its own try/except, so DeviceRateUnresolvedError being
     a DeviceNotFoundError subclass cannot be caught by the wrong handler here).
 
-    Two independent things can be wrong once a device is found:
+    Three independent things can be wrong once a device is found, checked in order,
+    each cheaper than the next, so a failure at one stops before paying for the next:
 
     1. The rate cannot be decided at all (DeviceRateUnresolvedError, ADR-0071).
     2. The decided rate produces a pathological resample ratio against `ratio_targets`
        (empty for a boundary whose counterpart rate is not known at preflight time --
-       see worker/playback.py's per-utterance warning instead, ADR-0075).
-
-    A third thing -- PortAudio refusing to open the device at that rate at all -- can
-    only be found by trying, so this is the one preflight check that acquires a real
-    device: opened and immediately closed, never read from or written to.
+       see worker/playback.py's per-utterance warning instead, ADR-0075). Pure
+       arithmetic, no hardware touched -- a device already known to be unusable for
+       this boundary is not worth opening just to report the same conclusion twice.
+    3. PortAudio refuses to open the device at that rate at all -- can only be found by
+       trying, so this is the one preflight check that acquires a real device: opened,
+       started and immediately closed, never read from or written to. The stream is
+       always closed, success or failure -- sounddevice's stream objects have no
+       `__del__` and `close()` is the only path to `Pa_CloseStream`, so a `start()`
+       failure that skipped `close()` would leak the native handle for the rest of the
+       process (this bit preflight itself in review; the shared `open_device_stream`
+       had the same gap and is fixed alongside this, lib/audio.py).
     """
     from vspeech.exceptions import DeviceRateUnresolvedError
     from vspeech.lib.audio import resolve_device_rate
@@ -151,23 +159,23 @@ def _check_device_rate(
     except DeviceRateUnresolvedError as e:
         return [ConfigProblem(worker, str(e), field=config_key)]
 
-    problems: list[ConfigProblem] = []
     for target in ratio_targets:
         try:
             make_resampler(rate, target)
         except ValueError as e:
-            problems.append(
+            return [
                 ConfigProblem(
                     worker,
                     f"{config_key} は {rate}Hz に解決されましたが、"
                     f"{target}Hz への変換比が病的です: {e}",
                     field=config_key,
                 )
-            )
-            break  # one pathological target is enough to prove the device rate itself
+            ]  # one pathological target already condemns the device rate; the loop
+            # need not (and, per the docstring above, must not) touch hardware too.
 
     import sounddevice as sd
 
+    stream = None
     try:
         stream = (
             sd.RawInputStream(
@@ -179,17 +187,35 @@ def _check_device_rate(
             )
         )
         stream.start()
-        stream.close()
     except (OSError, sd.PortAudioError) as e:
         kind = "入力" if input else "出力"
-        problems.append(
+        return [
             ConfigProblem(
                 worker,
-                f"{kind}デバイス '{device.name}' を {rate}Hz で開けません: {e}",
+                f"{kind}デバイス '{device.name}' を {rate}Hz "
+                f"(channels={channels}, dtype={dtype}) で開けません: {e}",
                 field=config_key,
             )
-        )
-    return problems
+        ]
+    else:
+        # Parity with the worker's own open path (lib/audio.open_device_stream step 4):
+        # a rate PortAudio silently substitutes is not a config problem by itself (the
+        # worker still converts at the requested rate), so this stays a log line, not a
+        # ConfigProblem -- just visible at preflight time instead of only at real
+        # startup.
+        reported = float(stream.samplerate)
+        if abs(reported - rate) > 0.5:
+            logger.warning(
+                "%s device reports %.4fHz for a requested %dHz; "
+                "converting at the requested rate",
+                config_key,
+                reported,
+                rate,
+            )
+    finally:
+        if stream is not None:
+            stream.close()
+    return []
 
 
 def _check_transcription(config: Config) -> list[ConfigProblem]:
