@@ -206,6 +206,21 @@ async def sd_recording_worker(
                         approx_max_amps = []
                     elif status == "speaking":
                         speaking_frames += interval_frames
+                        # [Open, deferred 2026-08-11] This adds the constant
+                        # config.interval_sec per tick, but the `>=` check above (not `==`)
+                        # lets interval_frame_count -- and therefore the real audio inside
+                        # interval_frames -- overshoot the threshold by up to one read's
+                        # worth before this branch fires. Each tick therefore represents MORE
+                        # real audio than it is credited with, so max_recording_sec caps LESS
+                        # real time than configured. At the defaults (chunk=1024,
+                        # interval_sec=0.1, rate=16000: threshold=1600 frames, but reads land
+                        # on 1024/2048/... so a tick fires every 2048 frames = 0.128s of real
+                        # audio credited as only 0.1s), a configured 0.25s cap is closer to
+                        # ~0.32s in practice. Pre-existing (unchanged by ADR-0070's
+                        # device-rate read -- at a matching rate the read size and the
+                        # overshoot geometry are identical to the pre-ADR-0070 code); out of
+                        # this task's scope. A fix would need to measure real elapsed frames
+                        # per tick instead of crediting a constant.
                         total_seconds_of_this_recording += config.interval_sec
                         if speaking:
                             last_voice_ts = perf_counter()

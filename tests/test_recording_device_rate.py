@@ -86,8 +86,15 @@ class _OpenedStream:
 
 
 @pytest.fixture
-def opened_streams(monkeypatch: pytest.MonkeyPatch) -> list[_OpenedStream]:
-    """Stub the device table and sd.RawInputStream; yield the streams that got opened."""
+def stubbed_device_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the device table alone, without also patching sd.RawInputStream.
+
+    Split out from `opened_streams` so a test that patches the stream open itself
+    (e.g. via `_reporting_stream`) can depend on this instead: requesting
+    `opened_streams` there would set up an opener spy that gets replaced before a
+    single stream is opened through it, leaving the fixture parameter unused and its
+    purpose left for the reader to guess.
+    """
     import vspeech.lib.audio as audio
 
     def _query_devices(index: int | None = None):
@@ -97,6 +104,14 @@ def opened_streams(monkeypatch: pytest.MonkeyPatch) -> list[_OpenedStream]:
 
     monkeypatch.setattr(audio.sd, "query_devices", _query_devices)
     monkeypatch.setattr(audio.sd, "query_hostapis", lambda: _HOSTAPIS)
+
+
+@pytest.fixture
+def opened_streams(
+    stubbed_device_table: None, monkeypatch: pytest.MonkeyPatch
+) -> list[_OpenedStream]:
+    """Stub sd.RawInputStream on top of the device table; yield the streams that got
+    opened."""
     opened: list[_OpenedStream] = []
 
     def _open(**kwargs: Any) -> _OpenedStream:
@@ -172,7 +187,7 @@ def _reporting_stream(monkeypatch: pytest.MonkeyPatch, reported: float) -> None:
 
 
 def test_a_device_reporting_another_rate_is_warned_about(
-    opened_streams: list[_OpenedStream],
+    stubbed_device_table: None,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -190,7 +205,7 @@ def test_a_device_reporting_another_rate_is_warned_about(
 
 
 def test_a_device_reporting_the_requested_rate_stays_quiet(
-    opened_streams: list[_OpenedStream],
+    stubbed_device_table: None,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -409,6 +424,119 @@ async def test_matching_rate_output_is_bit_identical_to_the_raw_reads(
 
     assert utterance.stop_reason == "maxlen"
     assert utterance.frames == pattern * 2
+
+
+async def test_resampler_state_persists_across_reads_within_one_stream_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The resampler is built once per stream open (recording.py:173-179), not inside
+    the read loop, so its filter tail carries across reads: converting 4 small reads
+    in sequence must equal converting the same audio concatenated in a single call.
+
+    This pins the property the comment at that construction site argues for. If a
+    regression moved the construction inside `while stream.active`, every read would
+    start from a zeroed tail instead of the previous read's, which the per-read output
+    length test (`test_every_block_is_exactly_one_hop`-style checks) cannot see: a
+    rebuilt-per-read resampler still emits exactly 1600 frames for 4800 input frames
+    (the decimation ratio is exact), it just emits the WRONG 1600 -- a transient at
+    every read boundary instead of the continuous signal. Only comparing against a
+    monolithic one-shot conversion of the same audio exposes that.
+    """
+    cfg = RecordingConfig(
+        rate=16000,
+        chunk=1600,
+        interval_sec=0.1,
+        silence_threshold=-100,
+        max_recording_sec=0.25,  # trips after 4 reads (see the time-conversion test)
+    )
+    device_rate = 48000
+    frames_per_read = device_frames_per_read(cfg.chunk, device_rate, cfg.rate)
+    rng = np.random.default_rng(7)
+    reads = [
+        rng.integers(-20000, 20000, size=frames_per_read, dtype=np.int16).tobytes()
+        for _ in range(4)
+    ]
+    stream = _FakeDeviceStream(frames_per_read, lambda i: reads[i - 1])
+    monkeypatch.setattr(
+        recording_mod, "open_input_stream", lambda config: (stream, device_rate)
+    )
+
+    gen = sd_recording_worker(cfg)
+    utterance = await anext(gen)
+    await gen.aclose()
+
+    assert utterance.stop_reason == "maxlen"
+    assert stream.reads == 4
+    whole_input = decode_pcm(b"".join(reads), cfg.format, cfg.channels)
+    reference = PolyphaseResampler(device_rate, cfg.rate).process(whole_input)
+    captured = decode_pcm(utterance.frames, cfg.format, cfg.channels)
+    assert len(captured) == len(reference)
+    # Not bit-equal: BLAS sums a big one-shot matvec in a different order than four
+    # small streaming ones (see tests/test_resample.py's irregular-block precedent).
+    assert np.allclose(captured, reference, atol=1e-4, rtol=0)
+
+
+async def test_time_conversion_holds_for_a_fractional_device_ratio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """44100->16000 does not reduce to an integer ratio (up=160, down=441): unlike every
+    other full-loop test in this file (all 48000->16000, a pure up=1 decimation),
+    `process()` takes the general multi-phase branch and returns a different frame
+    count call to call as the fractional remainder rolls forward (mirrors
+    stream_vc/capture.py's `test_a_fractional_ratio_carries_the_leftover_samples_
+    forward`, same chunk=100). This is the only test in the file that exercises that
+    branch through sd_recording_worker end to end.
+
+    Two properties, both required by the acceptance criteria: (1) elapsed-time
+    accounting stays close to real seconds -- not off by the 2.75625x device/config
+    rate ratio a frame-count regression at this boundary would produce; (2) the
+    captured audio itself matches a monolithic one-shot conversion of the exact same
+    reads -- the fractional per-call output length (100/101 alternating) must not
+    corrupt what is actually captured, only how the interval bookkeeping ticks.
+    """
+    cfg = RecordingConfig(
+        rate=16000,
+        chunk=100,
+        interval_sec=0.1,
+        silence_threshold=-100,
+        max_recording_sec=0.5,
+    )
+    device_rate = 44100
+    frames_per_read = device_frames_per_read(cfg.chunk, device_rate, cfg.rate)
+    assert frames_per_read == 276  # matches stream_vc/capture.py's fixture value
+    rng = np.random.default_rng(11)
+    # Pre-generated and comfortably more than needed to reach max_recording_sec, so the
+    # exact reads consumed (reads[:stream.reads]) can be replayed as the reference.
+    reads = [
+        rng.integers(-20000, 20000, size=frames_per_read, dtype=np.int16).tobytes()
+        for _ in range(120)
+    ]
+    stream = _FakeDeviceStream(frames_per_read, lambda i: reads[i - 1])
+    monkeypatch.setattr(
+        recording_mod, "open_input_stream", lambda config: (stream, device_rate)
+    )
+
+    gen = sd_recording_worker(cfg)
+    utterance = await anext(gen)
+    await gen.aclose()
+
+    assert utterance.stop_reason == "maxlen"
+    assert 0 < stream.reads < len(reads)  # sanity: stopped naturally, not exhausted
+
+    # (1) The real wall-clock duration of the raw device audio actually consumed.
+    # capture_sec must track this, not a value scaled by device_rate/cfg.rate
+    # (2.75625x) -- a gap far outside this tolerance, so a regression here fails
+    # loudly rather than by luck.
+    real_seconds = stream.reads * frames_per_read / device_rate
+    assert utterance.capture_sec == pytest.approx(real_seconds, abs=0.02)
+
+    # (2) Byte-level fidelity against a monolithic one-shot conversion of the same
+    # reads that were actually consumed.
+    whole_input = decode_pcm(b"".join(reads[: stream.reads]), cfg.format, cfg.channels)
+    reference = PolyphaseResampler(device_rate, cfg.rate).process(whole_input)
+    captured = decode_pcm(utterance.frames, cfg.format, cfg.channels)
+    assert len(captured) == len(reference)
+    assert np.allclose(captured, reference, atol=1e-4, rtol=0)
 
 
 async def test_overflow_logs_the_same_warning_as_before(
