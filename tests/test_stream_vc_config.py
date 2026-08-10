@@ -123,3 +123,66 @@ def test_stream_vc_rejects_out_of_range():
         StreamVcConfig(max_queued_blocks=0)  # gt=0
     with pytest.raises(ValidationError):
         StreamVcConfig(context_ms=-1)  # ge=0
+
+
+def test_stream_vc_latency_defaults_to_low():
+    """The default equals the value that used to be hardcoded, so existing configs do
+    not change behaviour (ADR-0071)."""
+    c = StreamVcConfig()
+    assert c.input_latency == "low"
+    assert c.output_latency == "low"
+
+
+def test_stream_vc_latency_accepts_high_and_explicit_seconds():
+    """PortAudio takes either of its two device defaults or an arbitrary
+    suggestedLatency in seconds; all three have to survive validation."""
+    c = StreamVcConfig.model_validate({"input_latency": "high", "output_latency": 0.02})
+    assert c.input_latency == "high"
+    assert c.output_latency == 0.02
+
+
+def test_stream_vc_latency_sides_are_independent():
+    """Input and output are different devices (different machines once the role is
+    split), so raising one must not move the other -- the reason ADR-0071 rejected a
+    single shared field."""
+    c = StreamVcConfig.model_validate({"output_latency": "high"})
+    assert c.input_latency == "low"
+    assert c.output_latency == "high"
+
+
+def test_stream_vc_latency_parses_from_toml():
+    toml_text = b"""
+[stream_vc]
+input_latency = "high"
+output_latency = 0.05
+"""
+    f = io.BytesIO(toml_text)
+    f.name = "config.toml"
+    c = Config.read_config_from_file(f)
+    assert c.stream_vc.input_latency == "high"
+    assert c.stream_vc.output_latency == 0.05
+
+
+def test_stream_vc_latency_rejects_unknown_string_and_non_positive():
+    """Bad values fail at config load, which ADR-0068 already routes into the same
+    per-problem report preflight uses -- hence no dedicated preflight check."""
+    import pytest
+    from pydantic import ValidationError
+
+    # A typo must not silently fall through to a float coercion.
+    with pytest.raises(ValidationError):
+        StreamVcConfig.model_validate({"input_latency": "lowest"})
+    with pytest.raises(ValidationError):
+        StreamVcConfig.model_validate({"output_latency": 0.0})
+    with pytest.raises(ValidationError):
+        StreamVcConfig.model_validate({"input_latency": -0.01})
+
+
+def test_stream_vc_latency_survives_export_to_toml_round_trip():
+    import toml as toml_lib
+
+    c = Config()
+    c.stream_vc.output_latency = 0.05
+    reloaded = toml_lib.loads(c.export_to_toml())
+    assert reloaded["stream_vc"]["input_latency"] == "low"
+    assert reloaded["stream_vc"]["output_latency"] == 0.05

@@ -5,6 +5,8 @@ from asyncio import Queue
 import numpy as np
 import pytest
 
+from vspeech.config import StreamVcConfig
+from vspeech.lib.audio import DeviceInfo
 from vspeech.lib.telemetry import telemetry
 from vspeech.stream_vc.capture import CaptureItem
 from vspeech.stream_vc.capture import _capture_read_loop
@@ -201,3 +203,85 @@ async def test_capture_drop_switches_side_when_pause_arrives(caplog, enabled_tel
     assert summary["stream_vc_capture_drop_paused"]["count"] == (
         total_blocks - running_drops
     )
+
+
+class _RecordingInputStream:
+    """Records the kwargs sounddevice would have been constructed with.
+
+    `latency` is a passthrough, so the assertion has to happen at the sd boundary --
+    there is nothing downstream to observe it on.
+    """
+
+    # Declared at class level so it is a known attribute (ty) rather than one that
+    # springs into existence on first construction.
+    kwargs: dict[str, object] = {}
+    # What PortAudio granted, which is not required to equal what was requested.
+    latency = 0.032
+
+    def __init__(self, **kwargs) -> None:
+        _RecordingInputStream.kwargs = kwargs
+
+    def start(self) -> None:
+        pass
+
+
+def _fake_input_device() -> DeviceInfo:
+    return DeviceInfo(
+        host_api=0,
+        max_input_channels=2,
+        max_output_channels=0,
+        name="Fake Mic",
+        index=7,
+    )
+
+
+def _patch_input_open(monkeypatch) -> None:
+    from vspeech.stream_vc import capture
+
+    monkeypatch.setattr(
+        capture, "resolve_stream_vc_input_device", lambda config: _fake_input_device()
+    )
+    monkeypatch.setattr(capture.sd, "RawInputStream", _RecordingInputStream)
+
+
+def test_open_input_stream_requests_configured_latency(monkeypatch):
+    """The configured value reaches sounddevice unconverted -- a float is seconds,
+    PortAudio's own unit (ADR-0071)."""
+    from vspeech.stream_vc import capture
+
+    _patch_input_open(monkeypatch)
+    capture.open_stream_vc_input_stream(StreamVcConfig(input_latency=0.05), hop=160)
+    assert _RecordingInputStream.kwargs["latency"] == 0.05
+
+
+def test_open_input_stream_defaults_to_low(monkeypatch):
+    """No setting = the value that used to be hardcoded."""
+    from vspeech.stream_vc import capture
+
+    _patch_input_open(monkeypatch)
+    capture.open_stream_vc_input_stream(StreamVcConfig(), hop=160)
+    assert _RecordingInputStream.kwargs["latency"] == "low"
+
+
+def test_open_input_stream_uses_input_latency_not_output(monkeypatch):
+    """The output setting must not leak into the input stream."""
+    from vspeech.stream_vc import capture
+
+    _patch_input_open(monkeypatch)
+    config = StreamVcConfig(input_latency="low", output_latency="high")
+    capture.open_stream_vc_input_stream(config, hop=160)
+    assert _RecordingInputStream.kwargs["latency"] == "low"
+
+
+def test_open_input_stream_logs_requested_and_granted_latency(caplog, monkeypatch):
+    """Reading the granted value is the point: "low" resolves to wildly different
+    numbers per host API, and it cannot be read off the requested value."""
+    from vspeech.stream_vc import capture
+
+    _patch_input_open(monkeypatch)
+    with caplog.at_level(logging.INFO):
+        capture.open_stream_vc_input_stream(StreamVcConfig(), hop=160)
+    messages = " | ".join(r.getMessage() for r in caplog.records)
+    assert "Fake Mic" in messages  # the device line still names the device
+    assert "low" in messages  # requested
+    assert "0.032" in messages  # granted

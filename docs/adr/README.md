@@ -87,3 +87,4 @@
 | [0068](0068-config-load-errors-through-preflight-report.md) | 設定ファイルの読み込み失敗も preflight と同じ per-problem レポートで出す（0038 を refine） | Accepted (refines 0038) | 2026-08-09 |
 | [0069](0069-torch-213-and-terminal-torchaudio.md) | torch を 2.13.0 へ上げ、道連れで torchaudio を終端版 2.11.0 に固定する | Accepted | 2026-08-09 |
 | [0070](0070-f0-voiced-run-median-filter.md) | f0 の中央値フィルタを有声区間単位で全抽出器に掛ける（本家 RVC の filter_radius 相当） | Accepted | 2026-08-10 |
+| [0071](0071-stream-vc-device-latency-config.md) | ストリーミング VC のデバイス latency を入出力別の設定値にする | Accepted | 2026-08-10 |

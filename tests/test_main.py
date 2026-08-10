@@ -79,6 +79,11 @@ def test_the_entry_point_requires_a_config_file():
         pytest.param("listen_prot = 8080\n", "listen_prot", id="unknown-top-level-key"),
         pytest.param('listen_port = "nope"\n', "listen_port", id="wrong-type"),
         pytest.param("listen_port =\n", "設定ファイル", id="malformed-toml"),
+        pytest.param(
+            '[stream_vc]\ninput_latency = "lowest"\n',
+            "input_latency",
+            id="stream-vc-bad-latency",
+        ),
     ],
 )
 def test_a_bad_config_file_is_reported_not_dumped_as_a_traceback(

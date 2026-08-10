@@ -43,14 +43,24 @@ def open_stream_vc_output_stream(
     config: StreamVcConfig, sample_rate: int
 ) -> sd.RawOutputStream:
     device = resolve_stream_vc_output_device(config)
-    logger.info("stream_vc output device %s: %s", device.index, device.name)
+    # Logged before the open so a failing open still says which device was attempted.
+    logger.info(
+        "stream_vc output device %s: %s (latency %s requested)",
+        device.index,
+        device.name,
+        config.output_latency,
+    )
     stream = sd.RawOutputStream(
         samplerate=sample_rate,
         channels=1,
         device=device.index,
         dtype="int16",
-        latency="low",
+        latency=config.output_latency,
     )
+    # PortAudio does not have to honour the request, and "low" resolves to a different
+    # number per host API. Report what was actually granted, before start() so a failing
+    # start still leaves the number in the log.
+    logger.info("stream_vc output stream latency: %.3fs", stream.latency)
     stream.start()
     return stream
 
