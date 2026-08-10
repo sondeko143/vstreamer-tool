@@ -38,3 +38,6 @@ tests/assets/hubert_golden/
 *.pth
 *.safetensors
 *.npz
+
+# subagent-driven-development のスクラッチ (台帳/brief/レビュー差分)
+.superpowers/
