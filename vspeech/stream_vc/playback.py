@@ -27,7 +27,7 @@ import sounddevice as sd
 from vspeech.config import StreamVcConfig
 from vspeech.exceptions import shutdown_worker
 from vspeech.exceptions import worker_startup
-from vspeech.lib.audio import resolve_device_rate
+from vspeech.lib.audio import open_device_stream
 from vspeech.lib.audio import resolve_stream_vc_output_device
 from vspeech.lib.log_throttle import LogThrottle
 from vspeech.lib.pcm import decode_pcm
@@ -140,11 +140,9 @@ class OutputSink:
 def open_stream_vc_output(config: StreamVcConfig) -> OutputSink:
     """Open the output device at its own rate and return it paired with its converter.
 
-    Rate resolution sits next to the device resolution that was already here, so an open
-    stays a single decision point and the rate has no second, cached copy to drift from
-    (the same shape as capture.py's opener). Within one process it re-decides nothing:
-    sd.query_devices() is cached at PortAudio init and nothing here re-initialises it, so
-    a reopen sees the same table and resolves the same rate.
+    The resolve -> log -> open -> verify sequence is `open_device_stream`'s (lib/audio.py),
+    shared with the three other device boundaries; only the device lookup, the stream's own
+    shape and the pairing with the converter are decided here.
 
     Both resolvers raise the DeviceNotFoundError family, which is deliberately in neither
     the callers' `(OSError, sd.PortAudioError)` handler nor retry.py's DEVICE_ERRORS: it
@@ -154,40 +152,21 @@ def open_stream_vc_output(config: StreamVcConfig) -> OutputSink:
     fail loud for the supervisor.
     """
     device = resolve_stream_vc_output_device(config)
-    rate, how = resolve_device_rate(
-        device,
-        config.output_device_rate,
+    stream, rate = open_device_stream(
+        device=device,
+        override=config.output_device_rate,
         input=False,
         config_key="stream_vc.output_device_rate",
+        opening="stream_vc output device",
+        subject="stream_vc playback",
+        open_stream=lambda rate: sd.RawOutputStream(
+            samplerate=rate,
+            channels=1,
+            device=device.index,
+            dtype="int16",
+            latency="low",
+        ),
     )
-    # Logged before the open so a failing open still says what was attempted.
-    logger.info(
-        "stream_vc output device %s: %s @%dHz (%s)",
-        device.index,
-        device.name,
-        rate,
-        how,
-    )
-    stream = sd.RawOutputStream(
-        samplerate=rate,
-        channels=1,
-        device=device.index,
-        dtype="int16",
-        latency="low",
-    )
-    stream.start()
-    # PortAudio may know the endpoint runs at a slightly different rate than the one it
-    # accepted. We keep converting at the requested rate (the L/M ratio has to be built
-    # from a sane number: 44099 -> 48000 would mean 48000 phases), so a delta shows up
-    # only as a slow drift in the audio -- invisible unless it is said out loud here.
-    reported = float(stream.samplerate)
-    if abs(reported - rate) > 0.5:
-        logger.warning(
-            "stream_vc playback device reports %.4fHz for a requested %dHz; "
-            "converting at the requested rate",
-            reported,
-            rate,
-        )
     return OutputSink(stream, rate)
 
 

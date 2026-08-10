@@ -4,10 +4,13 @@ sounddevice is stubbed: these are pure decisions over the device table, and the 
 table differs per machine.
 """
 
+import logging
+
 import pytest
 
 from vspeech.exceptions import DeviceRateUnresolvedError
 from vspeech.lib.audio import DeviceInfo
+from vspeech.lib.audio import open_device_stream
 from vspeech.lib.audio import resolve_device_rate
 
 WASAPI = 2
@@ -295,3 +298,69 @@ def test_counterpart_rate_of_zero_fails_loud() -> None:
             _device(31), None, input=False, config_key="playback.output_device_rate"
         )
     assert "playback.output_device_rate" in str(excinfo.value)
+
+
+# --- open_device_stream: the shared resolve -> log -> open -> verify sequence --------
+
+
+class _FakeStream:
+    """Stands in for sd.Raw{Input,Output}Stream: records how it was opened."""
+
+    def __init__(self, rate: int) -> None:
+        self.samplerate = float(rate)
+        self.started = False
+
+    def start(self) -> None:
+        self.started = True
+
+
+def test_the_attempted_rate_is_logged_before_the_open(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failing open must still leave a line saying which device and which rate were
+    attempted -- that line is the only clue when PortAudio rejects the open, which is
+    why it is emitted before the open rather than after it.
+    """
+
+    def _explode(rate: int) -> _FakeStream:
+        raise OSError(f"Invalid sample rate {rate}")
+
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(OSError):
+            open_device_stream(
+                device=_device(0),
+                override=None,
+                input=False,
+                config_key="playback.output_device_rate",
+                opening="use output device",
+                subject="playback",
+                open_stream=_explode,
+            )
+    lines = [r.getMessage() for r in caplog.records if "use output device" in r.message]
+    assert len(lines) == 1
+    # The WASAPI counterpart's rate, not the 44100 the MME row claims.
+    assert "48000Hz" in lines[0]
+
+
+def test_an_unresolvable_rate_raises_before_the_device_is_opened() -> None:
+    """Rate resolution comes first, so a device whose rate cannot be decided never
+    reaches the open: there is no half-opened stream left behind on that path.
+    """
+    opened: list[int] = []
+
+    def _open(rate: int) -> _FakeStream:
+        opened.append(rate)
+        return _FakeStream(rate)
+
+    with pytest.raises(DeviceRateUnresolvedError):
+        open_device_stream(
+            # "Microsoft サウンド マッパー": no WASAPI counterpart to borrow a rate from.
+            device=_device(2),
+            override=None,
+            input=True,
+            config_key="recording.input_device_rate",
+            opening="use input device",
+            subject="recording",
+            open_stream=_open,
+        )
+    assert opened == []

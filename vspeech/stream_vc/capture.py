@@ -19,7 +19,7 @@ import sounddevice as sd
 from numpy.typing import NDArray
 
 from vspeech.config import StreamVcConfig
-from vspeech.lib.audio import resolve_device_rate
+from vspeech.lib.audio import open_device_stream
 from vspeech.lib.audio import resolve_stream_vc_input_device
 from vspeech.lib.log_throttle import LogThrottle
 from vspeech.lib.resample import PolyphaseResampler
@@ -125,12 +125,9 @@ def open_stream_vc_input_stream(
 ) -> tuple[sd.RawInputStream, int]:
     """Open the mic at its native rate; return the stream and that rate.
 
-    Rate resolution sits next to the device resolution that was already here, so an open
-    stays a single decision point and the rate has no second, cached copy to drift from.
-    It does not re-decide anything within one process: sd.query_devices() is cached at
-    PortAudio init and nothing here re-initialises it (see the deferred note in
-    worker/playback.py's search_appropriate_device), so a reopen sees the same table and
-    resolves the same rate.
+    The resolve -> log -> open -> verify sequence is `open_device_stream`'s (lib/audio.py),
+    shared with the three other device boundaries; only the device lookup and the stream's
+    own shape are decided here.
 
     The caller needs the rate back to build the converter, and run_with_device_retry
     hands whatever `open_stream` returns straight to `close_quietly()`, so the pair is
@@ -146,44 +143,23 @@ def open_stream_vc_input_stream(
     today for the reason above; this is a statement of intent, not a live path.)
     """
     device = resolve_stream_vc_input_device(config)
-    rate, how = resolve_device_rate(
-        device,
-        config.input_device_rate,
+    return open_device_stream(
+        device=device,
+        override=config.input_device_rate,
         input=True,
         config_key="stream_vc.input_device_rate",
+        opening="stream_vc input device",
+        subject="stream_vc capture",
+        pipeline_rate=CAPTURE_RATE,
+        open_stream=lambda rate: sd.RawInputStream(
+            samplerate=rate,
+            blocksize=device_frames_per_read(hop, rate),
+            device=device.index,
+            channels=1,
+            dtype="int16",
+            latency="low",
+        ),
     )
-    # Logged before the open so a failing open still says what was attempted.
-    logger.info(
-        "stream_vc input device %s: %s @%dHz (%s) -> %dHz (%s)",
-        device.index,
-        device.name,
-        rate,
-        how,
-        CAPTURE_RATE,
-        "プロセス内で変換" if rate != CAPTURE_RATE else "変換なし",
-    )
-    stream = sd.RawInputStream(
-        samplerate=rate,
-        blocksize=device_frames_per_read(hop, rate),
-        device=device.index,
-        channels=1,
-        dtype="int16",
-        latency="low",
-    )
-    stream.start()
-    # PortAudio may know the endpoint runs at a slightly different rate than the one it
-    # accepted. We keep converting at the requested rate (the L/M ratio has to be built
-    # from a sane number: 44099 -> 16000 would mean 16000 phases), so a delta shows up
-    # only as a slow drift in the audio -- invisible unless it is said out loud here.
-    reported = float(stream.samplerate)
-    if abs(reported - rate) > 0.5:
-        logger.warning(
-            "stream_vc capture device reports %.4fHz for a requested %dHz; "
-            "converting at the requested rate",
-            reported,
-            rate,
-        )
-    return stream, rate
 
 
 def _put_block(

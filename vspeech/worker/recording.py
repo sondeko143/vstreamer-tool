@@ -22,7 +22,7 @@ from vspeech.config import get_sample_size
 from vspeech.exceptions import shutdown_worker
 from vspeech.exceptions import worker_startup
 from vspeech.lib.audio import get_sd_dtype
-from vspeech.lib.audio import resolve_device_rate
+from vspeech.lib.audio import open_device_stream
 from vspeech.lib.audio import resolve_input_device
 from vspeech.lib.pcm import decode_pcm
 from vspeech.lib.pcm import encode_pcm
@@ -49,50 +49,30 @@ def device_frames_per_read(chunk: int, device_rate: int, config_rate: int) -> in
 def open_input_stream(config: RecordingConfig) -> tuple[sd.RawInputStream, int]:
     """Open the mic at its native rate; return the stream and that rate.
 
-    Rate resolution sits next to the device resolution that was already here, so an
-    open stays a single decision point (the same shape as stream_vc/capture.py's
-    opener). Asking the device for `config.rate` directly would hand the conversion
-    to the OS, whose filter we can neither test nor log, and WASAPI shared mode
-    refuses any rate but its mix format (ADR-0070/0071).
+    The resolve -> log -> open -> verify sequence is `open_device_stream`'s
+    (lib/audio.py), shared with the three other device boundaries; only the device
+    lookup and the stream's own shape are decided here. Asking the device for
+    `config.rate` directly would hand the conversion to the OS, whose filter we can
+    neither test nor log, and WASAPI shared mode refuses any rate but its mix format
+    (ADR-0070/0071).
     """
     device = resolve_input_device(config)
-    rate, how = resolve_device_rate(
-        device,
-        config.input_device_rate,
+    return open_device_stream(
+        device=device,
+        override=config.input_device_rate,
         input=True,
         config_key="recording.input_device_rate",
+        opening="use input device",
+        subject="recording",
+        pipeline_rate=config.rate,
+        open_stream=lambda rate: sd.RawInputStream(
+            samplerate=rate,
+            blocksize=device_frames_per_read(config.chunk, rate, config.rate),
+            device=device.index,
+            channels=config.channels,
+            dtype=get_sd_dtype(config.format),
+        ),
     )
-    # Logged before the open so a failing open still says what was attempted.
-    logger.info(
-        "use input device %s: %s @%dHz (%s) -> %dHz (%s)",
-        device.index,
-        device.name,
-        rate,
-        how,
-        config.rate,
-        "プロセス内で変換" if rate != config.rate else "変換なし",
-    )
-    stream = sd.RawInputStream(
-        samplerate=rate,
-        blocksize=device_frames_per_read(config.chunk, rate, config.rate),
-        device=device.index,
-        channels=config.channels,
-        dtype=get_sd_dtype(config.format),
-    )
-    stream.start()
-    # PortAudio may know the endpoint runs at a slightly different rate than the one
-    # it accepted. We keep converting at the requested rate (the L/M ratio has to be
-    # built from a sane number: 44099 -> 16000 would mean 16000 phases), so a delta
-    # shows up only as a slow drift in the audio -- invisible unless said out loud.
-    reported = float(stream.samplerate)
-    if abs(reported - rate) > 0.5:
-        logger.warning(
-            "recording device reports %.4fHz for a requested %dHz; "
-            "converting at the requested rate",
-            reported,
-            rate,
-        )
-    return stream, rate
 
 
 def convert_chunk(

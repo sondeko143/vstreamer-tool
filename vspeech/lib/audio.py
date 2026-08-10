@@ -1,3 +1,6 @@
+from collections.abc import Callable
+from typing import Protocol
+
 import sounddevice as sd
 from pydantic import AliasChoices
 from pydantic import BaseModel
@@ -10,6 +13,7 @@ from vspeech.config import SampleFormat
 from vspeech.config import StreamVcConfig
 from vspeech.exceptions import DeviceNotFoundError
 from vspeech.exceptions import DeviceRateUnresolvedError
+from vspeech.logger import logger
 
 
 class HostAPIInfo(BaseModel):
@@ -276,6 +280,95 @@ def resolve_device_rate(
         f"{detail}。Windows のサウンド設定で「既定の形式」を確認し "
         f"{config_key} に明示してください"
     )
+
+
+class ReportsSampleRate(Protocol):
+    """The little `open_device_stream` needs back from a freshly built stream.
+
+    Both `sd.RawInputStream` and `sd.RawOutputStream` satisfy it, which is what lets one
+    helper serve the input and the output boundaries without knowing which it is holding.
+    """
+
+    def start(self) -> None: ...
+
+    @property
+    def samplerate(self) -> float: ...
+
+
+def open_device_stream[StreamT: ReportsSampleRate](
+    *,
+    device: DeviceInfo,
+    override: int | None,
+    input: bool,
+    config_key: str,
+    opening: str,
+    subject: str,
+    open_stream: Callable[[int], StreamT],
+    pipeline_rate: int | None = None,
+) -> tuple[StreamT, int]:
+    """Open `device` at its own native rate; return the stream and that rate.
+
+    All four device boundaries (streaming VC in/out, utterance recording/playback) open a
+    device the same way, and the *order* of the steps is what makes the open honest, so it
+    lives here once instead of four times:
+
+    1. resolve the rate right next to the device that was just resolved, so an open stays
+       a single decision point and the rate has no second, cached copy to drift from. It
+       re-decides nothing within one process: sd.query_devices() is cached at PortAudio
+       init and nothing here re-initialises it (see the deferred note in
+       worker/playback.py's search_appropriate_device), so a reopen resolves the same rate;
+    2. log what is about to be attempted *before* the open, so a failing open still says
+       which device, which rate, and how that rate was decided;
+    3. build the stream -- the caller's own call, because blocksize / channels / dtype /
+       latency differ per boundary -- and start it;
+    4. say out loud when PortAudio reports a rate other than the one it was asked for.
+
+    Callers keep converting at the **requested** rate, never at the reported one: the
+    polyphase ratio has to be built from a sane number (44099 -> 16000 would mean 16000
+    phases), so a hardware rate that differs by a hair is only a slow drift in the audio --
+    invisible unless step 4 says so.
+
+    `opening` leads the info line ("use input device"), `subject` names the boundary in the
+    warning ("recording"). They are two arguments rather than one because the two sentences
+    were worded per boundary before this helper existed, and their wording is what an
+    operator greps a log for. `pipeline_rate` is the fixed rate the boundary converts to,
+    and is appended to the info line together with whether that means a conversion; the
+    playback boundaries pass None because their other side arrives with the audio.
+
+    DeviceRateUnresolvedError from step 1 escapes unhandled: it is a config problem no
+    retry can fix (ADR-0071), and every caller deliberately keeps it out of its device
+    -fault retry path.
+    """
+    rate, how = resolve_device_rate(
+        device, override, input=input, config_key=config_key
+    )
+    if pipeline_rate is None:
+        logger.info(
+            "%s %s: %s @%dHz (%s)", opening, device.index, device.name, rate, how
+        )
+    else:
+        logger.info(
+            "%s %s: %s @%dHz (%s) -> %dHz (%s)",
+            opening,
+            device.index,
+            device.name,
+            rate,
+            how,
+            pipeline_rate,
+            "プロセス内で変換" if rate != pipeline_rate else "変換なし",
+        )
+    stream = open_stream(rate)
+    stream.start()
+    reported = float(stream.samplerate)
+    if abs(reported - rate) > 0.5:
+        logger.warning(
+            "%s device reports %.4fHz for a requested %dHz; "
+            "converting at the requested rate",
+            subject,
+            reported,
+            rate,
+        )
+    return stream, rate
 
 
 def get_sd_dtype(format: SampleFormat) -> str:
