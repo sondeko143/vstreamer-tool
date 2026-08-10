@@ -49,6 +49,10 @@ class PolyphaseResampler:
     ) -> None:
         if src_rate <= 0 or dst_rate <= 0:
             raise ValueError(f"rates must be positive: {src_rate} -> {dst_rate}")
+        if not 0.0 < transition_width < 1.0:
+            raise ValueError(f"transition_width must be in (0, 1): {transition_width}")
+        if stopband_db <= 0.0:
+            raise ValueError(f"stopband_db must be positive: {stopband_db}")
         self.src_rate = int(src_rate)
         self.dst_rate = int(dst_rate)
         divisor = gcd(self.src_rate, self.dst_rate)
@@ -90,8 +94,6 @@ class PolyphaseResampler:
             padded.reshape(self.taps_per_phase, self.up).T[:, ::-1].astype(np.float32)
         )
         self._tail: NDArray[np.float32] = np.zeros(0, dtype=np.float32)
-        self._fed = 0
-        self._emitted = 0
         self.reset()
 
     def reset(self) -> None:
@@ -116,10 +118,16 @@ class PolyphaseResampler:
         x = np.ascontiguousarray(x, dtype=np.float32)
         if x.shape[0] == 0:
             return np.zeros_like(x, shape=(0, *x.shape[1:]))
-        if self._tail.ndim != x.ndim:
-            # First block decides the channel layout.
-            self._tail = np.zeros(
-                (self.taps_per_phase - 1, *x.shape[1:]), dtype=np.float32
+        if self._fed == 0:
+            # The first block since init/reset decides the channel layout.
+            if self._tail.ndim != x.ndim:
+                self._tail = np.zeros(
+                    (self.taps_per_phase - 1, *x.shape[1:]), dtype=np.float32
+                )
+        elif self._tail.shape[1:] != x.shape[1:]:
+            raise ValueError(
+                "channel layout changed mid-stream: "
+                f"{self._tail.shape[1:]} -> {x.shape[1:]}"
             )
         full = np.concatenate([self._tail, x])
         total = self._fed + x.shape[0]
@@ -145,7 +153,7 @@ class PolyphaseResampler:
                     start = (k * self.down) // self.up - self._fed
                     count = (n_out - offset + self.up - 1) // self.up
                     rows = window[start :: self.down][:count]
-                    out[offset :: self.up][: len(rows)] = rows @ self._phases[phase]
+                    out[offset :: self.up] = rows @ self._phases[phase]
         self._emitted = end
         self._fed = total
         keep = self.taps_per_phase - 1
@@ -156,7 +164,9 @@ class PolyphaseResampler:
         """Resample one self-contained buffer: flush the tail, remove the group delay.
 
         Streaming `process` would leave the last `delay_samples` worth of audio inside
-        the filter, so an utterance played through it would lose its tail.
+        the filter, so an utterance played through it would lose its tail. Returns
+        `round(n * dst_rate / src_rate)` samples, matching Python's own `round` (not
+        `ceil` -- the flush is sized to cover the larger of the two anyway).
         """
         self.reset()
         flush = np.zeros(
@@ -164,7 +174,7 @@ class PolyphaseResampler:
         )
         out = np.concatenate([self.process(x), self.process(flush)])
         self.reset()
-        want = -((-self.up * x.shape[0]) // self.down)
+        want = round(x.shape[0] * self.dst_rate / self.src_rate)
         return out[self.delay_samples : self.delay_samples + want]
 
 
