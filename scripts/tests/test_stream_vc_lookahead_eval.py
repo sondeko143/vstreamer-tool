@@ -4,7 +4,9 @@ import numpy as np
 
 from scripts.stream_vc_lookahead_eval import align_offset
 from scripts.stream_vc_lookahead_eval import frame_energy
+from scripts.stream_vc_lookahead_eval import right_context_ms
 from scripts.stream_vc_lookahead_eval import spectral_distance
+from scripts.stream_vc_lookahead_eval import warmup_skip_samples
 from scripts.stream_vc_lookahead_eval import write_wav
 
 
@@ -100,3 +102,54 @@ def test_write_wav_round_trips_samples(tmp_path):
         frames = w.readframes(w.getnframes())
     got = np.frombuffer(frames, dtype=np.int16)
     np.testing.assert_array_equal(got, samples)
+
+
+def test_warmup_skip_samples_matches_the_context_plus_block_span():
+    # 500 + 0 + 160 = 660ms at 16kHz = 10560 samples exactly, no rounding involved.
+    assert (
+        warmup_skip_samples(
+            context_ms=500.0, lookahead_ms=0.0, block_ms=160.0, rate=16000
+        )
+        == 10560
+    )
+
+
+def test_warmup_skip_samples_grows_with_the_lookahead():
+    """The context buffer `run_streaming` builds is context_ms + lookahead_ms long
+    (ADR-0070), so the warm-up span to skip must grow by exactly the lookahead -- a
+    fixed skip would leave partially-cold output in the comparison for every
+    lookahead_ms > 0 (this was Finding 2 of the review)."""
+    base = warmup_skip_samples(
+        context_ms=500.0, lookahead_ms=0.0, block_ms=160.0, rate=16000
+    )
+    with_lookahead = warmup_skip_samples(
+        context_ms=500.0, lookahead_ms=160.0, block_ms=160.0, rate=16000
+    )
+    assert with_lookahead - base == round(160.0 / 1000.0 * 16000)  # 2560 samples
+
+
+def test_right_context_ms_subtracts_the_hubert_truncation():
+    # rate=1000 makes delay_samples and delay_ms the same number, so the input can be
+    # written directly in ms with nothing to round.
+    assert right_context_ms(delay_samples=1000, rate=1000) == 1000.0 - 20.0
+
+
+def test_right_context_ms_reproduces_the_validated_default_geometry():
+    """At the validated default geometry (crossfade_ms=25, sola_search_ms=5), the
+    analytic relationship traced from `_emit_delay` / `_emit_with_crossfade`
+    (vspeech/lib/stream_vc.py) gives
+    delay_ms == _HUBERT_TRUNCATION_MS(20) + crossfade_ms(25) + sola_search_ms(5) +
+    lookahead_ms, so the old hardcoded `30.0 + lookahead_ms` was correct only for this
+    one geometry (this was Finding 1 of the review: crossfade_ms/sola_search_ms are
+    user-settable, ge=0, so a different config made it silently wrong).
+
+    This pins the arithmetic `right_context_ms` implements against that traced
+    relationship, with delay_ms constructed by hand rather than by calling
+    `right_context_ms` again. It does not run the real StreamingVc -- that needs a live
+    model and GPU, which are out of reach here.
+    """
+    rate = 1000  # samples == ms at this rate, so delay_ms needs no rounding
+    delay_ms_at_lookahead_0 = 20.0 + 25.0 + 5.0 + 0.0
+    delay_ms_at_lookahead_160 = 20.0 + 25.0 + 5.0 + 160.0
+    assert right_context_ms(int(delay_ms_at_lookahead_0), rate) == 30.0
+    assert right_context_ms(int(delay_ms_at_lookahead_160), rate) == 190.0

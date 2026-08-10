@@ -25,6 +25,13 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+# HuBERT's receptive field truncates about 320 input samples off the render's tail at
+# 16kHz (see the `_emit_with_crossfade` / `_emit_no_crossfade` docstrings in
+# vspeech/lib/stream_vc.py) -- that much of the raw emit delay is render truncation,
+# not real right-context, so it has to be subtracted back out when turning the measured
+# delay into a right-context figure.
+_HUBERT_TRUNCATION_MS = 20.0
+
 
 def frame_energy(x: NDArray[np.float32], hop: int) -> NDArray[np.float64]:
     """Per-hop RMS, used for the coarse alignment search."""
@@ -124,6 +131,38 @@ def write_wav(path: Path, samples: NDArray[np.int16], rate: int) -> None:
         w.setsampwidth(2)
         w.setframerate(rate)
         w.writeframes(samples.tobytes())
+
+
+def warmup_skip_samples(
+    context_ms: float, lookahead_ms: float, block_ms: float, rate: int
+) -> int:
+    """How many samples of the run's start to drop before comparing it to the batch
+    reference.
+
+    `run_streaming` builds `StreamingVc` with a `context_ms + lookahead_ms` long context
+    buffer (ADR-0070), and that buffer starts as zeros -- it only holds real audio once
+    that much real time has rolled through it. The batch reference has no such warm-up,
+    so both must have this span dropped before comparing them. The span therefore grows
+    with the lookahead: skipping a fixed amount leaves partially-cold output in the tail
+    of every run with `lookahead_ms > 0`, and being an extreme-value statistic,
+    `logmel_p95` is exactly what that would distort.
+    """
+    return round((context_ms + lookahead_ms + block_ms) / 1000.0 * rate)
+
+
+def right_context_ms(delay_samples: int, rate: int) -> float:
+    """Convert a measured emit delay into the right-context this run actually bought.
+
+    `delay_samples` (`StreamingVc.emit_delay_samples`) is the analytic emit delay, which
+    mixes real right-context with a fixed HuBERT render-truncation cost
+    (`_HUBERT_TRUNCATION_MS`, ~320 input samples at 16kHz -- see the `_emit_delay` /
+    `_emit_with_crossfade` docstrings in vspeech/lib/stream_vc.py). Subtracting the
+    truncation back out is what makes this a genuine per-run measurement rather than an
+    assumption baked in from the geometry: `crossfade_ms` and `sola_search_ms` are both
+    user-settable (`ge=0`), so a config with non-default values would otherwise make the
+    printed right(ms) column silently wrong.
+    """
+    return delay_samples * 1000.0 / rate - _HUBERT_TRUNCATION_MS
 
 
 def load_config_and_runtime(config_path: Path) -> tuple[Any, dict[str, Any]]:
@@ -275,15 +314,15 @@ def main() -> None:
     write_wav(args.out_dir / "batch_reference.wav", ref, rate)
     ref_f = ref.astype(np.float32)
 
-    # The first blocks are rendered against a zeros context, and the batch reference has
-    # no such warm-up, so drop that span from both before comparing.
-    skip = round((sv_config.context_ms + sv_config.block_ms) / 1000.0 * rate)
     rows: list[dict[str, Any]] = []
     for lookahead_ms in parse_grid(args.lookahead):
         stream, durations, delay = run_streaming(
             rt, sv_config, signal, lookahead_ms, args.seed
         )
         write_wav(args.out_dir / f"lookahead_{lookahead_ms:.0f}ms.wav", stream, rate)
+        skip = warmup_skip_samples(
+            sv_config.context_ms, lookahead_ms, sv_config.block_ms, rate
+        )
         ref_t = ref_f[skip:]
         stream_t = stream.astype(np.float32)[skip:]
         offset = align_offset(ref_t, stream_t, hint=delay)
@@ -297,7 +336,7 @@ def main() -> None:
         rows.append(
             {
                 "lookahead_ms": lookahead_ms,
-                "right_ms": 30.0 + lookahead_ms,
+                "right_ms": right_context_ms(delay, rate),
                 "added_ms": lookahead_ms,
                 "window_ms": sv_config.context_ms + lookahead_ms + sv_config.block_ms,
                 "rtf_p50": float(np.percentile(durations, 50)) / block_seconds,
