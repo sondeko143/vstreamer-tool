@@ -255,7 +255,7 @@ async def sd_recording_worker(
             # fault, aclose() at the yield, a stream never read from); queued behind the
             # read when a cancellation arrived mid-read, which is the one case that used
             # to crash.
-            device_thread.close(stream)
+            device_thread.close(stream.close)
 
 
 def build_recording_output(

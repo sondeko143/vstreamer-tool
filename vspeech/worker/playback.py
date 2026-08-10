@@ -2,7 +2,6 @@ from asyncio import CancelledError
 from asyncio import Queue
 from asyncio import Task
 from asyncio import TaskGroup
-from asyncio import to_thread
 from dataclasses import InitVar
 from dataclasses import dataclass
 from dataclasses import field
@@ -20,6 +19,7 @@ from vspeech.exceptions import DeviceRateUnresolvedError
 from vspeech.exceptions import shutdown_worker
 from vspeech.exceptions import worker_startup
 from vspeech.lib.audio import DeviceInfo
+from vspeech.lib.audio import DeviceStreamThread
 from vspeech.lib.audio import get_device_info
 from vspeech.lib.audio import get_sd_dtype
 from vspeech.lib.audio import open_device_stream
@@ -104,6 +104,9 @@ class OutputStream:
     format: SampleFormat = SampleFormat.INVALID
     channels: int = 0
     stream: sd.RawOutputStream | None = None
+    # The one thread every native call on `stream` is made from, replaced with it on each
+    # (re)open and retired by `close_stream` (ADR-0077). None exactly while `stream` is.
+    device_thread: DeviceStreamThread | None = None
     device: DeviceInfo = field(init=False)
     rate_override: int | None = field(init=False)
     resamplers: dict[int, PolyphaseResampler | None] = field(
@@ -139,11 +142,9 @@ class OutputStream:
             logger.debug("stream is reused.")
             return
 
-        if self.stream:
-            self.stream.close()
-            # Cleared before the open below gets a chance to fail: leaving a closed
-            # stream in place would let playback() write to it.
-            self.stream = None
+        # Cleared before the open below gets a chance to fail: leaving a closed stream in
+        # place would let playback() write to it.
+        self.close_stream()
         self.device = self.search_appropriate_device()
         self.format = format
         self.channels = channels
@@ -164,6 +165,28 @@ class OutputStream:
                 dtype=get_sd_dtype(format),
             ),
         )
+        self.device_thread = DeviceStreamThread("playback_dev")
+
+    def close_stream(self) -> None:
+        """Close the device if one is open, never while a write is still inside it.
+
+        Pa_WriteStream blocks, so `playback()` runs it on `device_thread`; Pa_CloseStream
+        frees the stream, and closing it under a write in flight is a use-after-free that
+        Windows turns into an access violation (ADR-0077). Routing the close through the
+        same thread makes it wait for that write instead. A close between utterances --
+        which is what a reopen is -- has nothing in flight and still happens right here.
+        """
+        stream, thread = self.stream, self.device_thread
+        # Cleared first: a caller that reopens must not be able to find a closed stream on
+        # the object, and neither must playback().
+        self.stream = None
+        self.device_thread = None
+        if stream is None:
+            return
+        if thread is None:
+            stream.close()
+        else:
+            thread.close(stream.close)
 
     def resampler_for(self, rate: int) -> PolyphaseResampler | None:
         """The resampler from `rate` to the device rate, or None when they match.
@@ -237,13 +260,14 @@ class OutputStream:
         return output_device
 
     async def playback(self, volume: int, sound: SoundInput):
-        stream = self.stream
-        if stream is None:
+        stream, thread = self.stream, self.device_thread
+        if stream is None or thread is None:
             return
         # Volume, conversion and the blocking write all go to the same worker thread.
         # Resampling a whole utterance is real CPU work, and doing it on the event loop
-        # would stall every other worker for its duration.
-        await to_thread(self._write, stream, volume, sound)
+        # would stall every other worker for its duration. That thread is this stream's
+        # own, so the close in close_stream() can never overlap the write (ADR-0077).
+        await thread.call(self._write, stream, volume, sound)
 
     def _write(
         self, stream: sd.RawOutputStream, volume: int, sound: SoundInput
@@ -307,17 +331,9 @@ async def sd_playback_worker(
             except Exception as e:
                 logger.warning("%s", e)
     finally:
-        # [Open, deferred 2026-08-11] Same use-after-free ADR-0077 fixed for the utterance
-        # recorder: playback() writes through `to_thread`, and a cancellation delivered
-        # mid-write returns from the await while the thread is still inside PortAudio, so
-        # this line frees the stream under the writer -- an access violation (0xC0000005)
-        # that kills the process, intermittently. The reopen inside
-        # update_stream_if_changed is safe as it stands (it runs between utterances, with
-        # no write in flight). The fix is to route the write and this close through one
-        # lib/audio.DeviceStreamThread; deferred with the stream_vc pair (retry.py)
-        # because neither could be verified on real hardware in the session that found it.
-        if output_stream.stream:
-            output_stream.stream.close()
+        # Queued behind a write still inside the device when a cancellation arrived
+        # mid-utterance; immediate otherwise (ADR-0077).
+        output_stream.close_stream()
 
 
 async def playback_worker(

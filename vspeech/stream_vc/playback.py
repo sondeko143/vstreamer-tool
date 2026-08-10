@@ -20,13 +20,13 @@ the two roles cannot drift apart.
 
 from asyncio import CancelledError
 from asyncio import sleep
-from asyncio import to_thread
 
 import sounddevice as sd
 
 from vspeech.config import StreamVcConfig
 from vspeech.exceptions import shutdown_worker
 from vspeech.exceptions import worker_startup
+from vspeech.lib.audio import DeviceStreamThread
 from vspeech.lib.audio import open_device_stream
 from vspeech.lib.audio import resolve_stream_vc_output_device
 from vspeech.lib.log_throttle import LogThrottle
@@ -71,11 +71,22 @@ class OutputSink:
         self.device_rate = device_rate
         self._src_rate: int | None = None
         self._resampler: PolyphaseResampler | None = None
+        # Every native call on this stream is made from this one thread (ADR-0077):
+        # Pa_WriteStream blocks, so it has to leave the event loop, and Pa_CloseStream
+        # frees the stream -- closing while a write is still inside it frees it under the
+        # writer, which Windows reports as an access violation that kills the process.
+        # Both callers of this sink close it on every reconnect, not only at teardown.
+        self._device = DeviceStreamThread("stream_vc_out")
 
     def close(self) -> None:
-        """Close the device. Kept `_Closable`-shaped so `close_quietly` takes the sink
-        itself and the stream never has to be unwrapped at a call site."""
-        self.stream.close()
+        """Close the device, never while a write is still inside it.
+
+        Kept `_Closable`-shaped so `close_quietly` takes the sink itself and the stream
+        never has to be unwrapped at a call site. A close asked for mid-write is queued
+        behind that write on the owning thread; with nothing in flight it happens right
+        here, so `close_quietly` still sees (and swallows) a device error from it.
+        """
+        self._device.close(self.stream.close)
 
     def reset(self) -> None:
         """Drop the filter tail **without touching the device**.
@@ -130,11 +141,22 @@ class OutputSink:
     def write(self, pcm: bytes, src_rate: int) -> bool:
         """Convert one packet and write it. Returns paOutputUnderflowed.
 
-        Called through `to_thread`, so the conversion runs off the event loop alongside
-        the blocking write it belongs to. No lock guards the filter state: the loops await
-        this call, so nothing else touches the sink while a write is in flight.
+        Runs on the sink's own device thread (see `play`), so the conversion happens off
+        the event loop alongside the blocking write it belongs to. No lock guards the
+        filter state: the loops await one `play` at a time, so nothing else touches the
+        sink while a write is in flight.
         """
         return self.stream.write(self.convert(pcm, src_rate))
+
+    async def play(self, pcm: bytes, src_rate: int) -> bool:
+        """`write` on the owning thread, awaited. Returns paOutputUnderflowed.
+
+        The one entry point the real-time loops use, so that a close can never overlap a
+        write. It costs exactly what `to_thread` did (one executor submit plus one
+        wakeup); this thread is private to the sink, and the loops already awaited each
+        write before starting the next, so nothing new is serialised.
+        """
+        return await self._device.call(self.write, pcm, src_rate)
 
 
 def open_stream_vc_output(config: StreamVcConfig) -> OutputSink:
@@ -250,9 +272,7 @@ async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
                 # write()'s return value = paOutputUnderflowed (symmetric with read()'s
                 # overflowed in capture.py). Discarding it would let a "silent hole" slip
                 # out -- exactly what this module claims to prevent, so always look at it.
-                underflowed = await to_thread(
-                    sink.write, packet.pcm, packet.sample_rate
-                )
+                underflowed = await sink.play(packet.pcm, packet.sample_rate)
                 if underflowed:
                     telemetry.record("stream_vc_playback_underflow", 1.0)
                     if (n := underflow_throttle.hit()) is not None:

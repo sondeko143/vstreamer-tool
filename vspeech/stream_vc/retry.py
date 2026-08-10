@@ -58,6 +58,13 @@ def close_quietly(stream: _Closable) -> None:
     There is a path that double-closes an already broken/closed device
     (fault -> close -> close again in finally), so DEVICE_ERRORS from close itself are
     logged and ignored.
+
+    What it is handed is never a bare PortAudio stream but the object that owns one
+    (capture's InputTap, playback's OutputSink), whose `close()` runs on that stream's own
+    thread when a call is still inside the device -- otherwise this close could land while
+    a read/write is in PortAudio and free the stream under it (ADR-0077). This function
+    still sees the error of a close that happened inline; a deferred one is logged on that
+    thread instead, because there is no longer anybody here to catch it.
     """
     try:
         stream.close()
@@ -132,16 +139,4 @@ async def run_with_device_retry[T: _Closable](
     except CancelledError as e:
         raise shutdown_worker(e)
     finally:
-        # [Open, deferred 2026-08-11] This close can overlap a call still inside
-        # PortAudio -- the same use-after-free ADR-0077 fixed for the utterance recorder.
-        # Both users of this helper do their blocking call through `to_thread`
-        # (capture.py's stream.read, playback.py's sink.write); a cancellation delivered
-        # while one is in flight returns from the await immediately but leaves the thread
-        # in PortAudio, and this line then frees the stream under it -- an access
-        # violation (0xC0000005) that kills the process, intermittently. The device-fault
-        # path above is safe as it stands: the call ended by raising, so nothing is in
-        # flight. Not fixed together with the recorder because the fix routes the calls
-        # and this close through one lib/audio.DeviceStreamThread owned here, changing
-        # `run`'s signature and both call sites, and none of that could be verified on
-        # real streaming-VC hardware in the session that found the bug.
         close_quietly(stream)

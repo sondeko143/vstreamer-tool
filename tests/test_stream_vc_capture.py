@@ -14,6 +14,7 @@ from vspeech.stream_vc.capture import CAPTURE_RATE
 from vspeech.stream_vc.capture import CaptureItem
 from vspeech.stream_vc.capture import CaptureSignal
 from vspeech.stream_vc.capture import InputRateConverter
+from vspeech.stream_vc.capture import InputTap
 from vspeech.stream_vc.capture import _capture_read_loop
 from vspeech.stream_vc.capture import capture_loop
 from vspeech.stream_vc.capture import device_frames_per_read
@@ -84,6 +85,16 @@ class _PausingStream(_FakeStream):
         return super().read(frames)
 
 
+def _tap(stream: Any, device_rate: int = CAPTURE_RATE) -> InputTap:
+    """Wrap a fake stream in the real InputTap the read loop now takes.
+
+    Deliberately the real class, not another fake: it carries the device rate the loop
+    filters with and owns the thread every read is made from (ADR-0077), so going through
+    it is what keeps these tests exercising the path the pipeline uses.
+    """
+    return InputTap(stream, device_rate)
+
+
 @pytest.fixture
 def enabled_telemetry():
     telemetry.reset()
@@ -112,11 +123,11 @@ async def test_capture_drop_while_paused_does_not_warn(caplog, enabled_telemetry
     with caplog.at_level(logging.WARNING):
         with pytest.raises(OSError):
             await _capture_read_loop(
-                _FakeStream(5),  # ty: ignore[invalid-argument-type]
+                # device already at the pipeline rate = pass-through
+                _tap(_FakeStream(5)),
                 hop,
                 _full_queue(hop),
                 running,
-                CAPTURE_RATE,  # device already at the pipeline rate = pass-through
             )
     assert not [r for r in caplog.records if "capture queue full" in r.getMessage()]
     # Rather than discarding silently, keep them observable under a pause-specific stage.
@@ -138,11 +149,10 @@ async def test_capture_drop_while_running_warns_once_per_episode(
     with caplog.at_level(logging.WARNING):
         with pytest.raises(OSError):
             await _capture_read_loop(
-                _FakeStream(n),  # ty: ignore[invalid-argument-type]
+                _tap(_FakeStream(n)),
                 hop,
                 _full_queue(hop),
                 running,
-                CAPTURE_RATE,
             )
     warnings = [r for r in caplog.records if "capture queue full" in r.getMessage()]
     assert len(warnings) == 1  # a tight loop = all within min_interval_s
@@ -169,11 +179,10 @@ async def test_capture_overflow_warns_once_per_episode_and_is_metered(
     with caplog.at_level(logging.WARNING):
         with pytest.raises(OSError):
             await _capture_read_loop(
-                _FakeStream(n, overflowed=True),  # ty: ignore[invalid-argument-type]
+                _tap(_FakeStream(n, overflowed=True)),
                 hop,
                 Queue(),
                 running,
-                CAPTURE_RATE,
             )
     warnings = [r for r in caplog.records if "input overflow" in r.getMessage()]
     assert len(warnings) == 1  # a tight loop = all within min_interval_s
@@ -202,11 +211,10 @@ async def test_capture_drop_switches_side_when_pause_arrives(caplog, enabled_tel
     with caplog.at_level(logging.WARNING):
         with pytest.raises(OSError):
             await _capture_read_loop(
-                stream,  # ty: ignore[invalid-argument-type]
+                _tap(stream),
                 hop,
                 _full_queue(hop),
                 running,
-                CAPTURE_RATE,
             )
     warnings = [r for r in caplog.records if "capture queue full" in r.getMessage()]
     assert len(warnings) == 1  # only the head of the episode on the running side
@@ -303,11 +311,9 @@ def test_input_device_is_opened_at_the_resolved_native_rate(
     """
     hop = ms_to_samples(160.0)
     with caplog.at_level(logging.INFO):
-        stream, rate = open_stream_vc_input_stream(
-            StreamVcConfig(input_device_index=0), hop
-        )
-    assert rate == 48000
-    assert stream is opened_streams[0]
+        tap = open_stream_vc_input_stream(StreamVcConfig(input_device_index=0), hop)
+    assert tap.device_rate == 48000
+    assert tap.stream is opened_streams[0]
     assert opened_streams[0].kwargs["samplerate"] == 48000
     assert opened_streams[0].kwargs["blocksize"] == 7680  # 160 ms at 48000
     assert opened_streams[0].started
@@ -324,10 +330,10 @@ def test_configured_input_device_rate_wins_over_the_resolved_one(
 ) -> None:
     hop = ms_to_samples(160.0)
     with caplog.at_level(logging.INFO):
-        _, rate = open_stream_vc_input_stream(
+        tap = open_stream_vc_input_stream(
             StreamVcConfig(input_device_index=0, input_device_rate=44100), hop
         )
-    assert rate == 44100
+    assert tap.device_rate == 44100
     assert opened_streams[0].kwargs["samplerate"] == 44100
     assert opened_streams[0].kwargs["blocksize"] == 7056  # 160 ms at 44100
     assert "stream_vc.input_device_rate" in _open_log(caplog)
@@ -338,10 +344,10 @@ def test_a_device_at_the_capture_rate_is_opened_without_conversion(
 ) -> None:
     hop = ms_to_samples(160.0)
     with caplog.at_level(logging.INFO):
-        _, rate = open_stream_vc_input_stream(
+        tap = open_stream_vc_input_stream(
             StreamVcConfig(input_device_index=0, input_device_rate=CAPTURE_RATE), hop
         )
-    assert rate == CAPTURE_RATE
+    assert tap.device_rate == CAPTURE_RATE
     assert opened_streams[0].kwargs["samplerate"] == CAPTURE_RATE
     assert opened_streams[0].kwargs["blocksize"] == hop
     assert "変換なし" in _open_log(caplog)
@@ -367,10 +373,11 @@ def test_a_device_reporting_another_rate_is_warned_about(
     a slow drift in the audio and nothing else. This warning is its only trace."""
     _reporting_stream(monkeypatch, 47999.0)
     with caplog.at_level(logging.WARNING):
-        _, rate = open_stream_vc_input_stream(
+        tap = open_stream_vc_input_stream(
             StreamVcConfig(input_device_index=0), ms_to_samples(160.0)
         )
-    assert rate == 48000  # still the requested rate, not the reported one
+    # still the requested rate, not the reported one
+    assert tap.device_rate == 48000
     warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
     assert len(warnings) == 1
     assert "47999" in warnings[0]
@@ -510,11 +517,10 @@ async def test_one_device_read_puts_exactly_one_block_on_the_queue(rate: int) ->
     stream = _DeviceStream(_pcm_chunks(1, reads, frames), out_queue)
     with pytest.raises(OSError):
         await _capture_read_loop(
-            stream,  # ty: ignore[invalid-argument-type]
+            _tap(stream, rate),
             hop,
             out_queue,
             running,
-            rate,
         )
     # The device is read in device frames, one block's worth of time at a time.
     assert stream.frames_seen == [frames] * (reads + 1)
@@ -532,11 +538,10 @@ async def test_matching_rate_queues_the_decoded_read_untouched() -> None:
     stream = _DeviceStream(list(chunks), out_queue)
     with pytest.raises(OSError):
         await _capture_read_loop(
-            stream,  # ty: ignore[invalid-argument-type]
+            _tap(stream),
             hop,
             out_queue,
             running,
-            CAPTURE_RATE,
         )
     assert stream.frames_seen == [hop] * 4
     queued = _drain(out_queue)
@@ -584,7 +589,7 @@ async def test_reopen_does_not_carry_converter_state_into_the_new_stream(
     monkeypatch.setattr(
         capture_mod,
         "open_stream_vc_input_stream",
-        lambda config, hop: (streams.pop(0), rate),
+        lambda config, hop: _tap(streams.pop(0), rate),
     )
     _patch_instant_reopen(monkeypatch)
     ready = Event()

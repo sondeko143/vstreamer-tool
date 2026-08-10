@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from asyncio import CancelledError
 from asyncio import sleep
-from asyncio import to_thread
 from time import perf_counter
 
 import sounddevice as sd
@@ -135,9 +134,7 @@ async def network_playback_loop(config: StreamVcConfig, transport: Transport) ->
                 # (a session's target_sample_rate is fixed for the producer's lifetime,
                 # and a session change resets the buffer). So this rate is the right one
                 # for every kind of block.
-                underflowed = await to_thread(
-                    sink.write, result.pcm, packet.sample_rate
-                )
+                underflowed = await sink.play(result.pcm, packet.sample_rate)
                 if underflowed:
                     telemetry.record("stream_vc_playback_underflow", 1.0)
                     if (n := underflow_throttle.hit()) is not None:

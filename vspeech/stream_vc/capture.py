@@ -11,7 +11,6 @@ a second open is unimplemented (it remains a design in ADR-0052).
 
 from asyncio import Event
 from asyncio import Queue
-from asyncio import to_thread
 from enum import Enum
 
 import numpy as np
@@ -19,6 +18,7 @@ import sounddevice as sd
 from numpy.typing import NDArray
 
 from vspeech.config import StreamVcConfig
+from vspeech.lib.audio import DeviceStreamThread
 from vspeech.lib.audio import open_device_stream
 from vspeech.lib.audio import resolve_stream_vc_input_device
 from vspeech.lib.log_throttle import LogThrottle
@@ -120,18 +120,46 @@ class InputRateConverter:
         return [converted[i : i + self.hop].copy() for i in range(0, whole, self.hop)]
 
 
-def open_stream_vc_input_stream(
-    config: StreamVcConfig, hop: int
-) -> tuple[sd.RawInputStream, int]:
-    """Open the mic at its native rate; return the stream and that rate.
+class InputTap:
+    """One open mic: the stream, the rate it was opened at, and the one thread every
+    native call on it is made from.
+
+    The thread is the point (ADR-0077). `read()` blocks for a whole block, so it has to
+    leave the event loop; `close()` frees the stream, and PortAudio synchronises neither
+    against the other, so a close landing while a read is inside the device frees it under
+    the reader -- an access violation that kills the process. Both go through
+    `DeviceStreamThread`, so a close asked for mid-read simply queues behind that read.
+    That matters more here than in the utterance recorder: `close_quietly` runs on every
+    reconnect (ADR-0050 is written on the assumption that device faults do happen), not
+    only at teardown.
+
+    Being `close()`-shaped is also what lets it travel through `run_with_device_retry`
+    unchanged (that helper is bound to `[T: _Closable]` and hands what `open_stream`
+    returned to `close_quietly`), which is how `device_rate` reaches the read loop now:
+    the opener returns this object instead of a bare stream, so the rate no longer has to
+    be smuggled out through a `nonlocal` in capture_loop.
+    """
+
+    def __init__(self, stream: sd.RawInputStream, device_rate: int) -> None:
+        self.stream = stream
+        self.device_rate = device_rate
+        self._device = DeviceStreamThread("stream_vc_in")
+
+    async def read(self, frames: int) -> tuple[bytes, bool]:
+        """One blocking read on the owning thread. Returns (data, overflowed)."""
+        return await self._device.call(self.stream.read, frames)
+
+    def close(self) -> None:
+        """Close the mic, never while a read is still inside it."""
+        self._device.close(self.stream.close)
+
+
+def open_stream_vc_input_stream(config: StreamVcConfig, hop: int) -> InputTap:
+    """Open the mic at its native rate; return it paired with that rate and its thread.
 
     The resolve -> log -> open -> verify sequence is `open_device_stream`'s (lib/audio.py),
     shared with the three other device boundaries; only the device lookup and the stream's
     own shape are decided here.
-
-    The caller needs the rate back to build the converter, and run_with_device_retry
-    hands whatever `open_stream` returns straight to `close_quietly()`, so the pair is
-    unpacked by capture_loop's opener rather than returned from it.
 
     Both resolvers raise the DeviceNotFoundError family, which is deliberately **not** in
     retry.py's DEVICE_ERRORS: on a reopen it escapes run_with_device_retry and ends the
@@ -143,7 +171,7 @@ def open_stream_vc_input_stream(
     today for the reason above; this is a statement of intent, not a live path.)
     """
     device = resolve_stream_vc_input_device(config)
-    return open_device_stream(
+    stream, rate = open_device_stream(
         device=device,
         override=config.input_device_rate,
         input=True,
@@ -160,6 +188,7 @@ def open_stream_vc_input_stream(
             latency="low",
         ),
     )
+    return InputTap(stream, rate)
 
 
 def _put_block(
@@ -191,15 +220,14 @@ def _put_block(
 
 
 async def _capture_read_loop(
-    stream: sd.RawInputStream,
+    tap: InputTap,
     hop: int,
     out_queue: Queue[CaptureItem],
     running: Event,
-    device_rate: int,
 ) -> None:
     """Steady state: keep reading one block's worth of device frames until a fault.
 
-    Device loss surfaces as stream.read() raising (OSError, sd.PortAudioError). It is not
+    Device loss surfaces as tap.read() raising (OSError, sd.PortAudioError). It is not
     caught here; it escapes to run_with_device_retry, which recovers within the subsystem
     via close -> backoff -> reopen (without dragging in the sibling vc/playback tasks or
     the utterance path, ADR-0050). `while stream.active` would return silently on
@@ -211,7 +239,7 @@ async def _capture_read_loop(
     capture keeps running while paused and drop_oldest_put discards the backlog; it is
     consulted here only to avoid misreporting those drops as an anomaly.
 
-    `device_rate` is the rate the stream was opened at, not `stream.samplerate`:
+    `tap.device_rate` is the rate the stream was opened at, not `stream.samplerate`:
     PortAudio may report a hardware rate that differs by a hair, and an off-by-one rate
     turns a small L/M ratio into a gigantic one (16000 phases for 44099 -> 16000). We
     asked for a rate the device accepted, so that is the ratio to filter with; when the
@@ -224,12 +252,12 @@ async def _capture_read_loop(
     # time and meter it every occurrence -- exactly what its counterpart on the sink side
     # (playback.py's paOutputUnderflowed) already does.
     overflow_throttle = LogThrottle()
-    # Built here rather than in capture_loop: run_with_device_retry calls run(stream)
+    # Built here rather than in capture_loop: run_with_device_retry calls run(tap)
     # afresh after every reopen, so this coroutine's lifetime IS one stream's lifetime,
     # and the filter tail plus the half-filled block die with it.
-    converter = InputRateConverter(device_rate, hop)
+    converter = InputRateConverter(tap.device_rate, hop)
     while True:
-        data, overflowed = await to_thread(stream.read, converter.frames_per_read)
+        data, overflowed = await tap.read(converter.frames_per_read)
         if overflowed:
             telemetry.record("stream_vc_capture_overflow", 1.0)
             if (n := overflow_throttle.hit()) is not None:
@@ -267,25 +295,14 @@ async def capture_loop(
     def _signal_reopen() -> None:
         drop_oldest_put(out_queue, CaptureSignal.REOPEN)
 
-    # The rate the mic is currently open at. It travels from the opener to the read loop
-    # through this closure because run_with_device_retry is bound to `[T: _Closable]` and
-    # passes open_stream's return value to close_quietly(), so the opener can only return
-    # the stream itself. Seeded with 0, not CAPTURE_RATE: run_with_device_retry only
-    # calls _read after _open has returned, and 0 turns a hypothetical read-before-open
-    # into an immediate ValueError out of make_resampler rather than audio quietly
-    # passing through at the wrong rate.
-    device_rate = 0
+    def _open() -> InputTap:
+        return open_stream_vc_input_stream(config, hop)
 
-    def _open() -> sd.RawInputStream:
-        nonlocal device_rate
-        stream, device_rate = open_stream_vc_input_stream(config, hop)
-        return stream
-
-    async def _read(stream: sd.RawInputStream) -> None:
-        # device_rate is read when run_with_device_retry calls this, which is always
-        # after the (re)open above -- so the loop always filters with the rate the
-        # stream in its hands was opened at.
-        await _capture_read_loop(stream, hop, out_queue, running, device_rate)
+    async def _read(tap: InputTap) -> None:
+        # The tap carries the rate it was opened at, so the loop always filters with the
+        # rate of the very stream in its hands -- run_with_device_retry only calls this
+        # with what the (re)open above returned.
+        await _capture_read_loop(tap, hop, out_queue, running)
 
     # Wait for the VC warmup to finish before opening the mic. Opening earlier lets the
     # audio that accumulated in real time during model loading flood the queue right

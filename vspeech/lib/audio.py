@@ -393,10 +393,6 @@ def open_device_stream[StreamT: ReportsSampleRate](
     return stream, rate
 
 
-class Closable(Protocol):
-    def close(self) -> None: ...
-
-
 class DeviceStreamThread:
     """Owns every blocking PortAudio call made on one device stream, on one thread.
 
@@ -413,11 +409,19 @@ class DeviceStreamThread:
     to_thread(stream.read, n)` hands control back the instant the task is cancelled, but
     concurrent.futures cannot cancel a job that already started, so the thread stays inside
     Pa_ReadStream while the `finally: stream.close()` right behind it runs. Every teardown
-    that cancels a worker mid-read hits it -- which is how a taken gRPC port turned the
+    that cancels a worker mid-call hits it -- which is how a taken gRPC port turned the
     `exit 1` of ADR-0038 into an access violation.
 
-    So both calls go through one thread: `close()` queued behind an in-flight read cannot
-    start before that read returns, and nothing waits for it on the event loop.
+    So both calls go through one thread: `close()` queued behind an in-flight call cannot
+    start before that call returns, and nothing waits for it on the event loop.
+
+    All four device boundaries own one of these (the utterance recorder holds it directly;
+    the three others hold it inside the object that owns the stream -- capture's InputTap,
+    stream_vc's OutputSink, playback's OutputStream). It adds nothing to the real-time
+    path: a call still costs one executor submit plus one wakeup, exactly what
+    `asyncio.to_thread` costs, and each boundary's calls were already serialised by the
+    `await` in its own loop, so a private single-worker executor never makes one wait for
+    another. It only stops sharing the default pool with everything else that runs there.
     """
 
     def __init__(self, name: str) -> None:
@@ -438,13 +442,19 @@ class DeviceStreamThread:
         self._pending = future
         return await wrap_future(future)
 
-    def close(self, stream: Closable) -> None:
-        """Close `stream` without ever overlapping a call still inside the device.
+    def close(self, close_stream: Callable[[], None]) -> None:
+        """Run `close_stream` without ever overlapping a call still inside the device.
 
-        Closes on the caller's thread when nothing is in flight, so the paths that were
-        always safe (a read that ended by raising, a generator closed at its `yield`, a
-        stream that was never read from) keep closing synchronously -- callers and tests
-        can still assume the device is shut by the time this returns.
+        A callable rather than the stream itself, because each boundary closes its device
+        its own way (a bare `stream.close()`, or `close_quietly` where a raise would
+        replace the WorkerShutdown in flight). It must do nothing but close that device:
+        with a call in flight it runs on the owning thread, not the caller's.
+
+        Runs on the caller's thread when nothing is in flight, so the paths that were
+        always safe (a call that ended by raising, a generator closed at its `yield`, a
+        stream that was never read from) keep closing synchronously, with their exceptions
+        still reaching the caller -- callers and tests can go on assuming the device is
+        shut by the time this returns.
 
         With a call in flight the close is queued on the owning thread instead, i.e. behind
         that call. `done()` flips to True only after the worker thread has returned from
@@ -459,17 +469,17 @@ class DeviceStreamThread:
         self._closed = True
         pending = self._pending
         if pending is None or pending.done():
-            stream.close()
+            close_stream()
         else:
-            self._executor.submit(self._close_quietly, stream)
+            self._executor.submit(self._close_logging_errors, close_stream)
         self._executor.shutdown(wait=False)
 
     @staticmethod
-    def _close_quietly(stream: Closable) -> None:
-        """close() on the owning thread. Nobody is left to observe the future it returns,
-        so an exception here would vanish silently -- log it instead."""
+    def _close_logging_errors(close_stream: Callable[[], None]) -> None:
+        """The deferred close. Nobody is left to observe the future it returns, so an
+        exception here would vanish silently -- log it instead."""
         try:
-            stream.close()
+            close_stream()
         except (OSError, sd.PortAudioError) as e:
             logger.warning("error while closing a device stream: %r", e)
 
