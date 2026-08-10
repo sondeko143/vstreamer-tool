@@ -3,7 +3,7 @@
 Leaves the utterance-path recording untouched and opens the mic separately in mono,
 emitting float32 blocks of a fixed hop at CAPTURE_RATE. The device is opened at its own
 native rate and the conversion down to CAPTURE_RATE happens here, in process
-(ADR-0070/0071) -- asking the device for 16 kHz would hand the conversion to the OS,
+(ADR-0073/0074) -- asking the device for 16 kHz would hand the conversion to the OS,
 whose filter we can neither test nor log, and WASAPI shared mode refuses any rate but
 its mix format. The fan-out fallback for environments where an exclusive device rejects
 a second open is unimplemented (it remains a design in ADR-0052).
@@ -68,7 +68,7 @@ def device_frames_per_read(hop: int, device_rate: int) -> int:
     holds nothing back), so one read yields one block -- the cadence the queue had back
     when the device itself ran at CAPTURE_RATE. That is why nothing here pre-fills the
     accumulator: priming is what a resampler with internal latency would need, and doing
-    it anyway would delay every block by a whole hop (ADR-0070).
+    it anyway would delay every block by a whole hop (ADR-0073).
     """
     if device_rate == CAPTURE_RATE:
         return hop
@@ -83,7 +83,7 @@ class InputRateConverter:
     builds one per open, so a reopen cannot carry either into the new stream.
 
     A device that already runs at CAPTURE_RATE builds no resampler and passes the read
-    straight through, which keeps that path bit-identical to the pre-ADR-0070 code.
+    straight through, which keeps that path bit-identical to the pre-ADR-0073 code.
     """
 
     def __init__(self, device_rate: int, hop: int) -> None:

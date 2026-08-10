@@ -1,14 +1,14 @@
 # 0075. ワイヤ形式の sample_rate を範囲 + 25Hz 格子で検証し、リサンプラ側にも比の上限を置く
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-11
-- Related: [0051](0051-stream-transport-swappable-tiered.md)（このワイヤ形式を定義した ADR）, [0070](0070-device-boundary-inhouse-polyphase-resampler.md)（この検査が必要になった原因）, [0050](0050-streaming-vc-separate-subsystem.md), [0055](0055-stream-vc-producer-consumer-role-split.md), [0056](0056-stream-vc-consumer-jitter-buffer.md), [0062](0062-log-throttle-time-based-episodes.md)
+- Related: [0051](0051-stream-transport-swappable-tiered.md)（このワイヤ形式を定義した ADR）, [0073](0073-device-boundary-inhouse-polyphase-resampler.md)（この検査が必要になった原因）, [0050](0050-streaming-vc-separate-subsystem.md), [0055](0055-stream-vc-producer-consumer-role-split.md), [0056](0056-stream-vc-consumer-jitter-buffer.md), [0062](0062-log-throttle-time-based-episodes.md)
 
 ## Context
 
-[0070](0070-device-boundary-inhouse-polyphase-resampler.md) により、ストリーミング VC の出口は `packet.sample_rate` とデバイスレートから有理比ポリフェーズ FIR を**構築する**ようになった。この `sample_rate` は認証のない LAN の UDP ソケットから届く unsigned 32bit で、`decode_packet` は magic と version しか検査していない（[0051](0051-stream-transport-swappable-tiered.md) が定めたヘッダ）。
+[0073](0073-device-boundary-inhouse-polyphase-resampler.md) により、ストリーミング VC の出口は `packet.sample_rate` とデバイスレートから有理比ポリフェーズ FIR を**構築する**ようになった。この `sample_rate` は認証のない LAN の UDP ソケットから届く unsigned 32bit で、`decode_packet` は magic と version しか検査していない（[0051](0051-stream-transport-swappable-tiered.md) が定めたヘッダ）。
 
-0070 の前は、この値は `sd.RawOutputStream(samplerate=...)` に渡るだけだった。異常値は `PortAudioError` になり、デバイス障害の backoff 経路が拾って**次の正常パケットで自己回復**していた。0070 の後は同じ値がリサンプラ構築に直行する。実測（この機体、`vspeech/lib/resample.py` の算術をそのまま辿ったもの）:
+0073 の前は、この値は `sd.RawOutputStream(samplerate=...)` に渡るだけだった。異常値は `PortAudioError` になり、デバイス障害の backoff 経路が拾って**次の正常パケットで自己回復**していた。0073 の後は同じ値がリサンプラ構築に直行する。実測（この機体、`vspeech/lib/resample.py` の算術をそのまま辿ったもの）:
 
 | ヘッダが運びうる値 | 結果 |
 |---|---|
@@ -19,12 +19,12 @@
 
 ここで効いている性質が 1 つある。**構築コストを決めるのはレートの大きさではなく `device_rate // gcd(rate, device_rate)`（位相数）である。** パケットレートがデバイスレートと互いに素なら、そのレートが 1 でも 44101 でも位相数はデバイスレートそのものになり、フィルタは同じだけ巨大になる。つまり**範囲だけを検査しても病理は残る**。
 
-一方、受信側には既に「壊れた datagram は `WireError` にして drop + `stream_vc_malformed_drop` + 間引き warning」という設計された経路がある（`udp.py` の `_RecvProtocol.datagram_received`、[0062](0062-log-throttle-time-based-episodes.md)）。0070 は結果的にこの経路を迂回する新しい致命経路を作ってしまっていた。
+一方、受信側には既に「壊れた datagram は `WireError` にして drop + `stream_vc_malformed_drop` + 間引き warning」という設計された経路がある（`udp.py` の `_RecvProtocol.datagram_received`、[0062](0062-log-throttle-time-based-episodes.md)）。0073 は結果的にこの経路を迂回する新しい致命経路を作ってしまっていた。
 
 **そして同じ露出はワイヤだけではなかった。** 本 ADR の初版はリサンプラ側の上限を「却下（将来足してよい）」としていたが、その後 3 つの経路が独立に見つかった。
 
-1. **発話系の再生**（`vspeech/worker/playback.py`、Task 8）: リサンプラ構築のキーは `WorkerInput.sound.rate` で、`SoundInput.rate: int` は protobuf 由来の**無検証の値**であり、gRPC 経由で**別マシンから届く**。`wire.py` の検査は UDP パケット専用なのでこの経路には掛からない。0070 の前は同じ値が `sd.RawOutputStream(samplerate=...)` に渡って `PortAudioError` になり、warning のあと次の発話で自己回復していた。
-2. **入口側**（`stream_vc/capture.py` / `worker/recording.py`）: デバイスが 44099 のような値を報告する場合（[0071](0071-device-native-rate-resolution.md) が実測で警告している）。要求レートで変換するので実際には踏みにくいが、露出はある。
+1. **発話系の再生**（`vspeech/worker/playback.py`、Task 8）: リサンプラ構築のキーは `WorkerInput.sound.rate` で、`SoundInput.rate: int` は protobuf 由来の**無検証の値**であり、gRPC 経由で**別マシンから届く**。`wire.py` の検査は UDP パケット専用なのでこの経路には掛からない。0073 の前は同じ値が `sd.RawOutputStream(samplerate=...)` に渡って `PortAudioError` になり、warning のあと次の発話で自己回復していた。
+2. **入口側**（`stream_vc/capture.py` / `worker/recording.py`）: デバイスが 44099 のような値を報告する場合（[0074](0074-device-native-rate-resolution.md) が実測で警告している）。要求レートで変換するので実際には踏みにくいが、露出はある。
 3. **デバイスレート自体が 25 の倍数でない環境**（プルダウンレートのプロ機材）: 格子による位相数の保証が消える（本 ADR 初版の Consequences が既に指摘していた）。
 
 4 箇所 + ワイヤに検査を散らすより、**全経路が必ず通るチョークポイント 1 箇所**（`PolyphaseResampler.__init__`）で塞ぐほうが層として正しい。
@@ -56,7 +56,7 @@
   | `2**32-1 -> 48000` | 2.9e10 | | 233GB | ヘッダが運びうる最大値 |
 
   通る側の最大（770k）と落ちる側の最小（4.50M）の間に 4.5 倍あるので、値そのものは繊細ではない。切りのよい 1e6 に丸めた。
-- **例外型は `ValueError`。** 各境界の既存の失敗分類を変えないため: 発話系の再生は warning を出して次の発話へ進み（0070 前に `PortAudioError` で得ていた挙動と同じ）、入口 2 箇所とストリーミング出口は subsystem ごと fail loud で抜ける。デバイス例外にすると再生側が backoff 経路に入ってしまい、設定の問題を永久にリトライすることになる。
+- **例外型は `ValueError`。** 各境界の既存の失敗分類を変えないため: 発話系の再生は warning を出して次の発話へ進み（0073 前に `PortAudioError` で得ていた挙動と同じ）、入口 2 箇所とストリーミング出口は subsystem ごと fail loud で抜ける。デバイス例外にすると再生側が backoff 経路に入ってしまい、設定の問題を永久にリトライすることになる。
 - メッセージは日本語。再生側では `logger.warning("%s", e)` に載って操作者が読む。
 
 ## Alternatives rejected

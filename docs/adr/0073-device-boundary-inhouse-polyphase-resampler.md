@@ -1,8 +1,8 @@
-# 0070. デバイス境界のサンプルレート変換を OS から自前 numpy ポリフェーズへ移す（0036 を refine）
+# 0073. デバイス境界のサンプルレート変換を OS から自前 numpy ポリフェーズへ移す（0036 を refine）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-10
-- Related: [spec](../superpowers/specs/2026-08-10-device-sample-rate-in-process-design.md), [0036](0036-whisper-resample-via-pyav.md)（本 ADR が refine する住み分け）, [0038](0038-worker-config-preflight-fail-loud.md), [0050](0050-streaming-vc-separate-subsystem.md), [0053](0053-streaming-vc-fixed-block-crossfade.md), [0055](0055-stream-vc-producer-consumer-role-split.md), [0069](0069-torch-213-and-terminal-torchaudio.md), [0071](0071-device-native-rate-resolution.md)
+- Related: [spec](../superpowers/specs/2026-08-10-device-sample-rate-in-process-design.md), [0036](0036-whisper-resample-via-pyav.md)（本 ADR が refine する住み分け）, [0038](0038-worker-config-preflight-fail-loud.md), [0050](0050-streaming-vc-separate-subsystem.md), [0053](0053-streaming-vc-fixed-block-crossfade.md), [0055](0055-stream-vc-producer-consumer-role-split.md), [0069](0069-torch-213-and-terminal-torchaudio.md), [0074](0074-device-native-rate-resolution.md)
 
 ## Context
 
@@ -23,7 +23,7 @@
 デバイス境界（ストリーミング VC の入口・出口、発話系の録音・再生の 4 箇所）のサンプルレート変換は、**numpy のみで書いた有理比ポリフェーズ FIR**（Kaiser 窓 sinc、阻止域 -90dB 級、半長は `scipy.signal.resample_poly` と同じ設計則）でプロセス内で行う。デバイスは既定でネイティブレートで開き、OS の変換段を no-op にする。
 
 - リサンプラは **ストリーミング用（状態保持）** と **ワンショット用（末尾までフラッシュ）** の 2 モードを持つ。前者は連続ストリーム（capture・ストリーミング再生・発話系録音）、後者は 1 発話ごとに独立した buffer（発話系再生）に使う。
-- **固定ブロックへ再ブロック化する入口では、起動時とデバイス再オープン時にリサンプラの群遅延ぶんの無音でアキュムレータを事前充填する。** これをやらないと上記の +160ms 量子化を踏む。事前充填により追加遅延はフィルタ半長（約 1ms）だけになる。
+- **固定ブロックへ再ブロック化する入口でも、事前充填は要らない。** 因果ポリフェーズは出力本数が `ceil(L*n/M)` で欠けないため、1 device tick あたり 1 ブロックがそのまま出る(実測で配信遅れ min=max=0)。事前充填が要るのは soxr のように滞留を内部に抱える実装で、そこでは滞留が丸ごと 1 hop の遅延に量子化される(実測 +160ms)。この差が自前実装を選んだ理由そのものなので、Alternatives rejected の soxr 項と合わせて読むこと。
 - デバイス境界での float32 → 整数 PCM 変換は**必ず飽和クリップ**で行う。リサンプルは Gibbs 現象で元のピークを超えうるため、ラップアラウンドさせるとクリックになる。
 - リサンプラの住み分けを次のとおり明文化する。**デバイス境界 = 自前ポリフェーズ / whisper 入力 = PyAV（[0036](0036-whisper-resample-via-pyav.md) のまま）/ RVC 内部 = torchaudio**。後ろ 2 つは本 ADR では変更しない。
 
@@ -34,7 +34,7 @@
 - **`vspeech/lib/rvc.py` の `get_resampler`（torchaudio）を再利用する** — VC 側には既にあるが、consumer ロールは torch を引かないので出口では使えず、入口と出口で実装が 2 本に割れる。[0069](0069-torch-213-and-terminal-torchaudio.md) が torchaudio の撤去を将来課題に挙げている方向とも逆行する。
 - **`scipy.signal.resample_poly`** — scipy は `rvc` extra にしかなく、再生専任機に 120MB を足すことになる。[0036](0036-whisper-resample-via-pyav.md) が同じ理由で却下済み。
 - **リサンプルは OS 任せのまま、ホスト API だけ WASAPI へ寄せる** — WASAPI 共有はネイティブレート以外を拒否するので、レート変換を自前でやらない限りそもそも開けない。順序が逆で、単独では成立しない。
-- **入口で事前充填せず、滞留を許容する** — 実測 +160ms。ブロック長まるごとの遅延なので、この経路では受け入れられない。
+- **soxr を採ったうえで入口で事前充填せず、滞留を許容する** — 実測 +160ms。ブロック長まるごとの遅延なので、この経路では受け入れられない。
 
 ## Consequences
 

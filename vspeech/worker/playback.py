@@ -87,7 +87,7 @@ class OutputStream:
 
     The rate is decided when the device is opened and stays fixed for the life of that
     stream; an utterance arriving at another rate is converted into it here instead of the
-    device being reopened at the source's rate (ADR-0070/0071). A source rate change is
+    device being reopened at the source's rate (ADR-0073/0074). A source rate change is
     therefore no longer a reason to reopen -- only the sample format, the channel count or
     the device itself changing is. Asking the device for the source's rate would hand the
     conversion to the OS, whose filter we can neither test nor log, and WASAPI shared mode
@@ -206,7 +206,7 @@ class OutputStream:
         """`data` (PCM at `rate`) as PCM at the device rate.
 
         Returns the input object untouched when the rates already match, which keeps that
-        path bit-identical to the pre-ADR-0070 code -- decode+encode is not bit-exact at
+        path bit-identical to the pre-ADR-0073 code -- decode+encode is not bit-exact at
         full scale (int16 -32768 comes back as -32767), so skipping the round trip
         matters, not just its cost.
         """
@@ -251,7 +251,7 @@ class OutputStream:
         """Apply the volume, convert to the device rate, and write. Off the event loop.
 
         The volume is applied first, to the source bytes, exactly as it was before
-        ADR-0070: at a matching rate the bytes reaching the device are byte-for-byte the
+        ADR-0073: at a matching rate the bytes reaching the device are byte-for-byte the
         ones the old code wrote.
         """
         data = sound.data
@@ -302,7 +302,7 @@ async def sd_playback_worker(
                 # A rate that cannot be decided is a config problem, not a device fault:
                 # no retry fixes it, and swallowing it into the warning below would leave
                 # the pipeline playing nothing at all, silently, for every utterance. Fail
-                # loud like the three other device boundaries (ADR-0071).
+                # loud like the three other device boundaries (ADR-0074).
                 raise
             except Exception as e:
                 logger.warning("%s", e)

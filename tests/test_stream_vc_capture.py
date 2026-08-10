@@ -217,7 +217,7 @@ async def test_capture_drop_switches_side_when_pause_arrives(caplog, enabled_tel
     )
 
 
-# --- Native-rate open + in-process conversion (ADR-0070 / ADR-0071) ------------------
+# --- Native-rate open + in-process conversion (ADR-0073 / ADR-0074) ------------------
 
 _MME = 0
 _WASAPI = 1
@@ -299,7 +299,7 @@ def test_input_device_is_opened_at_the_resolved_native_rate(
     """The endpoint really runs at 48000, so that is what is opened -- not CAPTURE_RATE.
 
     Asking for 16000 would hand the conversion to the OS, and WASAPI shared mode would
-    refuse the open outright (ADR-0070).
+    refuse the open outright (ADR-0073).
     """
     hop = ms_to_samples(160.0)
     with caplog.at_level(logging.INFO):
@@ -393,7 +393,7 @@ def test_a_device_reporting_the_requested_rate_stays_quiet(
 
 
 def test_no_resampler_is_built_when_the_device_runs_at_the_capture_rate() -> None:
-    """The pass-through path must stay bit-identical to the pre-ADR-0070 code: the read
+    """The pass-through path must stay bit-identical to the pre-ADR-0073 code: the read
     is handed on as-is, not even copied."""
     hop = ms_to_samples(160.0)
     converter = InputRateConverter(CAPTURE_RATE, hop)
@@ -499,7 +499,7 @@ async def test_one_device_read_puts_exactly_one_block_on_the_queue(rate: int) ->
 
     Measured, not argued: a resampler that held audio back would make the first block
     late and every later one bunch up, which is a whole hop (160 ms) of latency
-    (ADR-0070).
+    (ADR-0073).
     """
     hop = ms_to_samples(160.0)
     frames = device_frames_per_read(hop, rate)

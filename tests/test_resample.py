@@ -1,4 +1,4 @@
-"""Numeric contract of the polyphase resampler (ADR-0070)."""
+"""Numeric contract of the polyphase resampler (ADR-0073)."""
 
 import tracemalloc
 
@@ -149,7 +149,7 @@ def test_fixed_hop_cadence_needs_no_priming() -> None:
     """One device tick in -> exactly one pipeline block out, from the first tick.
 
     A resampler that held audio back would make delivery lag by a whole block
-    (measured +160 ms with soxr). The causal polyphase does not (ADR-0070).
+    (measured +160 ms with soxr). The causal polyphase does not (ADR-0073).
     """
     for src in (48000, 44100):
         r = PolyphaseResampler(src, 16000)
@@ -291,7 +291,7 @@ def test_the_refusal_happens_before_anything_is_allocated() -> None:
         (192000, 11025),  # 261k taps: the worst pair the four boundaries can meet
         (11025, 192000),
         (8575, 192000),  # 770k taps: the worst ADR-0075's 25Hz wire grid still admits
-        (11025, 48000),  # up=640, the pair ADR-0070's measurements call out
+        (11025, 48000),  # up=640, the pair ADR-0073's measurements call out
         (44100, 48000),
         (48000, 44100),
         (40000, 44100),

@@ -1,4 +1,4 @@
-"""Resolving the true device rate (ADR-0071).
+"""Resolving the true device rate (ADR-0074).
 
 sounddevice is stubbed: these are pure decisions over the device table, and the real
 table differs per machine.
@@ -112,7 +112,7 @@ _DEVICES = [
         "default_samplerate": 44100.0,
     },
     # M2 fixture: an MME device whose name matches TWO WASAPI rows (a duplicate-name
-    # multi-endpoint setup), but both rows agree on the rate. ADR-0071 promises this
+    # multi-endpoint setup), but both rows agree on the rate. ADR-0074 promises this
     # resolves (uniqueness is about the rate, not the row count).
     {
         "index": 22,
@@ -239,7 +239,7 @@ def test_mme_device_takes_the_rate_from_its_wasapi_counterpart() -> None:
 
 
 def test_multiple_matching_counterparts_agreeing_on_the_rate_resolve() -> None:
-    """ADR-0071: several WASAPI rows may share a name prefix (a duplicate-name
+    """ADR-0074: several WASAPI rows may share a name prefix (a duplicate-name
     multi-endpoint setup, as VAC/Voicemeeter produce). Resolution only requires the
     *rates* to agree, not that exactly one row matches.
     """

@@ -11,7 +11,7 @@ silently). Seq jumps are recorded the same way (an acceptance criterion). Actual
 concealment and reordering belong to the stage that introduces the network transport.
 
 The device is opened at its own native rate and the packet's rate (the sender's RVC model
-rate) is converted to it here, in process (ADR-0070/0071). Opening at the packet's rate
+rate) is converted to it here, in process (ADR-0073/0074). Opening at the packet's rate
 instead would hand the conversion to the OS, whose filter we can neither test nor log,
 and WASAPI shared mode refuses any rate but its mix format. `OutputSink` below is the
 whole of that; both this module's loop and the consumer's (consumer.py) go through it, so
@@ -54,7 +54,7 @@ def detect_gap(prev_seq: int | None, seq: int) -> int:
 
 
 class OutputSink:
-    """An open output stream together with the resampler that feeds it (ADR-0070).
+    """An open output stream together with the resampler that feeds it (ADR-0073).
 
     The two are created and discarded as a unit so a resampler can never be paired with a
     rate its stream was not opened at -- the device rate is fixed for the life of the
@@ -93,7 +93,7 @@ class OutputSink:
         """`pcm` (int16 mono at `src_rate`) as int16 mono at the device rate.
 
         Returns the input object untouched when the rates already match, which keeps that
-        path bit-identical to the pre-ADR-0070 code.
+        path bit-identical to the pre-ADR-0073 code.
 
         The resampler is rebuilt whenever `src_rate` changes -- the sender's model rate
         travels with every packet, so keying the rebuild on the rate rather than on the
@@ -178,7 +178,7 @@ async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
     writes/reopens self-heal via close -> backoff -> lazy reopen on the next packet
     (without dragging in the utterance path or sibling tasks, ADR-0050). A device fault is
     now the only thing that reopens: the stream is opened at the device's own rate, so the
-    sample_rate travelling with the packet is converted into it instead (ADR-0070).
+    sample_rate travelling with the packet is converted into it instead (ADR-0073).
     """
     sink: OutputSink | None = None
     prev_seq: int | None = None

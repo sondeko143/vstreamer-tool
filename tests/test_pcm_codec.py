@@ -1,4 +1,4 @@
-"""Shared PCM decode/encode used at every device boundary (ADR-0070)."""
+"""Shared PCM decode/encode used at every device boundary (ADR-0073)."""
 
 import warnings
 

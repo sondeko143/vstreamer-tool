@@ -133,7 +133,7 @@ def _check_device_rate(
     Three independent things can be wrong once a device is found, checked in order,
     each cheaper than the next, so a failure at one stops before paying for the next:
 
-    1. The rate cannot be decided at all (DeviceRateUnresolvedError, ADR-0071).
+    1. The rate cannot be decided at all (DeviceRateUnresolvedError, ADR-0074).
     2. The decided rate produces a pathological resample ratio against `ratio_targets`
        (empty for a boundary whose counterpart rate is not known at preflight time --
        see worker/playback.py's per-utterance warning instead, ADR-0075). Pure
@@ -316,7 +316,7 @@ def _check_playback(config: Config) -> list[ConfigProblem]:
     # pipeline rate to test against here -- worker/playback.py already warns and moves
     # on to the next utterance for a pathological one (ADR-0075/0076). This is still the
     # first time the device itself (rate resolution + actually opening it) can be
-    # validated at startup at all -- before ADR-0070/0071 fixed the device to its own
+    # validated at startup at all -- before ADR-0073/0074 fixed the device to its own
     # native rate, this boundary's rate was only known once the first utterance arrived.
     return _check_device_rate(
         device=device,

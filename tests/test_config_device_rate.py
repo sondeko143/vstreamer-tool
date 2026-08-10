@@ -1,4 +1,4 @@
-"""The four device-rate overrides (ADR-0071)."""
+"""The four device-rate overrides (ADR-0074)."""
 
 import pytest
 from pydantic import ValidationError

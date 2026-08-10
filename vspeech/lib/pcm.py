@@ -1,4 +1,4 @@
-"""Format-aware PCM decode/encode shared by every device boundary (ADR-0070).
+"""Format-aware PCM decode/encode shared by every device boundary (ADR-0073).
 
 Dispatch is keyed on SampleFormat, NOT byte width: UINT8 and INT8 share a width but
 differ in sign and bias, so a width-keyed table would decode unsigned-8 as signed and

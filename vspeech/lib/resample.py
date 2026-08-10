@@ -1,4 +1,4 @@
-"""Rational-ratio polyphase FIR resampler for the device boundaries (ADR-0070).
+"""Rational-ratio polyphase FIR resampler for the device boundaries (ADR-0073).
 
 numpy only -- no torch, no scipy, no sounddevice. This module is reachable from the
 streaming consumer role, which must not pull torch in (ADR-0055), and numpy is
@@ -215,7 +215,7 @@ def make_resampler(src_rate: int, dst_rate: int) -> PolyphaseResampler | None:
     """A resampler, or None when the rates already match.
 
     None means "pass the bytes through untouched" -- the callers rely on that to stay
-    bit-identical to the pre-ADR-0070 behaviour when the device already runs at the
+    bit-identical to the pre-ADR-0073 behaviour when the device already runs at the
     pipeline's rate.
 
     Raises ValueError for a ratio whose filter would exceed MAX_PROTOTYPE_TAPS. Deliberately

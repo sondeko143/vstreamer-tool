@@ -60,7 +60,7 @@ async def test_consume_into_buffer_skips_foreign_session_poll_packets():
     assert buf.depth == 2  # first(0) + poll(1); foreign-session 99 skipped
 
 
-# --- The output boundary: one device rate, converted per packet (ADR-0070) -----------
+# --- The output boundary: one device rate, converted per packet (ADR-0073) -----------
 
 DEVICE_RATE = 48000
 PACKET_RATE = 16000

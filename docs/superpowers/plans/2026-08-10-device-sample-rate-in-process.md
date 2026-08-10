@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-ADR: [0070](../../adr/0070-device-boundary-inhouse-polyphase-resampler.md)（デバイス境界＝自前ポリフェーズ）, [0071](../../adr/0071-device-native-rate-resolution.md)（真のデバイスレート解決）。どちらも `Proposed`、Task 10 で昇格させる。
+ADR: [0073](../../adr/0073-device-boundary-inhouse-polyphase-resampler.md)（デバイス境界＝自前ポリフェーズ）, [0074](../../adr/0074-device-native-rate-resolution.md)（真のデバイスレート解決）。どちらも `Proposed`、Task 10 で昇格させる。
 Spec: [2026-08-10-device-sample-rate-in-process-design.md](../specs/2026-08-10-device-sample-rate-in-process-design.md)
 
 **Goal:** オーディオデバイスをネイティブレートで開き、サンプルレート変換を OS ではなく numpy 製ポリフェーズ FIR でプロセス内に持ち込む（stream_vc の入口/出口 + 発話系の録音/再生の 4 箇所）。
@@ -72,7 +72,7 @@ plan の記述より良い方法を見つけたら、良い方を採る。plan �
 `tests/test_resample.py` を新規作成:
 
 ```python
-"""Numeric contract of the polyphase resampler (ADR-0070)."""
+"""Numeric contract of the polyphase resampler (ADR-0073)."""
 
 import numpy as np
 import pytest
@@ -200,7 +200,7 @@ def test_fixed_hop_cadence_needs_no_priming() -> None:
     """One device tick in -> exactly one pipeline block out, from the first tick.
 
     A resampler that held audio back would make delivery lag by a whole block
-    (measured +160 ms with soxr). The causal polyphase does not (ADR-0070).
+    (measured +160 ms with soxr). The causal polyphase does not (ADR-0073).
     """
     for src in (48000, 44100):
         r = PolyphaseResampler(src, 16000)
@@ -270,7 +270,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'vspeech.lib.resample'`
 `vspeech/lib/resample.py` を新規作成:
 
 ```python
-"""Rational-ratio polyphase FIR resampler for the device boundaries (ADR-0070).
+"""Rational-ratio polyphase FIR resampler for the device boundaries (ADR-0073).
 
 numpy only -- no torch, no scipy, no sounddevice. This module is reachable from the
 streaming consumer role, which must not pull torch in (ADR-0055), and numpy is
@@ -444,7 +444,7 @@ def make_resampler(src_rate: int, dst_rate: int) -> PolyphaseResampler | None:
     """A resampler, or None when the rates already match.
 
     None means "pass the bytes through untouched" -- the callers rely on that to stay
-    bit-identical to the pre-ADR-0070 behaviour when the device already runs at the
+    bit-identical to the pre-ADR-0073 behaviour when the device already runs at the
     pipeline's rate.
     """
     if src_rate == dst_rate:
@@ -466,7 +466,7 @@ Expected: いずれも終了コード 0。`echo $?` で確認する（パイプ�
 
 ```bash
 git add vspeech/lib/resample.py tests/test_resample.py
-git commit -m "feat(resample): デバイス境界用のポリフェーズリサンプラを追加 (ADR-0070)"
+git commit -m "feat(resample): デバイス境界用のポリフェーズリサンプラを追加 (ADR-0073)"
 ```
 
 ---
@@ -491,7 +491,7 @@ git commit -m "feat(resample): デバイス境界用のポリフェーズリサ�
 `tests/test_pcm_codec.py` を新規作成:
 
 ```python
-"""Shared PCM decode/encode used at every device boundary (ADR-0070)."""
+"""Shared PCM decode/encode used at every device boundary (ADR-0073)."""
 
 import numpy as np
 import pytest
@@ -570,7 +570,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'vspeech.lib.pcm'`
 `vspeech/lib/pcm.py` を新規作成:
 
 ```python
-"""Format-aware PCM decode/encode shared by every device boundary (ADR-0070).
+"""Format-aware PCM decode/encode shared by every device boundary (ADR-0073).
 
 Dispatch is keyed on SampleFormat, NOT byte width: UINT8 and INT8 share a width but
 differ in sign and bias, so a width-keyed table would decode unsigned-8 as signed and
@@ -688,7 +688,7 @@ Expected: PASS
 ```bash
 uv run ruff format . && uv run ruff check . && uv run ty check
 git add vspeech/lib/pcm.py tests/test_pcm_codec.py vspeech/worker/transcription.py
-git commit -m "feat(pcm): format 対応の PCM デコード/飽和エンコードを共有モジュールへ昇格 (ADR-0070)"
+git commit -m "feat(pcm): format 対応の PCM デコード/飽和エンコードを共有モジュールへ昇格 (ADR-0073)"
 ```
 
 ---
@@ -705,14 +705,14 @@ git commit -m "feat(pcm): format 対応の PCM デコード/飽和エンコー�
   - `class DeviceRateUnresolvedError(DeviceNotFoundError)`（`vspeech/exceptions.py` に追加）
   - `resolve_device_rate(device: DeviceInfo, override: int | None, *, input: bool, config_key: str) -> tuple[int, str]` — `(rate, どう解決したかの説明)`
 
-**実測の根拠（ADR-0071）:** PortAudio は MME/DirectSound/WDM-KS に `default_samplerate = 44100` を返す（48kHz で動いているエンドポイントも同じ）。MME は `check_input_settings` にどのレートを渡しても OK を返すのでプローブも効かない。WASAPI だけが真のミックスレートを返し、MME 名は WASAPI 名を 31 文字で切り詰めたものになっている。
+**実測の根拠（ADR-0074）:** PortAudio は MME/DirectSound/WDM-KS に `default_samplerate = 44100` を返す（48kHz で動いているエンドポイントも同じ）。MME は `check_input_settings` にどのレートを渡しても OK を返すのでプローブも効かない。WASAPI だけが真のミックスレートを返し、MME 名は WASAPI 名を 31 文字で切り詰めたものになっている。
 
 - [ ] **Step 1: 失敗するテストを書く**
 
 `tests/test_device_rate.py` を新規作成:
 
 ```python
-"""Resolving the true device rate (ADR-0071).
+"""Resolving the true device rate (ADR-0074).
 
 sounddevice is stubbed: these are pure decisions over the device table, and the real
 table differs per machine.
@@ -829,7 +829,7 @@ Expected: FAIL — `ImportError: cannot import name 'DeviceRateUnresolvedError'`
 
 ```python
 class DeviceRateUnresolvedError(DeviceNotFoundError):
-    """The device's true sample rate could not be determined (ADR-0071).
+    """The device's true sample rate could not be determined (ADR-0074).
 
     A subclass of DeviceNotFoundError so the existing preflight handlers keep
     catching it, while callers that care can tell the two apart.
@@ -850,7 +850,7 @@ def _wasapi_counterpart_rates(name: str, *, input: bool) -> set[int]:
     PortAudio's WMME/DirectSound backends report a hardcoded 44100 for every device,
     so their `default_samplerate` cannot be trusted. Their device names, however, are
     the WASAPI names truncated to 31 characters, which makes the WASAPI row for the
-    same endpoint findable by prefix (ADR-0071).
+    same endpoint findable by prefix (ADR-0074).
     """
     host_apis = sd.query_hostapis()
     rates: set[int] = set()
@@ -873,9 +873,9 @@ def resolve_device_rate(
     """The rate to open `device` at, plus a human-readable note on how it was decided.
 
     Order: explicit config -> the device's own default_samplerate when it is a WASAPI
-    device -> the mix rate of its WASAPI counterpart (ADR-0071). Anything ambiguous
+    device -> the mix rate of its WASAPI counterpart (ADR-0074). Anything ambiguous
     raises rather than guessing: opening at the wrong rate silently reinstates the OS
-    resampler that ADR-0070 exists to remove.
+    resampler that ADR-0073 exists to remove.
     """
     if override is not None:
         return override, f"{config_key} で明示"
@@ -929,7 +929,7 @@ Expected: `unresolved` が 4 以下（疑似デバイス「サウンド マッ�
 ```bash
 uv run ruff format . && uv run ruff check . && uv run ty check
 git add vspeech/lib/audio.py vspeech/exceptions.py tests/test_device_rate.py
-git commit -m "feat(audio): デバイスの実サンプルレートを WASAPI 同名デバイスから解決する (ADR-0071)"
+git commit -m "feat(audio): デバイスの実サンプルレートを WASAPI 同名デバイスから解決する (ADR-0074)"
 ```
 
 ---
@@ -949,7 +949,7 @@ git commit -m "feat(audio): デバイスの実サンプルレートを WASAPI �
 `tests/test_config_device_rate.py` を新規作成:
 
 ```python
-"""The four device-rate overrides (ADR-0071)."""
+"""The four device-rate overrides (ADR-0074)."""
 
 import pytest
 from pydantic import ValidationError
@@ -1068,7 +1068,7 @@ Expected: PASS
 ```bash
 uv run ruff format . && uv run ruff check . && uv run ty check
 git add vspeech/config.py config.toml.example tests/test_config_device_rate.py
-git commit -m "feat(config): デバイスを開くレートの上書き設定を 4 つ追加 (ADR-0071)"
+git commit -m "feat(config): デバイスを開くレートの上書き設定を 4 つ追加 (ADR-0074)"
 ```
 
 ---
@@ -1282,8 +1282,8 @@ uv run ruff format . && uv run ruff check . && uv run ty check
 ### Task 10: 全体検証・ADR 昇格・実機確認
 
 **Files:**
-- Modify: `docs/adr/0070-device-boundary-inhouse-polyphase-resampler.md`（Status と事前充填の記述）
-- Modify: `docs/adr/0071-device-native-rate-resolution.md`（Status）
+- Modify: `docs/adr/0073-device-boundary-inhouse-polyphase-resampler.md`（Status と事前充填の記述）
+- Modify: `docs/adr/0074-device-native-rate-resolution.md`（Status）
 - Modify: `docs/adr/README.md`（索引の Status 列）
 
 - [ ] **Step 1: スイート全体とヘルスゲート**
@@ -1306,9 +1306,9 @@ PYTHONIOENCODING=utf-8 uv run python -m vspeech --config <実機の config.toml>
 Expected: preflight を通過し、解決したデバイスレートと変換の遅延がログに出る。例:
 `use input device 17: Microphone Array (Realtek(R) Au @48000Hz (WASAPI の同名デバイス (MME 経由)) -> 16000Hz 変換`
 
-- [ ] **Step 3: ADR-0070 の事前充填の記述を実測に合わせて訂正**
+- [ ] **Step 3: ADR-0073 の事前充填の記述を実測に合わせて訂正**
 
-ADR-0070 は実装前に書いたため、Decision に「入口では群遅延ぶんの無音で事前充填する」と書いてある。**実測（Task 1 の `test_fixed_hop_cadence_needs_no_priming`）で不要と判明**したので、Accepted へ昇格させる前に該当箇所を次に差し替える:
+ADR-0073 は実装前に書いたため、Decision に「入口では群遅延ぶんの無音で事前充填する」と書いてある。**実測（Task 1 の `test_fixed_hop_cadence_needs_no_priming`）で不要と判明**したので、Accepted へ昇格させる前に該当箇所を次に差し替える:
 
 ```markdown
 - **固定ブロックへ再ブロック化する入口でも、事前充填は要らない。** 因果ポリフェーズは出力本数が `ceil(L*n/M)` で欠けないため、1 device tick あたり 1 ブロックがそのまま出る(実測で配信遅れ min=max=0)。事前充填が要るのは soxr のように滞留を内部に抱える実装で、そこでは滞留が丸ごと 1 hop の遅延に量子化される(実測 +160ms)。この差が自前実装を選んだ理由そのものなので、Alternatives rejected の soxr 項と合わせて読むこと。
@@ -1318,7 +1318,7 @@ Alternatives rejected の「入口で事前充填せず、滞留を許容する 
 
 - [ ] **Step 4: ADR を Accepted へ昇格**
 
-`docs/adr/0070-*.md` と `docs/adr/0071-*.md` の `- Status: Proposed` を `- Status: Accepted` に変え、`docs/adr/README.md` の索引 2 行の Status 列も `Accepted` にする。
+`docs/adr/0073-*.md` と `docs/adr/0074-*.md` の `- Status: Proposed` を `- Status: Accepted` に変え、`docs/adr/README.md` の索引 2 行の Status 列も `Accepted` にする。
 
 - [ ] **Step 5: 実機の耳確認（ユーザーに依頼する）**
 
@@ -1333,7 +1333,7 @@ Alternatives rejected の「入口で事前充填せず、滞留を許容する 
 
 ```bash
 git add docs/adr/
-git commit -m "docs(adr): ADR-0070/0071 を Accepted へ昇格し、事前充填の記述を実測に合わせる"
+git commit -m "docs(adr): ADR-0073/0074 を Accepted へ昇格し、事前充填の記述を実測に合わせる"
 ```
 
 ---

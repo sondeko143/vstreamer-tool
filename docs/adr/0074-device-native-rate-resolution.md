@@ -1,12 +1,12 @@
-# 0071. デバイスのネイティブレートを WASAPI カウンターパートから自動解決し、設定で上書きできるようにする
+# 0074. デバイスのネイティブレートを WASAPI カウンターパートから自動解決し、設定で上書きできるようにする
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-10
-- Related: [spec](../superpowers/specs/2026-08-10-device-sample-rate-in-process-design.md), [0070](0070-device-boundary-inhouse-polyphase-resampler.md)（本 ADR はその前提を満たす）, [0038](0038-worker-config-preflight-fail-loud.md)
+- Related: [spec](../superpowers/specs/2026-08-10-device-sample-rate-in-process-design.md), [0073](0073-device-boundary-inhouse-polyphase-resampler.md)（本 ADR はその前提を満たす）, [0038](0038-worker-config-preflight-fail-loud.md)
 
 ## Context
 
-[0070](0070-device-boundary-inhouse-polyphase-resampler.md) はデバイスをネイティブレートで開くと決めた。そのためには真のレートを知る必要があるが、PortAudio の報告値は当てにならない。
+[0073](0073-device-boundary-inhouse-polyphase-resampler.md) はデバイスをネイティブレートで開くと決めた。そのためには真のレートを知る必要があるが、PortAudio の報告値は当てにならない。
 
 - **PortAudio は MME / DirectSound / WDM-KS のデバイスに対し `default_samplerate` を 44100 固定で返す。** 実測: この機体の MME 36 デバイスと DirectSound 36 デバイスは、48kHz で動作中の Voicemeeter / Realtek エンドポイントも含めて全部 44100 と答える。
 - **MME はプローブにも答えない。** `check_input_settings` は 16000 / 44100 / 48000 のどれを渡しても OK を返す（実測）。候補レートを試して当てる方法は成立しない。
@@ -27,7 +27,7 @@
 
 ## Alternatives rejected
 
-- **`default_samplerate` をそのまま使う** — MME/DirectSound で 44100 固定の嘘を返すため、48kHz のエンドポイントでは 48000→44100 の OS リサンプルが残る。[0070](0070-device-boundary-inhouse-polyphase-resampler.md) の目的（OS の変換段を通らない）を、最も使われているホスト API で達成できない。
+- **`default_samplerate` をそのまま使う** — MME/DirectSound で 44100 固定の嘘を返すため、48kHz のエンドポイントでは 48000→44100 の OS リサンプルが残る。[0073](0073-device-boundary-inhouse-polyphase-resampler.md) の目的（OS の変換段を通らない）を、最も使われているホスト API で達成できない。
 - **`check_*_settings` でレート候補をプローブする** — MME はどのレートでも OK を返すので判別できない。WASAPI では効くが、WASAPI は `default_samplerate` が既に正しいのでプローブが要らない。効かせたい相手にだけ効かない。
 - **設定を必須にする（未指定なら preflight エラー）** — ヒューリスティックを背負わずに済むが、実測でこの機体の MME/DirectSound 45 デバイス中 43 が一意に解決できる。解けるものまで含めて全ユーザーに Windows のサウンド設定を見ながら 4 項目書かせるのは、誤設定の総量をむしろ増やす。自動を既定にし、解けないときだけ明示させる。
 - **「OS 任せに戻す」真偽フラグを別に持つ** — レートを明示指定すれば同じ結果になるので、設定面を 1 つ増やす価値がない。
@@ -35,8 +35,8 @@
 
 ## Consequences
 
-- 設定を何も書かなくても動く。解決できないのは「Microsoft サウンド マッパー」「プライマリ サウンド ドライバー」のような疑似デバイスだけで（実測でこの 2 つのみ）、その場合は起動時に落ちてどのキーを書けばよいかが出る。
+- 設定を何も書かなくても動く。解決できないのは、「Microsoft サウンド マッパー」「プライマリ サウンド ドライバー」のような疑似デバイス（実測でこの機体では入出力あわせて 4 個）と、下記のとおり前方一致が届かない WDM-KS の全デバイス（同 64 個）で、その場合は起動時に落ちてどのキーを書けばよいかが出る。
 - **名前の前方一致というヒューリスティックを 1 つ背負う。** 同名デバイスが複数あってもミックスレートが揃っていれば解決でき、食い違えば fail-loud に倒れる。黙って間違ったレートを選ぶ経路は作らない。
 - **WDM-KS は前方一致で解けない。** デバイス名の付け方が WASAPI と違う（`Line 1 (Virtual Cable 1)` vs `Line 1 (Virtual Audio Cable)`）。WDM-KS を使うなら明示指定が要る。WDM-KS を既定にする予定は無いので許容する。
 - ログに解決経路が残るので、「なぜこのレートで開いたか」を後から追える。デバイス構成を変えたときの切り分けが効く。
-- 設定項目が 4 つ増える。すべて `None` 既定なので、既存の config ファイルはそのまま読める。
+- 設定項目が 4 つ増える。すべて `None` 既定なので、既存の config ファイルはそのまま読める — ただしこれは**パースの話としてのみ**真である。レゾルバが実際に配線されると（[0073](0073-device-boundary-inhouse-polyphase-resampler.md) の実装, Task 5/7/9）、WDM-KS のデバイスを指した既存の動く設定は、レートを解決できないため明示指定するまで起動を拒否するようになる。これは移行破壊であり、spec と [0073](0073-device-boundary-inhouse-polyphase-resampler.md) の「WDM-KS が選べるようになる」という利点の裏面として認識しておく必要がある。

@@ -33,7 +33,7 @@ def test_detect_gap_reorder_or_dup_is_zero():
     assert detect_gap(7, 5) == 0  # out-of-order/dup -> not a forward gap
 
 
-# --- Native-rate open + in-process conversion (ADR-0070 / ADR-0071) ------------------
+# --- Native-rate open + in-process conversion (ADR-0073 / ADR-0074) ------------------
 
 _MME = 0
 _WASAPI = 1
@@ -128,7 +128,7 @@ def _peak_frequency(pcm: bytes, rate: int) -> float:
 def test_a_packet_at_the_device_rate_is_written_untouched() -> None:
     """No resampler in the path: the bytes handed to the device are the packet's own.
 
-    Identity, not equality -- this path must stay bit-identical to the pre-ADR-0070 code,
+    Identity, not equality -- this path must stay bit-identical to the pre-ADR-0073 code,
     which wrote `packet.pcm` straight to the stream.
     """
     sink = _sink(DEVICE_RATE)
@@ -397,7 +397,7 @@ async def test_playback_loop_opens_at_the_device_rate_and_converts_the_packets(
     opened_streams: list[_FakeDevice],
 ) -> None:
     """End to end: the device table says 48000, the packets say 16000, and the open goes
-    with the device (ADR-0070). Opening at packet.sample_rate is what this replaces."""
+    with the device (ADR-0073). Opening at packet.sample_rate is what this replaces."""
     packets = _packets(4)
     with pytest.raises(_EndOfTest):
         await playback_loop(

@@ -39,7 +39,7 @@ def device_frames_per_read(chunk: int, device_rate: int, config_rate: int) -> in
     """How many device-rate frames make up one `chunk`-sized block at config_rate.
 
     Mirrors stream_vc/capture.py's device_frames_per_read, parameterized by the
-    recording pipeline's own rate instead of a fixed CAPTURE_RATE (ADR-0070).
+    recording pipeline's own rate instead of a fixed CAPTURE_RATE (ADR-0073).
     """
     if device_rate == config_rate:
         return chunk
@@ -54,7 +54,7 @@ def open_input_stream(config: RecordingConfig) -> tuple[sd.RawInputStream, int]:
     lookup and the stream's own shape are decided here. Asking the device for
     `config.rate` directly would hand the conversion to the OS, whose filter we can
     neither test nor log, and WASAPI shared mode refuses any rate but its mix format
-    (ADR-0070/0071).
+    (ADR-0073/0074).
     """
     device = resolve_input_device(config)
     return open_device_stream(
@@ -82,7 +82,7 @@ def convert_chunk(
     config.rate frames those bytes represent.
 
     Returns `data` untouched when `resampler` is None (the device already runs at
-    config.rate), which keeps that path bit-identical to the pre-ADR-0070 code --
+    config.rate), which keeps that path bit-identical to the pre-ADR-0073 code --
     decode+encode is not bit-exact at full-scale values (e.g. int16 -32768 round-trips
     to -32767 through decode_pcm/encode_pcm), so skipping the round trip matters, not
     just its cost.
@@ -156,7 +156,7 @@ async def sd_recording_worker(
         # either way, but a fresh resampler starts from a zeroed filter tail, so
         # rebuilding per read would put a transient at every chunk boundary. None on a
         # matching rate keeps the pass-through path bit-identical to the
-        # pre-ADR-0070 code.
+        # pre-ADR-0073 code.
         resampler = make_resampler(device_rate, config.rate)
         frames_per_read = device_frames_per_read(config.chunk, device_rate, config.rate)
         try:
@@ -196,9 +196,9 @@ async def sd_recording_worker(
                         # interval_sec=0.1, rate=16000: threshold=1600 frames, but reads land
                         # on 1024/2048/... so a tick fires every 2048 frames = 0.128s of real
                         # audio credited as only 0.1s), a configured 0.25s cap is closer to
-                        # ~0.32s in practice. Pre-existing (unchanged by ADR-0070's
+                        # ~0.32s in practice. Pre-existing (unchanged by ADR-0073's
                         # device-rate read -- at a matching rate the read size and the
-                        # overshoot geometry are identical to the pre-ADR-0070 code); out of
+                        # overshoot geometry are identical to the pre-ADR-0073 code); out of
                         # this task's scope. A fix would need to measure real elapsed frames
                         # per tick instead of crediting a constant.
                         total_seconds_of_this_recording += config.interval_sec

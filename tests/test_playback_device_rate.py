@@ -1,5 +1,5 @@
 """Native-rate open + per-utterance conversion for the utterance playback path
-(ADR-0070/0071, Task 8).
+(ADR-0073/0074, Task 8).
 
 Mirrors the fixture shapes already used in tests/test_recording_device_rate.py and
 tests/test_stream_vc_playback.py (there is no tests/conftest.py in this repo, so per-file
@@ -210,7 +210,7 @@ def test_output_device_is_opened_at_the_resolved_native_rate(
 ) -> None:
     """The endpoint really runs at 48000, so that is what is opened -- not the 24000Hz the
     utterance happens to carry. Asking for the source's rate would hand the conversion to
-    the OS, and WASAPI shared mode would refuse the open outright (ADR-0070)."""
+    the OS, and WASAPI shared mode would refuse the open outright (ADR-0073)."""
     with caplog.at_level(logging.INFO):
         output = _opened()
         output.convert(_sine(TTS_RATE, 240), TTS_RATE, SampleFormat.INT16, 1)
@@ -274,7 +274,7 @@ def test_a_device_reporting_another_rate_is_warned_about(
 def test_a_source_rate_change_does_not_reopen_the_device(
     opened_streams: list[_FakeDevice],
 ) -> None:
-    """The headline of ADR-0070 for this boundary: 24000Hz TTS and 40000Hz VC utterances
+    """The headline of ADR-0073 for this boundary: 24000Hz TTS and 40000Hz VC utterances
     alternating used to close and reopen the device on every single one."""
     output = _opened()
     for rate in (TTS_RATE, VC_RATE, TTS_RATE, VC_RATE):
@@ -319,7 +319,7 @@ def test_a_source_at_the_device_rate_is_written_untouched(
 ) -> None:
     """No resampler in the path: the bytes handed to the device are the utterance's own.
 
-    Identity, not equality -- this path must stay bit-identical to the pre-ADR-0070 code,
+    Identity, not equality -- this path must stay bit-identical to the pre-ADR-0073 code,
     which wrote the source bytes straight to the stream.
     """
     output = _opened()
@@ -541,7 +541,7 @@ async def test_the_volume_is_applied_exactly_as_before(
     opened_streams: list[_FakeDevice],
 ) -> None:
     """At a matching rate the bytes reaching the device are byte-for-byte what the
-    pre-ADR-0070 code wrote: audioop.mul over the source bytes, nothing else."""
+    pre-ADR-0073 code wrote: audioop.mul over the source bytes, nothing else."""
     import audioop
 
     output = _opened()
@@ -637,7 +637,7 @@ async def test_a_device_fault_during_the_write_is_warned_about_and_the_loop_goes
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Unchanged from before ADR-0070: a runtime device fault is logged as a warning and
+    """Unchanged from before ADR-0073: a runtime device fault is logged as a warning and
     the next utterance is attempted."""
     device = _FakeDevice(samplerate=DEVICE_RATE, fail_on_write=1)
     monkeypatch.setattr(playback_mod.sd, "RawOutputStream", lambda **kw: device)
@@ -659,7 +659,7 @@ async def test_a_pathological_utterance_rate_warns_and_the_next_utterance_plays(
 ) -> None:
     """The failure classification of a refused ratio, end to end.
 
-    Before ADR-0070 the same value reached `sd.RawOutputStream(samplerate=...)`, came back
+    Before ADR-0073 the same value reached `sd.RawOutputStream(samplerate=...)`, came back
     as a PortAudioError, was warned about, and the next utterance played. That is exactly
     what must still happen now that the value reaches the filter design instead -- the
     worker must not die on one bad utterance from a remote peer, and must not spend 1.5s
@@ -687,7 +687,7 @@ async def test_an_unresolvable_device_rate_fails_loud(
 ) -> None:
     """A rate that cannot be decided is a config problem, not a device fault: it must NOT
     be swallowed into the per-utterance warning, which would leave the pipeline silently
-    playing nothing forever (ADR-0071, the same as the three other boundaries)."""
+    playing nothing forever (ADR-0074, the same as the three other boundaries)."""
     queue: Queue[WorkerInput] = Queue()
     queue.put_nowait(_speech(_sound(_sine(TTS_RATE, 2400), TTS_RATE)))
     with pytest.raises(DeviceRateUnresolvedError) as excinfo:

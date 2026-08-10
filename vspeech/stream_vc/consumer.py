@@ -6,7 +6,7 @@ one block -> write to the output. Only skew-immune quantities are measured: inte
 jitter and seq gaps (one-way delay is contaminated by clock skew and is deliberately not
 measured, ADR-0056). Output device faults self-heal exactly as in playback.py (lazy
 reopen on the next packet), and the same `OutputSink` opens the device at its own rate
-and converts the packet rate into it in process (ADR-0070) -- numpy only, so the
+and converts the packet rate into it in process (ADR-0073) -- numpy only, so the
 torch-free property of this role is untouched.
 """
 

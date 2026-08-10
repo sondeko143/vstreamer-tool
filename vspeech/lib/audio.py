@@ -199,7 +199,7 @@ def _wasapi_counterpart_rates(name: str, *, input: bool) -> dict[int, set[str]]:
     PortAudio's WMME/DirectSound backends report a hardcoded 44100 for every device,
     so their `default_samplerate` cannot be trusted. Their device names, however, are
     the WASAPI names truncated to 31 characters, which makes the WASAPI row for the
-    same endpoint findable by prefix (ADR-0071).
+    same endpoint findable by prefix (ADR-0074).
 
     Returns a mapping from mix rate to the set of matched WASAPI device names that
     reported it. The caller uses the number of keys to judge uniqueness, and the
@@ -229,9 +229,9 @@ def resolve_device_rate(
     """The rate to open `device` at, plus a human-readable note on how it was decided.
 
     Order: explicit config -> the device's own default_samplerate when it is a WASAPI
-    device -> the mix rate of its WASAPI counterpart (ADR-0071). Anything ambiguous
+    device -> the mix rate of its WASAPI counterpart (ADR-0074). Anything ambiguous
     raises rather than guessing: opening at the wrong rate silently reinstates the OS
-    resampler that ADR-0070 exists to remove. A resolved rate of 0 or less (some host
+    resampler that ADR-0073 exists to remove. A resolved rate of 0 or less (some host
     APIs report this for a device in a bad state) is treated as unresolved too, so a
     broken endpoint fails loud here instead of surfacing later as an opaque English
     ValueError or PortAudio open error.
@@ -340,7 +340,7 @@ def open_device_stream[StreamT: ReportsSampleRate](
     playback boundaries pass None because their other side arrives with the audio.
 
     DeviceRateUnresolvedError from step 1 escapes unhandled: it is a config problem no
-    retry can fix (ADR-0071), and every caller deliberately keeps it out of its device
+    retry can fix (ADR-0074), and every caller deliberately keeps it out of its device
     -fault retry path.
 
     If `open_stream(rate)` itself raises (Pa_OpenStream failing), sounddevice never

@@ -1,5 +1,5 @@
 """Native-rate open + in-process conversion for the utterance recording path
-(ADR-0070/0071, Task 7).
+(ADR-0073/0074, Task 7).
 
 Mirrors the fixture shapes already used in tests/test_stream_vc_capture.py (there is
 no tests/conftest.py in this repo, so per-file duplication is the house pattern).
@@ -134,7 +134,7 @@ def test_input_device_is_opened_at_the_resolved_native_rate(
 ) -> None:
     """The endpoint really runs at 48000, so that is what is opened -- not
     recording.rate (16000 by default). Asking for 16000 would hand the conversion to
-    the OS, and WASAPI shared mode would refuse the open outright (ADR-0070)."""
+    the OS, and WASAPI shared mode would refuse the open outright (ADR-0073)."""
     cfg = RecordingConfig(input_device_index=0)
     with caplog.at_level(logging.INFO):
         stream, rate = open_input_stream(cfg)
@@ -224,7 +224,7 @@ def test_a_device_reporting_the_requested_rate_stays_quiet(
 def test_convert_chunk_pass_through_is_bit_identical_at_full_scale() -> None:
     """No resampler means no decode/encode round trip: decode_pcm/encode_pcm is not
     bit-exact at full scale (int16 -32768 round-trips to -32767), so skipping the
-    round trip is what makes the matching-rate path bit-identical to the pre-ADR-0070
+    round trip is what makes the matching-rate path bit-identical to the pre-ADR-0073
     code."""
     cfg = RecordingConfig()  # INT16 mono, rate=16000
     data = np.array([-32768, 32767, 0, -1, 12345], dtype=np.int16).tobytes()
