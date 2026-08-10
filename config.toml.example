@@ -185,6 +185,11 @@ f0_extractor_type = "rmvpe"
 rmvpe_model_file = "./rmvpe.onnx"
 # fcpe の onnx（f0_extractor_type = "fcpe" のとき必要。uv run poe export-fcpe-onnx で生成）
 fcpe_model_file = "./fcpe.onnx"
+# f0 の中央値フィルタ半径（窓長 = 2r+1）。0 で無効。単発のオクターブ誤りに由来する
+# 「キュッ」という異音を消す。無声フレームを跨がず有声区間ごとに掛けるので、有声の
+# 立ち上がり・切れ際は鈍らない。3 を超えるとストリーミング経路の右文脈（約 30ms）が
+# 足りなくなり、出力へ渡る末尾フレームが実質未フィルタになる (ADR-0070)。
+f0_filter_radius = 1
 
 # ストリーミング VC (ADR-0050〜0054)。発話系 [vc]/[rvc] とは独立した
 # 低遅延・連続(無音区切り無し)の VC。既定 OFF — 有効化すると、発話系パイプラインの
@@ -275,8 +280,9 @@ vad_min_gain = 0.0
 # 左文脈とクロスフェード tail を持つステートフル変換なので、ブロックを飛ばすと文脈に
 # 穴が開き、発話が再開したときの seam が壊れる。減衰するのは emit する音だけ。
 # マスクは窓中心のあいだを線形補間して重ねる(段差=クリックを作らない)。emit は入力より
-# 遅れて出る(crossfade + SOLA + HuBERT 受容野 + lookahead_ms で実測 ~52ms、既定は
-# lookahead_ms=0 のときの値)ので、その遅延を補正してから重ねる。VAD が実行時に
+# 遅れて出る(crossfade + SOLA + HuBERT 受容野 + lookahead_ms。lookahead_ms=0 なら
+# 実測 ~52ms、既定の lookahead_ms=40 では ~92ms)ので、その遅延を補正してから重ねる。
+# VAD が実行時に
 # 失敗したときは音を素通しし(fail-open)、失敗は毎回
 # telemetry (stream_vc_vad_error) に記録し、警告はエピソード単位で間引く。
 
@@ -304,6 +310,18 @@ input_device_index = 0
 output_host_api_name = ""
 output_device_name = ""
 output_device_index = 1
+
+# 入出力ストリームがデバイスへ要求する latency (ADR-0071)。既定は両方 "low" で、
+# これは設定化する前にハードコードされていた値と同じ = 書かなければ挙動は変わらない。
+#   "low"  = デバイス既定の低遅延。実際の秒数はホスト API 依存で、WASAPI と MME で桁が違う
+#   "high" = デバイス既定の高遅延。overflow/underflow が止まらないときの逃げ道
+#   数値   = 秒での明示指定 (例 0.02 = 20ms)。low と high の中間を狙うとき
+# 入力(マイク)と出力(再生)は別デバイス、role を分ければ別マシンなので、独立に指定する。
+# PortAudio は要求値を保証しない。実際に得られた値は起動時のログ
+# ("stream_vc input/output stream latency: N.NNNs") に出るので、block_ms を詰める前に
+# まずそれを読むこと。
+input_latency = "low"
+output_latency = "low"
 
 # トランスポート種別: "in_process"(既定, 単一マシン内で完結) | "udp"(M3 の2マシン分離,
 # ADR-0051/0055)。role が local のままなら in_process のまま変えない。role を

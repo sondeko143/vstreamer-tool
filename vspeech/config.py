@@ -4,6 +4,7 @@ from enum import Enum
 from enum import IntEnum
 from pathlib import Path
 from typing import IO
+from typing import Annotated
 from typing import Any
 from typing import Literal
 
@@ -19,6 +20,11 @@ from toml.encoder import TomlArraySeparatorEncoder
 from vspeech.exceptions import ReplaceFilterParseError
 
 type Anchor = Literal["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"]
+
+# The device latency requested of PortAudio (ADR-0071). "low"/"high" are the device's
+# own defaults; a float is an explicit suggestedLatency **in seconds** -- sounddevice's
+# own unit, so the value is handed over without conversion.
+type DeviceLatency = Literal["low", "high"] | Annotated[float, Field(gt=0)]
 
 
 class SampleFormat(IntEnum):
@@ -376,6 +382,14 @@ class RvcConfig(BaseModel):
     gpu_id: int | None = Field(default=None)
     gpu_name: str = Field(default="")
     f0_extractor_type: F0ExtractorType = Field(default=F0ExtractorType.rmvpe)
+    f0_filter_radius: int = Field(
+        default=1,
+        ge=0,
+        le=7,
+        description="f0 の中央値フィルタ半径 (窓長 = 2r+1、0 で無効)。無声フレームを"
+        "跨がず有声区間ごとに適用する。3 を超えると streaming の右文脈が足りず、"
+        "出力へ渡る末尾フレームが実質未フィルタになる (ADR-0070)",
+    )
     input_boost: float = Field(default=1.0)
     rmvpe_model_file: Path = Field(default=Path())
     fcpe_model_file: Path = Field(default=Path())
@@ -558,6 +572,24 @@ class StreamVcConfig(BaseModel):
     output_host_api_name: str | None = Field(default=None)
     output_device_name: str | None = Field(default=None)
     output_device_index: int | None = Field(default=None)
+    # Handed to sounddevice untouched (ADR-0071). The default matches the value that
+    # used to be hardcoded, so an existing config opens exactly as before. Input and
+    # output are separate fields because they are separate devices -- separate machines
+    # once role is producer/consumer (ADR-0055).
+    input_latency: DeviceLatency = Field(
+        default="low",
+        description="入力(マイク)ストリームがデバイスへ要求する latency。"
+        '"low"/"high" はデバイス既定の低/高遅延、数値は秒での明示指定(例 0.02 = 20ms)。'
+        "低すぎると overflow が止まらず、高すぎると block_ms を詰めても取り返せない。"
+        "実際に得られた値は open 時のログに出る(要求値は保証されない)",
+    )
+    output_latency: DeviceLatency = Field(
+        default="low",
+        description="出力(再生)ストリームがデバイスへ要求する latency。"
+        '"low"/"high" はデバイス既定の低/高遅延、数値は秒での明示指定(例 0.02 = 20ms)。'
+        "低すぎると underflow が止まらず、高すぎると block_ms を詰めても取り返せない。"
+        "実際に得られた値は open 時のログに出る(要求値は保証されない)",
+    )
     transport_type: TransportType = Field(default=TransportType.in_process)
     max_queued_blocks: int = Field(
         default=8, gt=0, description="capture/transport の上限。満杯で最古を drop"

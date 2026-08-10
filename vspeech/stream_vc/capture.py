@@ -57,15 +57,25 @@ def pcm16_to_float32(data: bytes) -> NDArray[np.float32]:
 
 def open_stream_vc_input_stream(config: StreamVcConfig, hop: int) -> sd.RawInputStream:
     device = resolve_stream_vc_input_device(config)
-    logger.info("stream_vc input device %s: %s", device.index, device.name)
+    # Logged before the open so a failing open still says which device was attempted.
+    logger.info(
+        "stream_vc input device %s: %s (latency %s requested)",
+        device.index,
+        device.name,
+        config.input_latency,
+    )
     stream = sd.RawInputStream(
         samplerate=CAPTURE_RATE,
         blocksize=hop,
         device=device.index,
         channels=1,
         dtype="int16",
-        latency="low",
+        latency=config.input_latency,
     )
+    # PortAudio does not have to honour the request, and "low" resolves to a different
+    # number per host API. Report what was actually granted, before start() so a failing
+    # start still leaves the number in the log.
+    logger.info("stream_vc input stream latency: %.3fs", stream.latency)
     stream.start()
     return stream
 

@@ -389,6 +389,7 @@ def _select_pitch(
         16000,
         rvc_config.window,
         f0_extractor=rvc_config.f0_extractor_type,
+        f0_filter_radius=rvc_config.f0_filter_radius,
         f0_session=f0_session,
         silence_front=0,
     )

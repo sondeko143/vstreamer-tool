@@ -4,7 +4,6 @@ from typing import cast
 import numpy as np
 from numpy.typing import NDArray
 from onnxruntime import InferenceSession
-from scipy import signal
 from torch import Tensor
 
 from vspeech.config import F0ExtractorType
@@ -15,6 +14,43 @@ class PitchExtractor:
 
 
 RMVPE_THRESHOLD = 0.3
+
+
+def median_filter_f0(
+    f0: NDArray[np.floating[Any]], radius: int
+) -> NDArray[np.floating[Any]]:
+    """Median-filter f0 inside each voiced run (RVC's `filter_radius`, ADR-0070).
+
+    Kills the isolated single-frame octave errors rmvpe/fcpe emit. Extraction is
+    block-wise with no continuity constraint across blocks, so one bad frame otherwise
+    reaches the NSF unopposed and rings as a short artefact.
+
+    Unvoiced frames (0) never enter a window and are returned untouched. A window
+    spanning the 0 boundary would drag the run's first voiced frame toward min(),
+    blunting voiced onsets more audibly than the artefact being removed -- so each
+    maximal run of f0 > 0 is filtered on its own, with run borders padded by edge
+    replication rather than zeros.
+
+    Edge replication also makes the array's final frame an identity (the replicated
+    copies are a strict majority of the window), so this filter needs no lookahead and
+    adds no latency. In the streaming path the emitted region ends about 3 frames before
+    the array end, so every emitted frame still gets a genuine two-sided window at
+    radius <= 3; beyond that the tail degrades to unfiltered rather than wrong.
+    """
+    if radius <= 0:
+        return f0
+    kernel = 2 * radius + 1
+    out = f0.copy()
+    # Run boundaries from the transitions of the voiced mask, bracketed by False so a run
+    # touching either end is closed. np.diff on a bool array is XOR, so the flat indices
+    # come out as alternating (start, stop) pairs.
+    voiced = f0 > 0
+    edges = np.flatnonzero(np.diff(np.concatenate(([False], voiced, [False]))))
+    for start, stop in zip(edges[::2], edges[1::2], strict=True):
+        padded = np.pad(f0[start:stop], radius, mode="edge")
+        windows = np.lib.stride_tricks.sliding_window_view(padded, kernel)
+        out[start:stop] = np.median(windows, axis=1)
+    return out
 
 
 def _pyworld():
@@ -44,11 +80,13 @@ def pitch_extract_harvest(
         f0_ceil=f0_max,
         frame_period=10,
     )
-    f0 = cast(
+    # No medfilt here any more: the shared voiced-run filter in pitch_extract covers
+    # every extractor uniformly (ADR-0070). At the default radius 1 the kernel is the
+    # same 3 this used to apply, minus the zeros that used to bleed across voiced runs.
+    return cast(
         NDArray[np.double],
         pyworld.stonemask(audio.astype(np.double), f0_, t, sr),
     )
-    return signal.medfilt(f0, 3)
 
 
 def pitch_extract_dio(
@@ -157,6 +195,7 @@ def pitch_extract(
     sr: int,
     window: int,
     f0_extractor: F0ExtractorType,
+    f0_filter_radius: int,
     f0_session: InferenceSession | None,
     silence_front: int = 0,
 ) -> tuple[NDArray[Any], NDArray[np.floating[Any]]]:
@@ -190,6 +229,9 @@ def pitch_extract(
     else:
         raise ValueError("unknown f0 extractor type")
 
+    # Applied here rather than after the f0_up_key scaling only for readability: the
+    # median commutes with a positive scalar multiple, so the result is identical.
+    f0 = median_filter_f0(f0, f0_filter_radius)
     f0 *= pow(2, f0_up_key / 12)
     # f0 is returned raw (f0bak); the caller (_select_pitch) truncates it to
     # p_len and aligns it to the feature length. rmvpe/harvest/dio all return
