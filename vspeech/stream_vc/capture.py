@@ -1,9 +1,12 @@
 """The independent mic capture of streaming VC (ADR-0052).
 
-Leaves the utterance-path recording untouched and opens the mic separately at 16k mono,
-emitting float32 blocks of a fixed hop. The fan-out fallback for environments where an
-exclusive device rejects a second open is unimplemented (it remains a design in
-ADR-0052).
+Leaves the utterance-path recording untouched and opens the mic separately in mono,
+emitting float32 blocks of a fixed hop at CAPTURE_RATE. The device is opened at its own
+native rate and the conversion down to CAPTURE_RATE happens here, in process
+(ADR-0070/0071) -- asking the device for 16 kHz would hand the conversion to the OS,
+whose filter we can neither test nor log, and WASAPI shared mode refuses any rate but
+its mix format. The fan-out fallback for environments where an exclusive device rejects
+a second open is unimplemented (it remains a design in ADR-0052).
 """
 
 from asyncio import Event
@@ -16,8 +19,11 @@ import sounddevice as sd
 from numpy.typing import NDArray
 
 from vspeech.config import StreamVcConfig
+from vspeech.lib.audio import resolve_device_rate
 from vspeech.lib.audio import resolve_stream_vc_input_device
 from vspeech.lib.log_throttle import LogThrottle
+from vspeech.lib.resample import PolyphaseResampler
+from vspeech.lib.resample import make_resampler
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
 from vspeech.stream_vc.retry import run_with_device_retry
@@ -55,19 +61,128 @@ def pcm16_to_float32(data: bytes) -> NDArray[np.float32]:
     return np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
 
 
-def open_stream_vc_input_stream(config: StreamVcConfig, hop: int) -> sd.RawInputStream:
+def device_frames_per_read(hop: int, device_rate: int) -> int:
+    """How many device frames make up one `hop`-sample block at CAPTURE_RATE.
+
+    One read is one block's worth of time, and the polyphase resampler is causal (it
+    holds nothing back), so one read yields one block -- the cadence the queue had back
+    when the device itself ran at CAPTURE_RATE. That is why nothing here pre-fills the
+    accumulator: priming is what a resampler with internal latency would need, and doing
+    it anyway would delay every block by a whole hop (ADR-0070).
+    """
+    if device_rate == CAPTURE_RATE:
+        return hop
+    return max(1, round(hop * device_rate / CAPTURE_RATE))
+
+
+class InputRateConverter:
+    """Turns one device read into whole `hop`-sample blocks at CAPTURE_RATE.
+
+    Holds the two pieces of state a device reopen must discard together: the polyphase
+    filter tail and the samples left over from the previous read. `_capture_read_loop`
+    builds one per open, so a reopen cannot carry either into the new stream.
+
+    A device that already runs at CAPTURE_RATE builds no resampler and passes the read
+    straight through, which keeps that path bit-identical to the pre-ADR-0070 code.
+    """
+
+    def __init__(self, device_rate: int, hop: int) -> None:
+        self.device_rate = device_rate
+        self.hop = hop
+        self.resampler: PolyphaseResampler | None = make_resampler(
+            device_rate, CAPTURE_RATE
+        )
+        self.frames_per_read = device_frames_per_read(hop, device_rate)
+        self._pending: NDArray[np.float32] = np.zeros(0, dtype=np.float32)
+
+    def blocks(self, samples: NDArray[np.float32]) -> list[NDArray[np.float32]]:
+        """The whole blocks this read completes -- steadily exactly one of them.
+
+        Whatever is left over past the last whole block stays here and starts the next
+        one. The ratio need not divide evenly (`device_rate * hop / CAPTURE_RATE` is not
+        always an integer), so a read that comes up a few samples short or long must
+        neither drop them nor emit a short block: the runner's gate and envelope assume
+        a fixed block length.
+        """
+        if self.resampler is None:
+            return [samples]
+        converted = self.resampler.process(samples)
+        if self._pending.size:
+            converted = np.concatenate([self._pending, converted])
+        whole = converted.size - converted.size % self.hop
+        # Copies, not views: the blocks outlive `converted` on the queue, and keeping
+        # the leftover a view would pin the whole buffer behind it.
+        self._pending = converted[whole:].copy()
+        return [converted[i : i + self.hop].copy() for i in range(0, whole, self.hop)]
+
+
+def open_stream_vc_input_stream(
+    config: StreamVcConfig, hop: int
+) -> tuple[sd.RawInputStream, int]:
+    """Open the mic at its native rate; return the stream and that rate.
+
+    The rate is resolved on every open rather than once at startup, because the device
+    itself is re-resolved on every open too and a reopen can land on a different
+    endpoint (ADR-0071). The caller needs the rate back to build the converter, and
+    run_with_device_retry hands whatever `open_stream` returns straight to
+    `close_quietly()`, so the pair is unpacked by capture_loop's opener rather than
+    returned from it.
+    """
     device = resolve_stream_vc_input_device(config)
-    logger.info("stream_vc input device %s: %s", device.index, device.name)
+    rate, how = resolve_device_rate(
+        device,
+        config.input_device_rate,
+        input=True,
+        config_key="stream_vc.input_device_rate",
+    )
+    # Logged before the open so a failing open still says what was attempted.
+    logger.info(
+        "stream_vc input device %s: %s @%dHz (%s) -> %dHz (%s)",
+        device.index,
+        device.name,
+        rate,
+        how,
+        CAPTURE_RATE,
+        "プロセス内で変換" if rate != CAPTURE_RATE else "変換なし",
+    )
     stream = sd.RawInputStream(
-        samplerate=CAPTURE_RATE,
-        blocksize=hop,
+        samplerate=rate,
+        blocksize=device_frames_per_read(hop, rate),
         device=device.index,
         channels=1,
         dtype="int16",
         latency="low",
     )
     stream.start()
-    return stream
+    return stream, rate
+
+
+def _put_block(
+    out_queue: Queue[CaptureItem],
+    block: NDArray[np.float32],
+    running: Event,
+    drop_throttle: LogThrottle,
+) -> None:
+    """Put one block on the queue, attributing a drop to the right stage."""
+    if drop_oldest_put(out_queue, block):
+        return
+    if not running.is_set():
+        # While paused vc_loop stops consuming, so the queue stays full and every
+        # subsequent block is dropped. That is exactly the behaviour ADR-0050 intended
+        # (do not accumulate paused audio) and not an anomaly, so no warning. Warning
+        # every time would emit about 6 lines a second at block_ms=160 for the whole
+        # pause and make the warning meaningless. They are still not discarded silently:
+        # they are counted under a pause-specific stage -- mixing them into the same
+        # stage would pollute the backpressure metric (stream_vc_capture_drop, used to
+        # assess RTF) with the length of the pause.
+        telemetry.record("stream_vc_capture_drop_paused", 1.0)
+        return
+    telemetry.record("stream_vc_capture_drop", 1.0)
+    if (n := drop_throttle.hit()) is not None:
+        logger.warning(
+            "stream_vc capture queue full; dropped oldest block (total %d)",
+            n,
+        )
 
 
 async def _capture_read_loop(
@@ -75,8 +190,9 @@ async def _capture_read_loop(
     hop: int,
     out_queue: Queue[CaptureItem],
     running: Event,
+    device_rate: int,
 ) -> None:
-    """Steady state: keep reading hop samples at a time until a device fault.
+    """Steady state: keep reading one block's worth of device frames until a fault.
 
     Device loss surfaces as stream.read() raising (OSError, sd.PortAudioError). It is not
     caught here; it escapes to run_with_device_retry, which recovers within the subsystem
@@ -89,6 +205,11 @@ async def _capture_read_loop(
     (`context.running`). Capture is **not** stopped by it -- ADR-0050 decided that
     capture keeps running while paused and drop_oldest_put discards the backlog; it is
     consulted here only to avoid misreporting those drops as an anomaly.
+
+    `device_rate` is the rate the stream was opened at, not `stream.samplerate`:
+    PortAudio may report a hardware rate that differs by a hair, and an off-by-one rate
+    turns a small L/M ratio into a gigantic one (16000 phases for 44099 -> 16000). We
+    asked for a rate the device accepted, so that is the ratio to filter with.
     """
     # A drop while running = real backpressure. Throttle by time (ADR-0062).
     drop_throttle = LogThrottle()
@@ -97,32 +218,18 @@ async def _capture_read_loop(
     # time and meter it every occurrence -- exactly what its counterpart on the sink side
     # (playback.py's paOutputUnderflowed) already does.
     overflow_throttle = LogThrottle()
+    # Built here rather than in capture_loop: run_with_device_retry calls run(stream)
+    # afresh after every reopen, so this coroutine's lifetime IS one stream's lifetime,
+    # and the filter tail plus the half-filled block die with it.
+    converter = InputRateConverter(device_rate, hop)
     while True:
-        data, overflowed = await to_thread(stream.read, hop)
+        data, overflowed = await to_thread(stream.read, converter.frames_per_read)
         if overflowed:
             telemetry.record("stream_vc_capture_overflow", 1.0)
             if (n := overflow_throttle.hit()) is not None:
                 logger.warning("stream_vc capture input overflow (total %d)", n)
-        block = pcm16_to_float32(bytes(data))
-        if not drop_oldest_put(out_queue, block):
-            if not running.is_set():
-                # While paused vc_loop stops consuming, so the queue stays full and every
-                # subsequent block is dropped. That is exactly the behaviour ADR-0050
-                # intended (do not accumulate paused audio) and not an anomaly, so no
-                # warning. Warning every time would emit about 6 lines a second at
-                # block_ms=160 for the whole pause and make the warning meaningless.
-                # They are still not discarded silently: they are counted under a
-                # pause-specific stage -- mixing them into the same stage would pollute
-                # the backpressure metric (stream_vc_capture_drop, used to assess RTF)
-                # with the length of the pause.
-                telemetry.record("stream_vc_capture_drop_paused", 1.0)
-                continue
-            telemetry.record("stream_vc_capture_drop", 1.0)
-            if (n := drop_throttle.hit()) is not None:
-                logger.warning(
-                    "stream_vc capture queue full; dropped oldest block (total %d)",
-                    n,
-                )
+        for block in converter.blocks(pcm16_to_float32(bytes(data))):
+            _put_block(out_queue, block, running, drop_throttle)
 
 
 async def capture_loop(
@@ -132,10 +239,12 @@ async def capture_loop(
     ready: Event,
     running: Event,
 ) -> None:
-    """Read hop samples at a time from the mic and push float32 blocks to out_queue.
+    """Read one block's worth of mic audio at a time and push hop-sample float32 blocks
+    at CAPTURE_RATE to out_queue.
 
     The first open is fail-loud (worker_startup); runtime device faults after that
-    reconnect on their own (ADR-0050). Capture itself carries no state across a reopen,
+    reconnect on their own (ADR-0050). Capture's own state (the resampler's filter tail
+    and the partial block) dies with the read loop, so nothing of it crosses a reopen,
     but the runner (vc_loop, a separate task) is still holding a rolling context and
     crossfade tail from seconds ago, so a CaptureSignal.REOPEN sentinel is pushed onto
     capture_queue at the reopen boundary to prompt the runner to reset its context (it
@@ -152,14 +261,33 @@ async def capture_loop(
     def _signal_reopen() -> None:
         drop_oldest_put(out_queue, CaptureSignal.REOPEN)
 
+    # The rate the mic is currently open at. It travels from the opener to the read loop
+    # through this closure because run_with_device_retry is bound to `[T: _Closable]` and
+    # passes open_stream's return value to close_quietly(), so the opener can only return
+    # the stream itself. The initial value is never read: run_with_device_retry only
+    # calls _read after _open has returned, and a first open that fails raises out of
+    # worker_startup instead.
+    device_rate = CAPTURE_RATE
+
+    def _open() -> sd.RawInputStream:
+        nonlocal device_rate
+        stream, device_rate = open_stream_vc_input_stream(config, hop)
+        return stream
+
+    async def _read(stream: sd.RawInputStream) -> None:
+        # device_rate is read when run_with_device_retry calls this, which is always
+        # after the (re)open above -- so a reopen that lands on a different rate is
+        # honoured instead of being filtered with the old ratio.
+        await _capture_read_loop(stream, hop, out_queue, running, device_rate)
+
     # Wait for the VC warmup to finish before opening the mic. Opening earlier lets the
     # audio that accumulated in real time during model loading flood the queue right
     # after startup, causing a storm of drops and filling the first few hundred ms with
     # stale audio (confirmed in the logs on real hardware).
     await ready.wait()
     await run_with_device_retry(
-        open_stream=lambda: open_stream_vc_input_stream(config, hop),
-        run=lambda stream: _capture_read_loop(stream, hop, out_queue, running),
+        open_stream=_open,
+        run=_read,
         worker="stream_vc",
         label="stream vc capture",
         on_reopen=_signal_reopen,
