@@ -259,8 +259,8 @@ def geometry_summary(
     return (
         f"stream_vc geometry: 解析窓 {window_ms:.0f}ms "
         f"(context {sv_config.context_ms:.0f} + lookahead {sv_config.lookahead_ms:.0f}"
-        f" + block {sv_config.block_ms:.0f}), emit 遅延 {delay_ms:.1f}ms, "
-        f"lookahead による付加遅延 {sv_config.lookahead_ms:.0f}ms"
+        f" + block {sv_config.block_ms:.0f}), emit 遅延 {delay_ms:.1f}ms "
+        f"(うち lookahead 由来 {sv_config.lookahead_ms:.0f}ms)"
     )
 
 

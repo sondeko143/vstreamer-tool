@@ -83,5 +83,6 @@ def test_geometry_summary_reports_the_window_and_both_delays():
     sv = StreamVcConfig(context_ms=500.0, block_ms=160.0, lookahead_ms=160.0)
     line = geometry_summary(sv, emit_delay_samples=8400, target_sample_rate=40000)
     assert "解析窓 820ms" in line  # 500 + 160 + 160
-    assert "emit 遅延 210.0ms" in line  # 8400 / 40000
-    assert "付加遅延 160ms" in line
+    # emit 遅延 is the total; lookahead's contribution is a component of it, not an
+    # additive figure alongside it (a former wording invited exactly that misreading).
+    assert "emit 遅延 210.0ms (うち lookahead 由来 160ms)" in line  # 8400 / 40000

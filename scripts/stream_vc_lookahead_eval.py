@@ -211,25 +211,15 @@ def run_streaming(
     import time
 
     from scripts.capture_change_voice_golden import seed_all
-    from vspeech.lib.stream_vc import StreamingVc
     from vspeech.stream_vc.capture import ms_to_samples
+    from vspeech.stream_vc.runner import make_streaming_vc
 
     block_len = ms_to_samples(sv_config.block_ms)
-    sv = StreamingVc(
-        rvc_config=rt["rvc_config"],
-        device=rt["device"],
-        hubert_model=rt["hubert_model"],
-        session=rt["session"],
-        f0_session=rt["f0_session"],
-        target_sample_rate=rt["target_sample_rate"],
-        f0_enabled=rt["f0_enabled"],
-        emb_output_layer=rt["emb_output_layer"],
-        use_final_proj=rt["use_final_proj"],
-        block_len=block_len,
-        context_len=ms_to_samples(sv_config.context_ms + lookahead_ms),
-        crossfade_len=ms_to_samples(sv_config.crossfade_ms),
-        sola_search_len=ms_to_samples(sv_config.sola_search_ms),
-        lookahead_len=ms_to_samples(lookahead_ms),
+    # Reuse the production wiring instead of hand-building StreamingVc, so drift here
+    # cannot make the eval silently measure a geometry production no longer uses. The
+    # only thing this run sweeps is lookahead_ms, hence the model_copy.
+    sv = make_streaming_vc(
+        rt, sv_config.model_copy(update={"lookahead_ms": lookahead_ms})
     )
     sv.warmup()
     seed_all(seed)
@@ -305,6 +295,10 @@ def main() -> None:
     parser.add_argument("--json", type=Path, default=None)
     args = parser.parse_args()
 
+    grid = parse_grid(args.lookahead)
+    if not grid:
+        raise SystemExit("--lookahead に有効な値が1つもない")
+
     sv_config, rt = load_config_and_runtime(args.config)
     rate = rt["target_sample_rate"]
     signal = load_wav_16k(args.input)
@@ -314,16 +308,36 @@ def main() -> None:
     write_wav(args.out_dir / "batch_reference.wav", ref, rate)
     ref_f = ref.astype(np.float32)
 
+    # Hoisted out of the loop and sized off the widest grid point, not each row's own
+    # lookahead_ms. This table's only job is to rank settings against each other, so
+    # every row must be compared over the *same* span of audio. Recomputing `skip` per
+    # row would make the 160ms row drop 160ms more of the head than the 0ms row -- and
+    # the head is exactly where the streaming path is worst (nearest the warm-up
+    # boundary), so larger lookahead would systematically drop more of the worst
+    # frames and look better than it is. `warmup_skip_samples` grows monotonically
+    # with lookahead_ms, so `max(grid)` is the smallest skip that still clears every
+    # row's own per-setting minimum.
+    skip = warmup_skip_samples(
+        sv_config.context_ms, max(grid), sv_config.block_ms, rate
+    )
+    required_s = 1.0
+    remaining_s = (ref_f.shape[0] - skip) / rate
+    if remaining_s < required_s:
+        raise SystemExit(
+            f"入力 wav が短すぎる: warmup skip {skip / rate:.2f}秒"
+            f"(lookahead grid の最大値 {max(grid):.0f}ms 基準)を引くと"
+            f"比較に残る区間が{max(0.0, remaining_s):.2f}秒しかない"
+            f"(最低 {required_s:.0f}秒必要)。"
+            f"入力 wav は{ref_f.shape[0] / rate:.2f}秒しかなかった。より長い wav を使うこと"
+        )
+    ref_t = ref_f[skip:]
+
     rows: list[dict[str, Any]] = []
-    for lookahead_ms in parse_grid(args.lookahead):
+    for lookahead_ms in grid:
         stream, durations, delay = run_streaming(
             rt, sv_config, signal, lookahead_ms, args.seed
         )
         write_wav(args.out_dir / f"lookahead_{lookahead_ms:.0f}ms.wav", stream, rate)
-        skip = warmup_skip_samples(
-            sv_config.context_ms, lookahead_ms, sv_config.block_ms, rate
-        )
-        ref_t = ref_f[skip:]
         stream_t = stream.astype(np.float32)[skip:]
         offset = align_offset(ref_t, stream_t, hint=delay)
         aligned = stream_t[offset : offset + ref_t.shape[0]]

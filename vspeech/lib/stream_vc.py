@@ -476,8 +476,9 @@ class StreamingVc:
                 raise ValueError(
                     f"lookahead ({out_look}) が描画長に対して大きすぎる "
                     f"(out_total={out_total} hop={out_hop} xf={out_xf} "
-                    f"sola={out_sola}): lookahead_ms を減らすか context_ms を"
-                    "増やすこと。"
+                    f"sola={out_sola}): context_ms を増やすこと "
+                    "(crossfade_ms・sola_search_ms が大きいほど必要な context_ms も"
+                    "増える)。"
                 )
             # The fade law follows whether SOLA is on: with SOLA the adjacent renders are
             # correlated (sum=1), without it they are uncorrelated (equal power). At

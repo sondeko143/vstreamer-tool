@@ -118,7 +118,7 @@ def test_warmup_skip_samples_grows_with_the_lookahead():
     """The context buffer `run_streaming` builds is context_ms + lookahead_ms long
     (ADR-0070), so the warm-up span to skip must grow by exactly the lookahead -- a
     fixed skip would leave partially-cold output in the comparison for every
-    lookahead_ms > 0 (this was Finding 2 of the review)."""
+    lookahead_ms > 0."""
     base = warmup_skip_samples(
         context_ms=500.0, lookahead_ms=0.0, block_ms=160.0, rate=16000
     )
@@ -140,8 +140,8 @@ def test_right_context_ms_reproduces_the_validated_default_geometry():
     (vspeech/lib/stream_vc.py) gives
     delay_ms == _HUBERT_TRUNCATION_MS(20) + crossfade_ms(25) + sola_search_ms(5) +
     lookahead_ms, so the old hardcoded `30.0 + lookahead_ms` was correct only for this
-    one geometry (this was Finding 1 of the review: crossfade_ms/sola_search_ms are
-    user-settable, ge=0, so a different config made it silently wrong).
+    one geometry: crossfade_ms/sola_search_ms are user-settable, ge=0, so a different
+    config made it silently wrong.
 
     This pins the arithmetic `right_context_ms` implements against that traced
     relationship, with delay_ms constructed by hand rather than by calling
