@@ -1,6 +1,6 @@
 # 0070. f0 の中央値フィルタを有声区間単位で全抽出器に掛ける（本家 RVC の filter_radius 相当）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-10
 - Related: [spec](../superpowers/specs/2026-08-10-f0-median-filter-design.md), [ADR-0030](0030-pyworld-lazy-default-rmvpe.md), [ADR-0049](0049-fcpe-baked-waveform-onnx-f0-extractor.md), [ADR-0053](0053-streaming-vc-fixed-block-crossfade.md)
 
