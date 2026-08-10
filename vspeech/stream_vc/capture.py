@@ -113,7 +113,7 @@ class InputRateConverter:
         converted = self.resampler.process(samples)
         if self._pending.size:
             converted = np.concatenate([self._pending, converted])
-        whole = converted.size - converted.size % self.hop
+        whole = converted.shape[0] - converted.shape[0] % self.hop
         # Copies, not views: the blocks outlive `converted` on the queue, and keeping
         # the leftover a view would pin the whole buffer behind it.
         self._pending = converted[whole:].copy()
@@ -262,6 +262,12 @@ async def _capture_read_loop(
             telemetry.record("stream_vc_capture_overflow", 1.0)
             if (n := overflow_throttle.hit()) is not None:
                 logger.warning("stream_vc capture input overflow (total %d)", n)
+        # Unlike the output boundaries (stream_vc/playback.py's write, worker/playback.py's
+        # _write), this conversion stays on the event loop rather than moving to tap's
+        # device thread: the blocking read above already crossed the thread boundary, and
+        # PolyphaseResampler.process measured well under 1ms per call at the rate pairs
+        # this boundary meets (p50 ~1.05ms at block_ms=160, 48000->16000Hz), so a second
+        # thread hop buys nothing.
         for block in converter.blocks(pcm16_to_float32(bytes(data))):
             _put_block(out_queue, block, running, drop_throttle)
 

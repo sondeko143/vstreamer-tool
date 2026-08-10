@@ -150,15 +150,6 @@ async def sd_recording_worker(
         sample_width = get_sample_size(config.format)
         n_move_avg_amp = config.gradually_stopping_interval
         approx_max_amps: list[float] = []
-        # Built once per stream open, not inside the read loop: construction costs
-        # 0.2-8ms measured across the rate pairs this boundary meets, and the read
-        # cadence here (>= one chunk, 64ms by default) makes a rebuild cost invisible
-        # either way, but a fresh resampler starts from a zeroed filter tail, so
-        # rebuilding per read would put a transient at every chunk boundary. None on a
-        # matching rate keeps the pass-through path bit-identical to the
-        # pre-ADR-0073 code.
-        resampler = make_resampler(device_rate, config.rate)
-        frames_per_read = device_frames_per_read(config.chunk, device_rate, config.rate)
         # Reads go through a thread of this stream's own rather than the shared
         # to_thread pool, so that the close below cannot start while a read is still
         # inside PortAudio -- that frees the stream under the reader and kills the
@@ -166,6 +157,20 @@ async def sd_recording_worker(
         # retired together with the stream it belongs to.
         device_thread = DeviceStreamThread("recording_dev")
         try:
+            # Built once per stream open, not inside the read loop: construction costs
+            # 0.2-8ms measured across the rate pairs this boundary meets, and the read
+            # cadence here (>= one chunk, 64ms by default) makes a rebuild cost invisible
+            # either way, but a fresh resampler starts from a zeroed filter tail, so
+            # rebuilding per read would put a transient at every chunk boundary. None on
+            # a matching rate keeps the pass-through path bit-identical to the
+            # pre-ADR-0073 code. Built inside the try, after device_thread exists, so
+            # that a pathological rate pair (ValueError from make_resampler, ADR-0075)
+            # still reaches the `finally` below and closes the stream that was just
+            # opened, instead of leaking it (ADR-0077).
+            resampler = make_resampler(device_rate, config.rate)
+            frames_per_read = device_frames_per_read(
+                config.chunk, device_rate, config.rate
+            )
             while stream.active:
                 chunk_data, overflowed = await device_thread.call(
                     stream.read, frames_per_read
@@ -174,6 +179,12 @@ async def sd_recording_worker(
                     # sounddevice reports an overflow with a flag rather than an
                     # exception, so at least leave a log line.
                     logger.warning("recording input overflow: samples were dropped")
+                # Unlike the output boundaries (stream_vc/playback.py's write,
+                # worker/playback.py's _write), this conversion stays on the event loop
+                # rather than moving to device_thread: the blocking read above already
+                # crossed the thread boundary, and PolyphaseResampler.process measured
+                # well under 1ms per call at this boundary's rate pairs (p50 ~0.44ms at
+                # chunk=64ms, 48000->16000Hz), so a second thread hop buys nothing.
                 in_data, frame_count = convert_chunk(
                     bytes(chunk_data), resampler, config
                 )

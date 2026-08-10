@@ -206,11 +206,11 @@ def _check_device_rate(
         reported = float(stream.samplerate)
         if abs(reported - rate) > 0.5:
             logger.warning(
-                "%s device reports %.4fHz for a requested %dHz; "
-                "converting at the requested rate",
+                "%s デバイスが要求した %dHz とは異なる %.4fHz を報告しています; "
+                "変換は要求したレートのまま行います",
                 config_key,
-                reported,
                 rate,
+                reported,
             )
     finally:
         if stream is not None:

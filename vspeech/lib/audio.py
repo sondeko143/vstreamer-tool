@@ -384,11 +384,11 @@ def open_device_stream[StreamT: ReportsSampleRate](
     reported = float(stream.samplerate)
     if abs(reported - rate) > 0.5:
         logger.warning(
-            "%s device reports %.4fHz for a requested %dHz; "
-            "converting at the requested rate",
+            "%s デバイスが要求した %dHz とは異なる %.4fHz を報告しています; "
+            "変換は要求したレートのまま行います",
             subject,
-            reported,
             rate,
+            reported,
         )
     return stream, rate
 
