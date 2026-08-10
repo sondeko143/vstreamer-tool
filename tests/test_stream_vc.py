@@ -511,3 +511,56 @@ def test_a_large_lookahead_with_the_extended_window_never_trips_the_guard():
         )
         emitted = sv._emit_with_crossfade(np.arange(out_total, dtype=np.int16))
         assert emitted.shape[0] == round(block_len * sr / 16000)
+
+
+def test_lookahead_raises_when_the_window_is_not_extended_for_it():
+    """A lookahead that outruns the render (context_len not extended for it) fails loud
+    rather than silently clamping.
+
+    A silent clamp would make the measured lookahead differ from the configured one,
+    defeating the point of an A/B (ADR-0070). This pins the raise side of the guard added
+    in `_emit_with_crossfade`, which `test_a_large_lookahead_with_the_extended_window_...`
+    only exercises from the non-raising side.
+    """
+    sr, block_len, ctx_len = 48000, 2560, 8000
+    out_total = round((ctx_len + block_len - 320) * sr / 16000)
+    out = np.arange(out_total, dtype=np.int16)
+    # Far beyond what out_total - hop - xf - 2*sola leaves room for, with context_len left
+    # at its un-extended default.
+    lookahead_len = 20000
+    out_look = round(lookahead_len * sr / 16000)
+    sv = _bare_streaming_vc(target_sample_rate=sr, lookahead_len=lookahead_len)
+    with pytest.raises(ValueError, match="lookahead") as excinfo:
+        sv._emit_with_crossfade(out)
+    assert str(out_look) in str(excinfo.value)
+
+
+def test_lookahead_without_crossfade_delays_the_emit_and_keeps_the_hop_length():
+    """The no-crossfade path also honours lookahead_len, symmetrically with the crossfade
+    path: the emit delay moves by exactly the lookahead and the emit length stays exactly
+    one hop."""
+    sr, block_len, ctx_len = 48000, 2560, 8000
+    trunc_in = 320
+    expected_hop = round(block_len * sr / 16000)
+    delays: dict[float, int] = {}
+    for look_ms in (0.0, 40.0, 160.0):
+        lookahead_len = round(look_ms * 16)
+        ctx_len_ext = (
+            ctx_len + lookahead_len
+        )  # caller extends context_len, as documented
+        out_total = round((ctx_len_ext + block_len - trunc_in) * sr / 16000)
+        sv = _bare_streaming_vc(
+            block_len=block_len,
+            context_len=ctx_len_ext,
+            crossfade_len=0,
+            sola_search_len=0,
+            target_sample_rate=sr,
+            lookahead_len=lookahead_len,
+        )
+        out = np.arange(out_total, dtype=np.int16)
+        emitted = sv._emit_no_crossfade(out)
+        assert emitted.shape[0] == expected_hop
+        delays[look_ms] = sv.emit_delay_samples
+    for look_ms in (40.0, 160.0):
+        out_look = round(round(look_ms * 16) * sr / 16000)
+        assert delays[look_ms] - delays[0.0] == out_look

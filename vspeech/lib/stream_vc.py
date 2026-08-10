@@ -334,27 +334,31 @@ class StreamingVc:
 
     def _emit_no_crossfade(self, out: NDArray[np.int16]) -> NDArray[np.int16]:
         """The emit path when crossfade is disabled (exactly one hop, anchored at the
-        tail).
+        tail minus the lookahead).
 
         The length comes from the real-time clock. Deriving it as a ratio of the render
         length comes out short by HuBERT's receptive field (about 320 input samples) and
-        starves the sink. The position stays anchored at the tail, so the truncated tail
-        is avoided.
+        starves the sink. The read position stays anchored at the tail, offset earlier by
+        `lookahead_len` (symmetric with `_emit_with_crossfade`), so the truncated tail is
+        avoided and `lookahead_len == 0` reproduces the pre-lookahead read position sample
+        for sample.
         """
         out_hop = round(self.block_len * self.target_sample_rate / 16000)
-        if out.shape[0] < out_hop:
-            # The render is shorter than one hop = a broken config whose context_ms is too
-            # short (the crossfade path raises ValueError here). In this branch the emit
-            # length already falls short of a hop and the rate lock is broken, so the
-            # delay we report is meaningless too (ctx_out becomes the whole context and
-            # the gate's mask clamps everywhere to the previous block's value). The
-            # principled fix would be to fail loud like the crossfade path, but that
-            # changes the behaviour of existing crossfade_ms=0 configs, so it is left as
-            # separate work.
+        out_look = round(self.lookahead_len * self.target_sample_rate / 16000)
+        if out.shape[0] < out_hop + out_look:
+            # The render is shorter than one hop plus the lookahead = a broken config
+            # whose context_ms is too short (the crossfade path raises ValueError here).
+            # In this branch the emit length already falls short of a hop and the rate
+            # lock is broken, so the delay we report is meaningless too (ctx_out becomes
+            # the whole context and the gate's mask clamps everywhere to the previous
+            # block's value). The principled fix would be to fail loud like the crossfade
+            # path, but that changes the behaviour of existing crossfade_ms=0 configs, so
+            # it is left as separate work.
             self.emit_delay_samples = self._emit_delay(0)
             return out
-        self.emit_delay_samples = self._emit_delay(out.shape[0] - out_hop)
-        return out[-out_hop:]
+        start = out.shape[0] - out_hop - out_look
+        self.emit_delay_samples = self._emit_delay(start)
+        return out[start : start + out_hop]
 
     def _emit_delay(self, start: int) -> int:
         """How many samples before the start of the input block the emit starts (at the
