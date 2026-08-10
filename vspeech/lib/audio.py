@@ -9,6 +9,7 @@ from vspeech.config import RecordingConfig
 from vspeech.config import SampleFormat
 from vspeech.config import StreamVcConfig
 from vspeech.exceptions import DeviceNotFoundError
+from vspeech.exceptions import DeviceRateUnresolvedError
 
 
 class HostAPIInfo(BaseModel):
@@ -182,6 +183,73 @@ def resolve_stream_vc_output_device(config: StreamVcConfig) -> DeviceInfo:
         name=config.output_device_name,
         name_key="stream_vc.output_device_name",
         output=True,
+    )
+
+
+_WASAPI_HOST_API = "Windows WASAPI"
+
+
+def _wasapi_counterpart_rates(name: str, *, input: bool) -> set[int]:
+    """Mix rates of the WASAPI devices whose name starts with `name`.
+
+    PortAudio's WMME/DirectSound backends report a hardcoded 44100 for every device,
+    so their `default_samplerate` cannot be trusted. Their device names, however, are
+    the WASAPI names truncated to 31 characters, which makes the WASAPI row for the
+    same endpoint findable by prefix (ADR-0071).
+    """
+    host_apis = sd.query_hostapis()
+    rates: set[int] = set()
+    for raw in sd.query_devices():
+        device = DeviceInfo.model_validate(dict(raw))
+        if host_apis[device.host_api]["name"] != _WASAPI_HOST_API:
+            continue
+        if input and device.max_input_channels <= 0:
+            continue
+        if not input and device.max_output_channels <= 0:
+            continue
+        if device.name.startswith(name):
+            rates.add(int(round(float(dict(raw)["default_samplerate"]))))
+    return rates
+
+
+def resolve_device_rate(
+    device: DeviceInfo, override: int | None, *, input: bool, config_key: str
+) -> tuple[int, str]:
+    """The rate to open `device` at, plus a human-readable note on how it was decided.
+
+    Order: explicit config -> the device's own default_samplerate when it is a WASAPI
+    device -> the mix rate of its WASAPI counterpart (ADR-0071). Anything ambiguous
+    raises rather than guessing: opening at the wrong rate silently reinstates the OS
+    resampler that ADR-0070 exists to remove.
+    """
+    if override is not None:
+        return override, f"{config_key} で明示"
+    host_apis = sd.query_hostapis()
+    host_api_name = host_apis[device.host_api]["name"]
+    if host_api_name == _WASAPI_HOST_API:
+        for raw in sd.query_devices():
+            raw_dict = dict(raw)
+            if raw_dict["index"] == device.index:
+                return (
+                    int(round(float(raw_dict["default_samplerate"]))),
+                    "WASAPI のミックス形式",
+                )
+        raise DeviceRateUnresolvedError(
+            f"WASAPI デバイス '{device.name}' (index={device.index}) が"
+            f"デバイス一覧に見つかりません。{config_key} に明示してください"
+        )
+    rates = _wasapi_counterpart_rates(device.name, input=input)
+    if len(rates) == 1:
+        return rates.pop(), f"WASAPI の同名デバイス ({host_api_name} 経由)"
+    kind = "入力" if input else "出力"
+    if not rates:
+        detail = "対応する WASAPI デバイスが見つかりません"
+    else:
+        detail = f"対応する WASAPI デバイスのレートが一致しません ({sorted(rates)})"
+    raise DeviceRateUnresolvedError(
+        f"{kind}デバイス '{device.name}' ({host_api_name}) の実レートを判定できません: "
+        f"{detail}。Windows のサウンド設定で「既定の形式」を確認し "
+        f"{config_key} に明示してください"
     )
 
 
