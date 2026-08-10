@@ -218,6 +218,19 @@ crossfade_ms = 25.0
 # 対し最適 lag では 0.89)。混ぜる前に相互相関で位置を合わせる。emit 長は固定のまま
 # なのでドリフトはせず、代償はこの値ぶんの遅延だけ。実測上 5ms で足りる。
 sola_search_ms = 5.0
+# 先読み(右文脈)ms。0 で無効 = 導入前と完全に同一の出力。
+# 既定構成では emit は入力ブロックの [-50,+110]ms を覆い、emit 開始点の左文脈 450ms に
+# 対し右文脈は 30ms しか残らない。HuBERT は窓全体に attention を張る双方向モデルなので、
+# この非対称が streaming とバッチ変換の品質差の主因になっている (ADR-0070)。
+# 増やすと読み出し位置がその分手前へ動き、右文脈が 1:1 で増える。代償は
+#   - 片道遅延がちょうど同じだけ増える
+#   - 解析窓が context_ms + lookahead_ms + block_ms へ伸びるので推論コストが上がる
+#     (左文脈は痩せない = context_ms の意味は変わらない)
+# 既定値は実機で決めること:
+#   uv run poe stream-vc-lookahead-eval --config ./config.toml --input voice.wav
+# これはバッチ経路との log-mel 距離の表と、各設定の WAV を出す。RTF ハーネスと違って
+# **[stream_vc.rvc] をそのまま読む**ので、[rvc] へ写す必要は無い。
+lookahead_ms = 0.0
 
 # --- VAD ノイズゲート (既定 off) ---
 # off だと streaming 経路は無音でも回り続け、**部屋のノイズフロアがそのまま RVC を

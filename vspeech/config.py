@@ -467,6 +467,16 @@ class StreamVcConfig(BaseModel):
         ge=0,
         description="SOLA 位相合わせの探索半幅 ms (0 で無効)。実測 ±5ms で十分",
     )
+    lookahead_ms: float = Field(
+        default=0.0,
+        ge=0,
+        description="emit の読み出し位置を手前へずらして未来文脈(右文脈)を増やす ms。"
+        "既定 0 は導入前と完全に同一の出力。既定構成の右文脈は 30ms しかなく、"
+        "HuBERT は窓全体に attention を張る双方向モデルなのでここが品質の天井に"
+        "なっている。増やした分だけ片道遅延が増え、解析窓も同じだけ伸びる"
+        "(context_ms の左文脈は保たれる)ので推論コストも上がる。"
+        "`uv run poe stream-vc-lookahead-eval` で測ってから決めること",
+    )
     # Silero VAD noise gate (opt-in). Independent of the utterance path vc.vad_*
     # (ADR-0053). Decided on the input block, applied to the output block (inference
     # is never skipped = context and crossfade stay continuous).

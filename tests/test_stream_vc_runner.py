@@ -38,3 +38,50 @@ def test_apply_input_boost_identity_at_one():
 
     block = np.array([0.1, -0.2, 0.3], dtype=np.float32)
     assert apply_input_boost(block, 1.0) is block  # identity fast-path
+
+
+def test_make_streaming_vc_extends_the_context_by_the_lookahead(monkeypatch):
+    """The analysis window is passed extended by the lookahead (so the left context
+    does not shrink)."""
+    from vspeech.config import StreamVcConfig
+    from vspeech.stream_vc import runner as runner_mod
+
+    captured: dict[str, object] = {}
+
+    class _Spy:
+        def __init__(self, **kw):
+            captured.update(kw)
+
+    monkeypatch.setattr("vspeech.lib.stream_vc.StreamingVc", _Spy)
+    sv = StreamVcConfig(context_ms=500.0, lookahead_ms=160.0, block_ms=160.0)
+    rt = {
+        "rvc_config": sv.rvc,
+        "device": None,
+        "hubert_model": None,
+        "session": None,
+        "f0_session": None,
+        "target_sample_rate": 40000,
+        "f0_enabled": True,
+        "emb_output_layer": 9,
+        "use_final_proj": True,
+    }
+    runner_mod.make_streaming_vc(rt, sv)
+    assert captured["context_len"] == round((500.0 + 160.0) * 16)
+    assert captured["lookahead_len"] == round(160.0 * 16)
+    # at the default (0) the window length is unchanged
+    captured.clear()
+    runner_mod.make_streaming_vc(rt, StreamVcConfig(context_ms=500.0))
+    assert captured["context_len"] == round(500.0 * 16)
+    assert captured["lookahead_len"] == 0
+
+
+def test_geometry_summary_reports_the_window_and_both_delays():
+    """The startup log carries the window, the emit delay, and the added latency."""
+    from vspeech.config import StreamVcConfig
+    from vspeech.stream_vc.runner import geometry_summary
+
+    sv = StreamVcConfig(context_ms=500.0, block_ms=160.0, lookahead_ms=160.0)
+    line = geometry_summary(sv, emit_delay_samples=8400, target_sample_rate=40000)
+    assert "解析窓 820ms" in line  # 500 + 160 + 160
+    assert "emit 遅延 210.0ms" in line  # 8400 / 40000
+    assert "付加遅延 160ms" in line

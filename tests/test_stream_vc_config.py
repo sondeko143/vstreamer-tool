@@ -123,3 +123,12 @@ def test_stream_vc_rejects_out_of_range():
         StreamVcConfig(max_queued_blocks=0)  # gt=0
     with pytest.raises(ValidationError):
         StreamVcConfig(context_ms=-1)  # ge=0
+
+
+def test_lookahead_defaults_to_zero_and_rejects_negative():
+    import pytest
+    from pydantic import ValidationError
+
+    assert StreamVcConfig().lookahead_ms == 0.0
+    with pytest.raises(ValidationError):
+        StreamVcConfig(lookahead_ms=-1.0)

@@ -225,6 +225,9 @@ def make_streaming_vc(rt: dict[str, Any], sv_config: StreamVcConfig) -> Streamin
     # streaming uses a real rolling left context (context_len) rather than reflect-pad, so
     # a pad amount is meaningless. input_boost, on the other hand, is honoured
     # symmetrically with the utterance path (applied to the block in vc_loop).
+    # The analysis window is extended by lookahead_ms on top of context_ms, so that
+    # buying right context does not eat into the left context the emit start sees
+    # (ADR-0070). context_ms therefore keeps exactly the meaning it had before.
     return StreamingVc(
         rvc_config=rt["rvc_config"],
         device=rt["device"],
@@ -236,9 +239,28 @@ def make_streaming_vc(rt: dict[str, Any], sv_config: StreamVcConfig) -> Streamin
         emb_output_layer=rt["emb_output_layer"],
         use_final_proj=rt["use_final_proj"],
         block_len=ms_to_samples(sv_config.block_ms),
-        context_len=ms_to_samples(sv_config.context_ms),
+        context_len=ms_to_samples(sv_config.context_ms + sv_config.lookahead_ms),
         crossfade_len=ms_to_samples(sv_config.crossfade_ms),
         sola_search_len=ms_to_samples(sv_config.sola_search_ms),
+        lookahead_len=ms_to_samples(sv_config.lookahead_ms),
+    )
+
+
+def geometry_summary(
+    sv_config: StreamVcConfig, emit_delay_samples: int, target_sample_rate: int
+) -> str:
+    """A one-line startup summary of the analysis window and the delays it implies.
+
+    Pure, so the wording can be pinned without standing up a worker. Japanese because the
+    reader is an operator reading the log (ADR-0064).
+    """
+    window_ms = sv_config.context_ms + sv_config.lookahead_ms + sv_config.block_ms
+    delay_ms = emit_delay_samples * 1000.0 / target_sample_rate
+    return (
+        f"stream_vc geometry: 解析窓 {window_ms:.0f}ms "
+        f"(context {sv_config.context_ms:.0f} + lookahead {sv_config.lookahead_ms:.0f}"
+        f" + block {sv_config.block_ms:.0f}), emit 遅延 {delay_ms:.1f}ms, "
+        f"lookahead による付加遅延 {sv_config.lookahead_ms:.0f}ms"
     )
 
 
@@ -277,6 +299,10 @@ async def vc_loop(
         # and is made fail-loud (ADR-0038). process_block inside the loop is not guarded,
         # so failing here as a WorkerStartupError is the right thing.
         await to_thread(sv.warmup)
+    logger.info(
+        "%s",
+        geometry_summary(sv_config, sv.emit_delay_samples, rt["target_sample_rate"]),
+    )
     logger.info("stream vc worker started")
     # only now does capture open the mic (preventing the startup drop storm)
     ready.set()
