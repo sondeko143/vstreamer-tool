@@ -166,6 +166,14 @@ class RecordingConfig(BaseModel):
     input_device_index: int | None = Field(
         default=None, description="use this device as recording input if supplied"
     )
+    input_device_rate: int | None = Field(
+        default=None,
+        gt=0,
+        description="録音デバイスを開くレート。未指定なら自動判定 (WASAPI の"
+        "ミックス形式から逆引き)。ここと rate が違うときだけプロセス内で"
+        "リサンプルする。MME/DirectSound は PortAudio が 44100 固定を返すので、"
+        "自動判定できない場合のみ Windows のサウンド設定の「既定の形式」を指定する",
+    )
 
 
 class TranscriptionConfig(BaseModel):
@@ -202,6 +210,12 @@ class PlaybackConfig(BaseModel):
     output_device_index: int | None = Field(
         default=None,
         description="use this device as voiceroid2 output if supplied",
+    )
+    output_device_rate: int | None = Field(
+        default=None,
+        gt=0,
+        description="再生デバイスを開くレート。未指定なら自動判定。固定レートで"
+        "開くので、音声ソースのレートが変わってもデバイスは開き直さない",
     )
 
 
@@ -542,9 +556,19 @@ class StreamVcConfig(BaseModel):
     input_host_api_name: str | None = Field(default=None)
     input_device_name: str | None = Field(default=None)
     input_device_index: int | None = Field(default=None)
+    input_device_rate: int | None = Field(
+        default=None,
+        gt=0,
+        description="ストリーミング入力デバイスを開くレート。未指定なら自動判定",
+    )
     output_host_api_name: str | None = Field(default=None)
     output_device_name: str | None = Field(default=None)
     output_device_index: int | None = Field(default=None)
+    output_device_rate: int | None = Field(
+        default=None,
+        gt=0,
+        description="ストリーミング出力デバイスを開くレート。未指定なら自動判定",
+    )
     transport_type: TransportType = Field(default=TransportType.in_process)
     max_queued_blocks: int = Field(
         default=8, gt=0, description="capture/transport の上限。満杯で最古を drop"

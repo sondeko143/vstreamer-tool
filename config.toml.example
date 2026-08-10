@@ -37,6 +37,10 @@ silence_threshold = -45
 max_recording_sec = 10.0
 input_host_api_name = ""
 input_device_name = ""
+# デバイスを開くサンプルレート。未指定 (コメントアウト) なら自動判定する。
+# 自動判定に失敗すると起動時にエラーになるので、そのときだけ Windows の
+# サウンド設定 → デバイスのプロパティ → 詳細 →「既定の形式」の値を書く。
+# input_device_rate = 48000
 input_device_index = 0
 
 [transcription]
@@ -72,6 +76,8 @@ enable = true
 volume = "100"
 output_host_api_name = ""
 output_device_name = ""
+# 再生デバイスを開くサンプルレート。未指定なら自動判定。
+# output_device_rate = 48000
 output_device_index = 1
 
 [subtitle]
@@ -275,11 +281,13 @@ vad_min_gain = 0.0
 # 発話系 recording は無改変のまま別途マイクを開く)。未指定(空)ならシステム既定入力。
 input_host_api_name = ""
 input_device_name = ""
+# input_device_rate = 48000
 input_device_index = 0
 
 # 出力デバイス。[playback] とは別に開く。未指定(空)ならシステム既定出力。
 output_host_api_name = ""
 output_device_name = ""
+# output_device_rate = 48000
 output_device_index = 1
 
 # トランスポート種別: "in_process"(既定, 単一マシン内で完結) | "udp"(M3 の2マシン分離,
