@@ -307,6 +307,15 @@ async def sd_playback_worker(
             except Exception as e:
                 logger.warning("%s", e)
     finally:
+        # [Open, deferred 2026-08-11] Same use-after-free ADR-0077 fixed for the utterance
+        # recorder: playback() writes through `to_thread`, and a cancellation delivered
+        # mid-write returns from the await while the thread is still inside PortAudio, so
+        # this line frees the stream under the writer -- an access violation (0xC0000005)
+        # that kills the process, intermittently. The reopen inside
+        # update_stream_if_changed is safe as it stands (it runs between utterances, with
+        # no write in flight). The fix is to route the write and this close through one
+        # lib/audio.DeviceStreamThread; deferred with the stream_vc pair (retry.py)
+        # because neither could be verified on real hardware in the session that found it.
         if output_stream.stream:
             output_stream.stream.close()
 

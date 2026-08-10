@@ -132,4 +132,16 @@ async def run_with_device_retry[T: _Closable](
     except CancelledError as e:
         raise shutdown_worker(e)
     finally:
+        # [Open, deferred 2026-08-11] This close can overlap a call still inside
+        # PortAudio -- the same use-after-free ADR-0077 fixed for the utterance recorder.
+        # Both users of this helper do their blocking call through `to_thread`
+        # (capture.py's stream.read, playback.py's sink.write); a cancellation delivered
+        # while one is in flight returns from the await immediately but leaves the thread
+        # in PortAudio, and this line then frees the stream under it -- an access
+        # violation (0xC0000005) that kills the process, intermittently. The device-fault
+        # path above is safe as it stands: the call ended by raising, so nothing is in
+        # flight. Not fixed together with the recorder because the fix routes the calls
+        # and this close through one lib/audio.DeviceStreamThread owned here, changing
+        # `run`'s signature and both call sites, and none of that could be verified on
+        # real streaming-VC hardware in the session that found the bug.
         close_quietly(stream)

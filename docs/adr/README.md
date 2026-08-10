@@ -90,3 +90,4 @@
 | [0074](0074-device-native-rate-resolution.md) | デバイスのネイティブレートを WASAPI カウンターパートから自動解決し、設定で上書きできるようにする | Accepted | 2026-08-10 |
 | [0075](0075-wire-sample-rate-validation.md) | ワイヤ形式の sample_rate を範囲 + 25Hz 格子で検証し、リサンプラ側にも比の上限を置く | Accepted | 2026-08-11 |
 | [0076](0076-preflight-device-rate-open-probe.md) | preflight はデバイスレートを実際に開いて検証し、比が分からない境界は標準レート族に対して確認する | Accepted | 2026-08-11 |
+| [0077](0077-device-stream-calls-on-one-thread.md) | デバイスストリームの blocking 呼び出しと close を 1 本のスレッドに直列化する | Accepted | 2026-08-11 |

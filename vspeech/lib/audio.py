@@ -1,4 +1,8 @@
+from asyncio import wrap_future
 from collections.abc import Callable
+from concurrent.futures import Future
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 from typing import Protocol
 
 import sounddevice as sd
@@ -387,6 +391,87 @@ def open_device_stream[StreamT: ReportsSampleRate](
             rate,
         )
     return stream, rate
+
+
+class Closable(Protocol):
+    def close(self) -> None: ...
+
+
+class DeviceStreamThread:
+    """Owns every blocking PortAudio call made on one device stream, on one thread.
+
+    `read()`/`write()` block for a whole block period, so they belong off the event loop.
+    `close()` (Pa_CloseStream) frees the stream and its host buffers, and PortAudio
+    synchronises none of it against a read/write another thread is still executing:
+    closing while a read is inside the stream frees it under the reader, which then walks
+    freed memory. Windows reports that as an access violation (0xC0000005) that kills the
+    process outright -- no Python exception, no traceback, exit code -1073741819 -- and it
+    only fires when the freed block happens to have been reused already, so it looks
+    intermittent (ADR-0077).
+
+    Cancellation is what makes the overlap ordinary rather than exotic. `await
+    to_thread(stream.read, n)` hands control back the instant the task is cancelled, but
+    concurrent.futures cannot cancel a job that already started, so the thread stays inside
+    Pa_ReadStream while the `finally: stream.close()` right behind it runs. Every teardown
+    that cancels a worker mid-read hits it -- which is how a taken gRPC port turned the
+    `exit 1` of ADR-0038 into an access violation.
+
+    So both calls go through one thread: `close()` queued behind an in-flight read cannot
+    start before that read returns, and nothing waits for it on the event loop.
+    """
+
+    def __init__(self, name: str) -> None:
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=name)
+        # Any, not object: Future is invariant, so a Future[bytes] does not fit a
+        # Future[object] slot. Only done() is ever read off it.
+        self._pending: Future[Any] | None = None
+        self._closed = False
+
+    async def call[T](self, fn: Callable[..., T], *args: object) -> T:
+        """Run one blocking stream call on the owning thread and await its result.
+
+        Submitting rather than `to_thread`-ing is what makes `close()` able to see whether
+        the call is still inside the device: the concurrent future is kept, and awaiting a
+        cancelled wrapper around it does not (cannot) stop the thread.
+        """
+        future = self._executor.submit(fn, *args)
+        self._pending = future
+        return await wrap_future(future)
+
+    def close(self, stream: Closable) -> None:
+        """Close `stream` without ever overlapping a call still inside the device.
+
+        Closes on the caller's thread when nothing is in flight, so the paths that were
+        always safe (a read that ended by raising, a generator closed at its `yield`, a
+        stream that was never read from) keep closing synchronously -- callers and tests
+        can still assume the device is shut by the time this returns.
+
+        With a call in flight the close is queued on the owning thread instead, i.e. behind
+        that call. `done()` flips to True only after the worker thread has returned from
+        `fn`, so True proves the thread is out of PortAudio; a flip right after the check
+        merely queues a close that was safe to run inline, which is harmless. Queued work
+        survives `shutdown(wait=False)` and interpreter exit alike -- `_python_exit` puts
+        its stop sentinel at the *end* of the queue and then joins -- so the close cannot be
+        dropped, and the handle cannot leak.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        pending = self._pending
+        if pending is None or pending.done():
+            stream.close()
+        else:
+            self._executor.submit(self._close_quietly, stream)
+        self._executor.shutdown(wait=False)
+
+    @staticmethod
+    def _close_quietly(stream: Closable) -> None:
+        """close() on the owning thread. Nobody is left to observe the future it returns,
+        so an exception here would vanish silently -- log it instead."""
+        try:
+            stream.close()
+        except (OSError, sd.PortAudioError) as e:
+            logger.warning("error while closing a device stream: %r", e)
 
 
 def get_sd_dtype(format: SampleFormat) -> str:

@@ -2,7 +2,6 @@ from asyncio import CancelledError
 from asyncio import Queue
 from asyncio import Task
 from asyncio import TaskGroup
-from asyncio import to_thread
 from collections import deque
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
@@ -21,6 +20,7 @@ from vspeech.config import RecordingConfig
 from vspeech.config import get_sample_size
 from vspeech.exceptions import shutdown_worker
 from vspeech.exceptions import worker_startup
+from vspeech.lib.audio import DeviceStreamThread
 from vspeech.lib.audio import get_sd_dtype
 from vspeech.lib.audio import open_device_stream
 from vspeech.lib.audio import resolve_input_device
@@ -159,9 +159,17 @@ async def sd_recording_worker(
         # pre-ADR-0073 code.
         resampler = make_resampler(device_rate, config.rate)
         frames_per_read = device_frames_per_read(config.chunk, device_rate, config.rate)
+        # Reads go through a thread of this stream's own rather than the shared
+        # to_thread pool, so that the close below cannot start while a read is still
+        # inside PortAudio -- that frees the stream under the reader and kills the
+        # process with an access violation (ADR-0077). Built per stream open: it is
+        # retired together with the stream it belongs to.
+        device_thread = DeviceStreamThread("recording_dev")
         try:
             while stream.active:
-                chunk_data, overflowed = await to_thread(stream.read, frames_per_read)
+                chunk_data, overflowed = await device_thread.call(
+                    stream.read, frames_per_read
+                )
                 if overflowed:
                     # sounddevice reports an overflow with a flag rather than an
                     # exception, so at least leave a log line.
@@ -243,7 +251,11 @@ async def sd_recording_worker(
         except (OSError, sd.PortAudioError) as e:
             logger.warning("retry for %r", e)
         finally:
-            stream.close()
+            # Immediate on every path that got here with the read already out (a device
+            # fault, aclose() at the yield, a stream never read from); queued behind the
+            # read when a cancellation arrived mid-read, which is the one case that used
+            # to crash.
+            device_thread.close(stream)
 
 
 def build_recording_output(
