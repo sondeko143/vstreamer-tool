@@ -68,11 +68,16 @@ def test_make_streaming_vc_extends_the_context_by_the_lookahead(monkeypatch):
     runner_mod.make_streaming_vc(rt, sv)
     assert captured["context_len"] == round((500.0 + 160.0) * 16)
     assert captured["lookahead_len"] == round(160.0 * 16)
-    # at the default (0) the window length is unchanged
+    # explicitly off: the window is exactly context_ms, the pre-lookahead geometry
     captured.clear()
-    runner_mod.make_streaming_vc(rt, StreamVcConfig(context_ms=500.0))
+    runner_mod.make_streaming_vc(rt, StreamVcConfig(context_ms=500.0, lookahead_ms=0.0))
     assert captured["context_len"] == round(500.0 * 16)
     assert captured["lookahead_len"] == 0
+    # the shipped default carries 40ms, so the window grows with it
+    captured.clear()
+    runner_mod.make_streaming_vc(rt, StreamVcConfig(context_ms=500.0))
+    assert captured["context_len"] == round((500.0 + 40.0) * 16)
+    assert captured["lookahead_len"] == round(40.0 * 16)
 
 
 def test_geometry_summary_reports_the_window_and_both_delays():

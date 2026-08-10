@@ -125,10 +125,18 @@ def test_stream_vc_rejects_out_of_range():
         StreamVcConfig(context_ms=-1)  # ge=0
 
 
-def test_lookahead_defaults_to_zero_and_rejects_negative():
+def test_lookahead_defaults_to_the_measured_value_and_rejects_negative():
+    """40ms is the on-hardware choice (ADR-0070): 65% of the p95 improvement for 25% of
+    the latency. Pinned so the default cannot drift without the ADR moving with it."""
     import pytest
     from pydantic import ValidationError
 
-    assert StreamVcConfig().lookahead_ms == 0.0
+    assert StreamVcConfig().lookahead_ms == 40.0
     with pytest.raises(ValidationError):
         StreamVcConfig(lookahead_ms=-1.0)
+
+
+def test_lookahead_zero_is_still_reachable_for_the_pre_lookahead_geometry():
+    """Turning it off must stay possible: the default now costs 40ms of latency, and a
+    latency-critical deployment has to be able to buy that back."""
+    assert StreamVcConfig(lookahead_ms=0.0).lookahead_ms == 0.0
