@@ -92,7 +92,7 @@ def _bare_streaming_vc(
 
 ```python
 def test_lookahead_zero_reads_from_the_unchanged_nominal_position():
-    """lookahead_len=0 は読み出し位置を 1 サンプルも動かさない (既存出力とビット同一)。"""
+    """lookahead_len=0 moves the read position by not one sample (bit-identical output)."""
     sr, block_len, ctx_len = 48000, 2560, 8000
     out_total = round((ctx_len + block_len - 320) * sr / 16000)
     out = np.arange(out_total, dtype=np.int16)
@@ -107,7 +107,8 @@ def test_lookahead_zero_reads_from_the_unchanged_nominal_position():
 
 
 def test_lookahead_delays_the_emit_by_exactly_that_much():
-    """lookahead を増やすと emit 遅延がちょうど同じ量だけ増え、emit 長は変わらない。"""
+    """Raising the lookahead delays the emit by exactly that much; the emit length is
+    unchanged."""
     sr, block_len, ctx_len = 48000, 2560, 8000
     out_total = round((ctx_len + block_len - 320) * sr / 16000)
     out = np.arange(out_total, dtype=np.int16)
@@ -118,7 +119,7 @@ def test_lookahead_delays_the_emit_by_exactly_that_much():
             target_sample_rate=sr, lookahead_len=round(look_ms * 16)
         )
         emitted = [sv._emit_with_crossfade(out).shape[0] for _ in range(3)]
-        # レートロックは lookahead に影響されない
+        # the rate lock is not affected by the lookahead
         assert set(emitted) == {expected_hop}
         delays[look_ms] = sv.emit_delay_samples
     for look_ms in (40.0, 80.0, 160.0):
@@ -127,7 +128,8 @@ def test_lookahead_delays_the_emit_by_exactly_that_much():
 
 
 def test_lookahead_buys_right_context_one_for_one():
-    """emit 終端より後ろに残る解析窓 (= 右文脈) が lookahead ぶんちょうど増える。"""
+    """The window left beyond the emit end (= right context) grows by exactly the
+    lookahead."""
     sr, block_len, ctx_len = 48000, 2560, 8000
     out_total = round((ctx_len + block_len - 320) * sr / 16000)
     out = np.arange(out_total, dtype=np.int16)
@@ -139,20 +141,21 @@ def test_lookahead_buys_right_context_one_for_one():
             target_sample_rate=sr, lookahead_len=round(look_ms * 16)
         )
         sv._emit_with_crossfade(out)
-        # ブロック開始を原点にした、描画が使える末尾と emit 終端
+        # usable end of the render and the emit end, both relative to the block start
         usable_end = out_total - ctx_out
         emit_end = out_hop - 1 - sv.emit_delay_samples
         rights[look_ms] = usable_end - emit_end
-    # 既定 (lookahead 0) の右文脈は約 30ms
+    # the default (lookahead 0) leaves about 30ms of right context
     assert 0 < rights[0.0] < round(0.035 * sr)
     assert rights[160.0] - rights[0.0] == round(round(160.0 * 16) * sr / 16000)
 
 
 def test_a_large_lookahead_with_the_extended_window_never_trips_the_guard():
-    """窓を lookahead ぶん伸ばす配線なら、どれだけ大きくしても幾何は破綻しない。
+    """With the window extended by the lookahead, no lookahead is too large.
 
-    読み出しの成立条件から lookahead が相殺されるため、実効上限は遅延と RTF だけになる
-    (ADR-0070)。ここが崩れると preflight に新しい検査が要る、という設計の要。
+    The lookahead cancels out of the read-position condition, so the effective ceiling is
+    latency and RTF alone (ADR-0070). If this broke, preflight would need a new check --
+    it is the load-bearing property of the design.
     """
     sr, block_len, ctx_ms = 48000, 2560, 500.0
     for look_ms in (0.0, 160.0, 500.0, 2000.0):
@@ -300,29 +303,30 @@ git commit -m "feat(stream-vc): read the emit lookahead_len earlier to buy right
 
 ```python
 def test_apply_reaches_two_blocks_back_when_the_delay_exceeds_one_hop():
-    """delay が 1 hop を超えても、emit の頭に 2 ブロック前のマスクが正しく載る。
+    """With a delay past one hop, the emit's head carries the mask from two blocks back.
 
-    履歴が 1 ブロックしか無いと、頭は最古の窓中心より左に落ちて前ブロックの先頭値へ
-    クランプされる（マスクが追従しなくなる）。lookahead を入れるとこの領域に入る。
+    With only one block of history the head falls left of the oldest window centre and
+    clamps to the previous block's first value, i.e. the mask stops tracking. Lookahead
+    puts the geometry in exactly that region.
     """
     gate = _gate(threshold=0.5, hangover_ms=0.0, min_gain=0.0)
     rate, n = 40000, 6400  # 160ms @40k
-    delay = 9000  # 1 hop (6400) を超える = lookahead 65ms 相当
+    delay = 9000  # past one hop (6400) = about 65ms of lookahead
     ones = np.full(n, 10000, dtype=np.int16)
-    # ブロック0: 全窓 speech / ブロック1: 全窓 silence / ブロック2: 全窓 silence
+    # block 0: all speech / block 1: all silence / block 2: all silence
     gate.apply(ones.copy(), gate.window_gains(np.full(5, 0.9)), delay, rate)
     gate.apply(ones.copy(), gate.window_gains(np.zeros(5)), delay, rate)
     out = gate.apply(ones.copy(), gate.window_gains(np.zeros(5)), delay, rate)
     g = out.astype(np.float64) / 10000.0
-    # 頭は 2 ブロック前 (speech) の音を運んでいるので開いている
+    # the head carries audio from two blocks back (speech), so the gate is open
     assert g[0] > 0.9
-    # 末尾は silence 側まで下がりきっている
+    # the tail has come all the way down to the silence side
     assert g[-1] < 0.05
 
 
 def test_apply_is_unchanged_by_the_history_generalisation_at_the_default_delay():
-    """既定 delay では履歴一般化の前後で出力が変わらない（左側に knot を足しても
-    np.interp の値は変わらない）。"""
+    """At the default delay the history generalisation changes nothing: adding knots to
+    the left of the evaluated range cannot move an np.interp value."""
     rate, n, delay = 40000, 6400, 2000
     ones = np.full(n, 10000, dtype=np.int16)
     seq = [np.full(5, 0.9), np.zeros(5), np.full(5, 0.9), np.zeros(5)]
@@ -330,7 +334,7 @@ def test_apply_is_unchanged_by_the_history_generalisation_at_the_default_delay()
     gate = _gate(threshold=0.5, hangover_ms=300.0, min_gain=0.0)
     for probs in seq:
         got.append(gate.apply(ones.copy(), gate.window_gains(probs), delay, rate).copy())
-    # 期待値: 履歴 1 ブロックで手計算した現行アルゴリズムと一致する
+    # expected: the one-block-history algorithm, computed by hand
     ref_gate = _gate(threshold=0.5, hangover_ms=300.0, min_gain=0.0)
     step = 512 * rate / 16000
     prev = None
@@ -359,10 +363,11 @@ def test_apply_is_unchanged_by_the_history_generalisation_at_the_default_delay()
 
 ```python
 def test_apply_has_no_gain_step_at_the_seam_with_a_long_delay():
-    """delay が 1 hop を超えても、ブロック境界でゲインが跳ねない（= クリックが出ない）。
+    """With a delay past one hop, the gain still does not step at a block boundary
+    (= no click).
 
-    履歴を足しても継ぎ目の連続性が壊れないことの担保。ゲインは 32ms 窓を跨いで ramp する
-    ので、1 サンプルあたりの変化はフルスイングでも 1/1280 程度にとどまるはず。
+    Pins that adding history does not break seam continuity. The gain ramps across a 32ms
+    window, so even a full swing moves at about 1/1280 per sample.
     """
     gate = _gate(threshold=0.5, hangover_ms=0.0, min_gain=0.0)
     rate, n, delay = 40000, 6400, 9000
@@ -500,14 +505,15 @@ git commit -m "fix(stream-vc): carry the vad mask over K blocks so a long emit d
 
 ```python
 def test_shape_reaches_two_blocks_back_when_the_delay_exceeds_one_emit():
-    """delay が 1 emit 長を超えても、頭に 2 ブロック前の shape が載る。
+    """With a delay past one emit length, the head carries the shape from two blocks back.
 
-    履歴が 1 ブロックだと頭は最古のフレーム中心より左に落ちて前ブロックの先頭値へ
-    クランプされる。lookahead を入れるとこの領域に入る。
+    With only one block of history the head falls left of the oldest frame centre and
+    clamps to the previous block's first value. Lookahead puts the geometry in exactly
+    that region.
     """
     env = _env(strength=1.0, min_gain=0.0, max_gain=1.0)
     out_len = 6400
-    delay = 9000  # 1 emit 長 (6400) を超える
+    delay = 9000  # past one emit length (6400)
     loud = _block(0.2, n=2560)
     quiet = _block(0.002, n=2560)
     ones = np.full(out_len, 10000, dtype=np.int16)
@@ -515,15 +521,15 @@ def test_shape_reaches_two_blocks_back_when_the_delay_exceeds_one_emit():
     env.apply(ones.copy(), quiet, delay)
     got = env.apply(ones.copy(), quiet, delay)
     g = got.astype(np.float64) / 10000.0
-    # 頭は 2 ブロック前 (loud) の音なので絞られていない
+    # the head is audio from two blocks back (loud), so it is not ducked
     assert g[0] > 0.5
-    # 末尾は quiet まで落ちている
+    # the tail has come down to the quiet level
     assert g[-1] < 0.2
 
 
 def test_gain_is_continuous_across_the_seam_with_a_long_delay():
-    """delay が 1 emit 長を超えても、ブロック境界でゲインが跳ねない (ADR-0065 の担保を
-    履歴一般化後にも延長する)。"""
+    """With a delay past one emit length, the gain still does not step at a block boundary
+    (extends ADR-0065's guarantee across the history generalisation)."""
     env = _env(strength=1.0, min_gain=0.0, max_gain=1.0)
     out_len, delay = 6400, 9000
     ones = np.full(out_len, 10000, dtype=np.int16)
@@ -674,7 +680,8 @@ def test_lookahead_defaults_to_zero_and_rejects_negative():
 
 ```python
 def test_make_streaming_vc_extends_the_context_by_the_lookahead(monkeypatch):
-    """解析窓を lookahead ぶん伸ばして渡す（左文脈を痩せさせないため）。"""
+    """The analysis window is passed extended by the lookahead (so the left context
+    does not shrink)."""
     from vspeech.config import StreamVcConfig
     from vspeech.stream_vc import runner as runner_mod
 
@@ -700,7 +707,7 @@ def test_make_streaming_vc_extends_the_context_by_the_lookahead(monkeypatch):
     runner_mod.make_streaming_vc(rt, sv)
     assert captured["context_len"] == round((500.0 + 160.0) * 16)
     assert captured["lookahead_len"] == round(160.0 * 16)
-    # 既定 (0) では窓長は今までどおり
+    # at the default (0) the window length is unchanged
     captured.clear()
     runner_mod.make_streaming_vc(rt, StreamVcConfig(context_ms=500.0))
     assert captured["context_len"] == round(500.0 * 16)
@@ -708,7 +715,7 @@ def test_make_streaming_vc_extends_the_context_by_the_lookahead(monkeypatch):
 
 
 def test_geometry_summary_reports_the_window_and_both_delays():
-    """起動ログから解析窓・emit 遅延・lookahead による付加遅延が読み取れる。"""
+    """The startup log carries the window, the emit delay, and the added latency."""
     from vspeech.config import StreamVcConfig
     from vspeech.stream_vc.runner import geometry_summary
 
@@ -870,7 +877,8 @@ from scripts.stream_vc_lookahead_eval import spectral_distance
 
 
 def _speechlike(n: int, seed: int = 0) -> np.ndarray:
-    """発話らしい包絡を持つ信号（粗探索が効くように振幅が変動する）。"""
+    """A signal with a speech-like envelope, so the coarse search has something to lock
+    onto."""
     rng = np.random.default_rng(seed)
     base = rng.standard_normal(n) * 0.2
     env = np.abs(np.sin(np.linspace(0.0, 12.0 * np.pi, n)))
@@ -900,7 +908,7 @@ def test_align_offset_recovers_a_shift_far_from_the_hint():
     ref = _speechlike(60000, seed=2)
     shift = 9000
     test = np.concatenate([np.zeros(shift, dtype=np.float32), ref])
-    # hint が 1 ブロック分ずれていても粗探索が拾う
+    # the coarse stage finds it even when the hint is a whole block off
     assert align_offset(ref, test, hint=2400) == shift
 
 
@@ -919,9 +927,9 @@ def test_spectral_distance_equals_a_uniform_offset():
 
 def test_spectral_distance_ignores_frames_below_the_floor():
     lm = np.full((80, 10), -100.0)
-    lm[:, 0] = 0.0  # 唯一の有音フレーム
+    lm[:, 0] = 0.0  # the only frame with energy
     test = lm.copy()
-    test[:, 1:] = 50.0  # 無音フレームだけ壊す
+    test[:, 1:] = 50.0  # wreck the silent frames only
     mean, _ = spectral_distance(lm, test, floor_db=-40.0)
     assert mean == 0.0
 ```
