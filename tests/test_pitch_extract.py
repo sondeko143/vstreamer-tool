@@ -46,6 +46,7 @@ def test_pitch_extract_rmvpe_routes_to_session_and_returns_aligned_pitch():
         sr=sr,
         window=window,
         f0_extractor=F0ExtractorType.rmvpe,
+        f0_filter_radius=1,
         f0_session=cast(InferenceSession, session),
         silence_front=0,
     )
@@ -79,6 +80,7 @@ def test_pitch_extract_rmvpe_requires_session():
             sr=16000,
             window=160,
             f0_extractor=F0ExtractorType.rmvpe,
+            f0_filter_radius=1,
             f0_session=None,
             silence_front=0,
         )
@@ -117,6 +119,7 @@ def test_pitch_extract_fcpe_routes_to_session_waveform_only():
         sr=sr,
         window=window,
         f0_extractor=F0ExtractorType.fcpe,
+        f0_filter_radius=1,
         f0_session=cast(InferenceSession, session),
         silence_front=0,
     )
@@ -148,6 +151,7 @@ def test_pitch_extract_fcpe_single_frame_does_not_collapse_to_0d():
         sr=16000,
         window=160,
         f0_extractor=F0ExtractorType.fcpe,
+        f0_filter_radius=1,
         f0_session=cast(InferenceSession, session),
         silence_front=0,
     )
@@ -167,6 +171,7 @@ def test_pitch_extract_fcpe_pads_short_input_to_min_samples():
         sr=16000,
         window=160,
         f0_extractor=F0ExtractorType.fcpe,
+        f0_filter_radius=1,
         f0_session=cast(InferenceSession, session),
         silence_front=0,
     )
@@ -181,6 +186,7 @@ def test_pitch_extract_fcpe_requires_session():
             sr=16000,
             window=160,
             f0_extractor=F0ExtractorType.fcpe,
+            f0_filter_radius=1,
             f0_session=None,
             silence_front=0,
         )
@@ -238,3 +244,38 @@ def test_median_filter_f0_preserves_shape_and_dtype():
     out = median_filter_f0(f0, 1)
     assert out.shape == f0.shape
     assert out.dtype == f0.dtype
+
+
+def _spiked_rmvpe_session(p_len: int = 100) -> FakeRmvpeSession:
+    """An rmvpe session whose f0 is flat except for a one-frame octave error."""
+    spiked = np.full((1, p_len), 220.0, dtype=np.float32)
+    spiked[0, 50] = 440.0
+    return FakeRmvpeSession(spiked)
+
+
+def test_pitch_extract_applies_the_median_filter_to_the_extractor_output():
+    _coarse, f0bak = pitch_extract(
+        torch.zeros(16000, dtype=torch.float32),
+        f0_up_key=0,
+        sr=16000,
+        window=160,
+        f0_extractor=F0ExtractorType.rmvpe,
+        f0_filter_radius=1,
+        f0_session=cast(InferenceSession, _spiked_rmvpe_session()),
+        silence_front=0,
+    )
+    assert f0bak[50] == pytest.approx(220.0)
+
+
+def test_pitch_extract_radius_zero_leaves_the_extractor_output_alone():
+    _coarse, f0bak = pitch_extract(
+        torch.zeros(16000, dtype=torch.float32),
+        f0_up_key=0,
+        sr=16000,
+        window=160,
+        f0_extractor=F0ExtractorType.rmvpe,
+        f0_filter_radius=0,
+        f0_session=cast(InferenceSession, _spiked_rmvpe_session()),
+        silence_front=0,
+    )
+    assert f0bak[50] == pytest.approx(440.0)

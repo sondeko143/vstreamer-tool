@@ -4,7 +4,6 @@ from typing import cast
 import numpy as np
 from numpy.typing import NDArray
 from onnxruntime import InferenceSession
-from scipy import signal
 from torch import Tensor
 
 from vspeech.config import F0ExtractorType
@@ -81,11 +80,13 @@ def pitch_extract_harvest(
         f0_ceil=f0_max,
         frame_period=10,
     )
-    f0 = cast(
+    # No medfilt here any more: the shared voiced-run filter in pitch_extract covers
+    # every extractor uniformly (ADR-0070). At the default radius 1 the kernel is the
+    # same 3 this used to apply, minus the zeros that used to bleed across voiced runs.
+    return cast(
         NDArray[np.double],
         pyworld.stonemask(audio.astype(np.double), f0_, t, sr),
     )
-    return signal.medfilt(f0, 3)
 
 
 def pitch_extract_dio(
@@ -194,6 +195,7 @@ def pitch_extract(
     sr: int,
     window: int,
     f0_extractor: F0ExtractorType,
+    f0_filter_radius: int,
     f0_session: InferenceSession | None,
     silence_front: int = 0,
 ) -> tuple[NDArray[Any], NDArray[np.floating[Any]]]:
@@ -227,6 +229,9 @@ def pitch_extract(
     else:
         raise ValueError("unknown f0 extractor type")
 
+    # Applied here rather than after the f0_up_key scaling only for readability: the
+    # median commutes with a positive scalar multiple, so the result is identical.
+    f0 = median_filter_f0(f0, f0_filter_radius)
     f0 *= pow(2, f0_up_key / 12)
     # f0 is returned raw (f0bak); the caller (_select_pitch) truncates it to
     # p_len and aligns it to the feature length. rmvpe/harvest/dio all return

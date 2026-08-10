@@ -376,6 +376,14 @@ class RvcConfig(BaseModel):
     gpu_id: int | None = Field(default=None)
     gpu_name: str = Field(default="")
     f0_extractor_type: F0ExtractorType = Field(default=F0ExtractorType.rmvpe)
+    f0_filter_radius: int = Field(
+        default=1,
+        ge=0,
+        le=7,
+        description="f0 の中央値フィルタ半径 (窓長 = 2r+1、0 で無効)。無声フレームを"
+        "跨がず有声区間ごとに適用する。3 を超えると streaming の右文脈が足りず、"
+        "出力へ渡る末尾フレームが実質未フィルタになる (ADR-0070)",
+    )
     input_boost: float = Field(default=1.0)
     rmvpe_model_file: Path = Field(default=Path())
     fcpe_model_file: Path = Field(default=Path())

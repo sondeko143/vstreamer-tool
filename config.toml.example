@@ -185,6 +185,11 @@ f0_extractor_type = "rmvpe"
 rmvpe_model_file = "./rmvpe.onnx"
 # fcpe の onnx（f0_extractor_type = "fcpe" のとき必要。uv run poe export-fcpe-onnx で生成）
 fcpe_model_file = "./fcpe.onnx"
+# f0 の中央値フィルタ半径（窓長 = 2r+1）。0 で無効。単発のオクターブ誤りに由来する
+# 「キュッ」という異音を消す。無声フレームを跨がず有声区間ごとに掛けるので、有声の
+# 立ち上がり・切れ際は鈍らない。3 を超えるとストリーミング経路の右文脈（約 30ms）が
+# 足りなくなり、出力へ渡る末尾フレームが実質未フィルタになる (ADR-0070)。
+f0_filter_radius = 1
 
 # ストリーミング VC (ADR-0050〜0054)。発話系 [vc]/[rvc] とは独立した
 # 低遅延・連続(無音区切り無し)の VC。既定 OFF — 有効化すると、発話系パイプラインの
