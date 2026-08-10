@@ -499,6 +499,28 @@ def test_an_unusable_source_rate_is_not_remembered_as_needing_no_conversion(
     assert output.resamplers == {}
 
 
+def test_a_refused_rate_costs_a_full_cache_nothing(
+    opened_streams: list[_FakeDevice],
+) -> None:
+    """A build that raises must not take an existing entry down with it.
+
+    The insertion side refuses to record a key before the build succeeds; the eviction
+    side has to hold the same invariant. Otherwise a full table loses one healthy
+    resampler every time a peer sends an impossible rate -- and a peer can send one per
+    utterance.
+    """
+    output = _opened()
+    warm = [8000 + i * 1000 for i in range(MAX_CACHED_RESAMPLERS)]
+    for rate in warm:
+        output.convert(_sine(rate, 800), rate, SampleFormat.INT16, 1)
+    assert list(output.resamplers) == warm  # full, so the next miss must evict
+
+    with pytest.raises(ValueError, match="病的"):
+        output.convert(_sine(44101, 800), 44101, SampleFormat.INT16, 1)
+
+    assert list(output.resamplers) == warm
+
+
 def test_a_pathological_source_rate_is_refused_before_it_costs_anything(
     opened_streams: list[_FakeDevice],
 ) -> None:

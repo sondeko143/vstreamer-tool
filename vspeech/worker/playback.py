@@ -181,13 +181,16 @@ class OutputStream:
             # Re-insert to move it to the most-recently-used end.
             self.resamplers[rate] = self.resamplers.pop(rate)
             return self.resamplers[rate]
+        # The table is not touched at all until the build has succeeded -- neither the new
+        # key recorded nor the oldest evicted. make_resampler rejects a rate it cannot
+        # serve, and a table mutated first would either claim "no conversion needed" for a
+        # rate that never resolved (playing the next such utterance unconverted, i.e.
+        # silently at the wrong speed) or throw away a warm entry to make room for a build
+        # that never happened. Building before evicting means one extra resampler is alive
+        # for the length of this call; MAX_PROTOTYPE_TAPS bounds what that costs.
+        resampler = make_resampler(rate, self.device_rate)
         if len(self.resamplers) >= MAX_CACHED_RESAMPLERS:
             del self.resamplers[next(iter(self.resamplers))]
-        # Built before the key is recorded: make_resampler rejects a rate it cannot
-        # serve, and recording it first would leave an entry claiming "no conversion
-        # needed" for a rate that never resolved, playing the next such utterance
-        # unconverted (i.e. silently at the wrong speed) instead of failing.
-        resampler = make_resampler(rate, self.device_rate)
         self.resamplers[rate] = resampler
         logger.info(
             "playback %dHz -> %dHz (%s)",
