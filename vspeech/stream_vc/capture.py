@@ -87,7 +87,6 @@ class InputRateConverter:
     """
 
     def __init__(self, device_rate: int, hop: int) -> None:
-        self.device_rate = device_rate
         self.hop = hop
         self.resampler: PolyphaseResampler | None = make_resampler(
             device_rate, CAPTURE_RATE
@@ -96,13 +95,18 @@ class InputRateConverter:
         self._pending: NDArray[np.float32] = np.zeros(0, dtype=np.float32)
 
     def blocks(self, samples: NDArray[np.float32]) -> list[NDArray[np.float32]]:
-        """The whole blocks this read completes -- steadily exactly one of them.
+        """The whole blocks this read completes -- one per read at the rates that
+        matter, occasionally two.
 
         Whatever is left over past the last whole block stays here and starts the next
-        one. The ratio need not divide evenly (`device_rate * hop / CAPTURE_RATE` is not
-        always an integer), so a read that comes up a few samples short or long must
-        neither drop them nor emit a short block: the runner's gate and envelope assume
-        a fixed block length.
+        one. `hop * device_rate / CAPTURE_RATE` is a whole number of device frames at
+        every rate the pipeline actually meets (48000 and 44100 both divide evenly at a
+        10 ms-multiple hop), and there one read is exactly one block. When it is not --
+        44100 with a 100-sample hop is 100.14 output samples per read -- the surplus
+        accumulates here and a read emits two blocks each time it crosses a hop
+        boundary, roughly once in 735 reads. What must never happen either way is a
+        dropped sample or a short block: the runner's gate and envelope assume a fixed
+        block length.
         """
         if self.resampler is None:
             return [samples]
@@ -121,12 +125,25 @@ def open_stream_vc_input_stream(
 ) -> tuple[sd.RawInputStream, int]:
     """Open the mic at its native rate; return the stream and that rate.
 
-    The rate is resolved on every open rather than once at startup, because the device
-    itself is re-resolved on every open too and a reopen can land on a different
-    endpoint (ADR-0071). The caller needs the rate back to build the converter, and
-    run_with_device_retry hands whatever `open_stream` returns straight to
-    `close_quietly()`, so the pair is unpacked by capture_loop's opener rather than
-    returned from it.
+    Rate resolution sits next to the device resolution that was already here, so an open
+    stays a single decision point and the rate has no second, cached copy to drift from.
+    It does not re-decide anything within one process: sd.query_devices() is cached at
+    PortAudio init and nothing here re-initialises it (see the deferred note in
+    worker/playback.py's search_appropriate_device), so a reopen sees the same table and
+    resolves the same rate.
+
+    The caller needs the rate back to build the converter, and run_with_device_retry
+    hands whatever `open_stream` returns straight to `close_quietly()`, so the pair is
+    unpacked by capture_loop's opener rather than returned from it.
+
+    Both resolvers raise the DeviceNotFoundError family, which is deliberately **not** in
+    retry.py's DEVICE_ERRORS: on a reopen it escapes run_with_device_retry and ends the
+    subsystem instead of backing off. That is the behaviour we want. Backing off cannot
+    help -- an unresolvable rate stays unresolvable however long you wait, so retrying
+    would spin forever on a config problem -- and ADR-0050 wants an unrecoverable fault
+    in an explicitly enabled feature to fail loud for the supervisor. It also keeps the
+    two resolvers consistent: the device lookup has always failed this way. (Unreachable
+    today for the reason above; this is a statement of intent, not a live path.)
     """
     device = resolve_stream_vc_input_device(config)
     rate, how = resolve_device_rate(
@@ -154,6 +171,19 @@ def open_stream_vc_input_stream(
         latency="low",
     )
     stream.start()
+    # PortAudio may know the endpoint runs at a slightly different rate than the one it
+    # accepted. We keep converting at the requested rate (the L/M ratio has to be built
+    # from a sane number: 44099 -> 16000 would mean 16000 phases), so a delta shows up
+    # only as a slow drift in the audio -- invisible unless it is said out loud here.
+    # getattr because the fakes in the tests are not full streams.
+    reported = getattr(stream, "samplerate", None)
+    if reported is not None and abs(float(reported) - rate) > 0.5:
+        logger.warning(
+            "stream_vc capture device reports %.4fHz for a requested %dHz; "
+            "converting at the requested rate",
+            float(reported),
+            rate,
+        )
     return stream, rate
 
 
@@ -209,7 +239,8 @@ async def _capture_read_loop(
     `device_rate` is the rate the stream was opened at, not `stream.samplerate`:
     PortAudio may report a hardware rate that differs by a hair, and an off-by-one rate
     turns a small L/M ratio into a gigantic one (16000 phases for 44099 -> 16000). We
-    asked for a rate the device accepted, so that is the ratio to filter with.
+    asked for a rate the device accepted, so that is the ratio to filter with; when the
+    two disagree open_stream_vc_input_stream says so in a warning.
     """
     # A drop while running = real backpressure. Throttle by time (ADR-0062).
     drop_throttle = LogThrottle()
@@ -264,10 +295,11 @@ async def capture_loop(
     # The rate the mic is currently open at. It travels from the opener to the read loop
     # through this closure because run_with_device_retry is bound to `[T: _Closable]` and
     # passes open_stream's return value to close_quietly(), so the opener can only return
-    # the stream itself. The initial value is never read: run_with_device_retry only
-    # calls _read after _open has returned, and a first open that fails raises out of
-    # worker_startup instead.
-    device_rate = CAPTURE_RATE
+    # the stream itself. Seeded with 0, not CAPTURE_RATE: run_with_device_retry only
+    # calls _read after _open has returned, and 0 turns a hypothetical read-before-open
+    # into an immediate ValueError out of make_resampler rather than audio quietly
+    # passing through at the wrong rate.
+    device_rate = 0
 
     def _open() -> sd.RawInputStream:
         nonlocal device_rate
@@ -276,8 +308,8 @@ async def capture_loop(
 
     async def _read(stream: sd.RawInputStream) -> None:
         # device_rate is read when run_with_device_retry calls this, which is always
-        # after the (re)open above -- so a reopen that lands on a different rate is
-        # honoured instead of being filtered with the old ratio.
+        # after the (re)open above -- so the loop always filters with the rate the
+        # stream in its hands was opened at.
         await _capture_read_loop(stream, hop, out_queue, running, device_rate)
 
     # Wait for the VC warmup to finish before opening the mic. Opening earlier lets the

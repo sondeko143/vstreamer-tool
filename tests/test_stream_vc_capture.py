@@ -341,6 +341,51 @@ def test_a_device_at_the_capture_rate_is_opened_without_conversion(
     assert "変換なし" in _open_log(caplog)
 
 
+def _reporting_stream(monkeypatch: pytest.MonkeyPatch, reported: float) -> None:
+    """Re-patch sd.RawInputStream with one that reports `reported` as its actual rate."""
+
+    class _DriftingStream(_OpenedStream):
+        samplerate = reported
+
+    monkeypatch.setattr(
+        capture_mod.sd, "RawInputStream", lambda **kwargs: _DriftingStream(**kwargs)
+    )
+
+
+def test_a_device_reporting_another_rate_is_warned_about(
+    opened_streams: list[_OpenedStream],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The conversion keeps using the requested rate, so a hardware rate that differs is
+    a slow drift in the audio and nothing else. This warning is its only trace."""
+    _reporting_stream(monkeypatch, 47999.0)
+    with caplog.at_level(logging.WARNING):
+        _, rate = open_stream_vc_input_stream(
+            StreamVcConfig(input_device_index=0), ms_to_samples(160.0)
+        )
+    assert rate == 48000  # still the requested rate, not the reported one
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1
+    assert "47999" in warnings[0]
+    assert "48000" in warnings[0]
+
+
+def test_a_device_reporting_the_requested_rate_stays_quiet(
+    opened_streams: list[_OpenedStream],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _reporting_stream(monkeypatch, 48000.0)
+    with caplog.at_level(logging.WARNING):
+        open_stream_vc_input_stream(
+            StreamVcConfig(input_device_index=0), ms_to_samples(160.0)
+        )
+    assert [
+        r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING
+    ] == []
+
+
 def test_no_resampler_is_built_when_the_device_runs_at_the_capture_rate() -> None:
     """The pass-through path must stay bit-identical to the pre-ADR-0070 code: the read
     is handed on as-is, not even copied."""
