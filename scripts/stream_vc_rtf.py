@@ -350,7 +350,7 @@ def main() -> None:
 
     rt = load_shared_runtime(args.config, args.gpu_id)
     if args.wav is not None:
-        signal = _load_wav_16k(args.wav)
+        signal = load_wav_16k(args.wav)
     else:
         signal = make_voiced_signal(16000, args.seconds, seed=0)
 
@@ -400,7 +400,7 @@ def main() -> None:
         print(f"wrote {args.json}")
 
 
-def _load_wav_16k(path: Path) -> NDArray[np.float32]:
+def load_wav_16k(path: Path) -> NDArray[np.float32]:
     """Return the wav as 16kHz mono float32 in [-1,1]."""
     import torch
     import torchaudio

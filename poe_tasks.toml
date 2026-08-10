@@ -50,6 +50,14 @@ export-fcpe-onnx = { cmd = "uv run --extra rvc --with torchfcpe --with onnx --wi
 # 掃引軸は --block-ms / --context-ms / --f0 / --iters / --margin で上書き可。
 stream-vc-rtf = { cmd = "python scripts/stream_vc_rtf.py", help = "Measure per-block latency/RTF of streaming VC across block/context/f0" }
 
+# lookahead(右文脈)ごとの変換品質をバッチ経路と比較する (ADR-0070)。--all-extras で
+# sync 済みのプロジェクト環境で走らせる。RTF ハーネスと違い **[stream_vc.rvc] をそのまま
+# 読む**ので、[rvc] へ写す必要は無い。
+#   uv sync --all-extras
+#   uv run poe stream-vc-lookahead-eval --config ./config.toml --input voice.wav
+# log-mel 距離の表と、各設定の wav (バッチ基準を含む) を出す。
+stream-vc-lookahead-eval = { cmd = "python scripts/stream_vc_lookahead_eval.py", help = "Compare streaming VC output against the batch path across lookahead settings" }
+
 # Complexity insight (advisory; separate from the health gates above) — driven by the
 # `code-metrics` skill. Shells out to `uvx lizard` + `uvx complexipy`, plus an in-process
 # beniget DepDegree (def-use coupling) lens that catches entangled mutable state:

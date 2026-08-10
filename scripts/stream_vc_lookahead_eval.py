@@ -124,3 +124,202 @@ def write_wav(path: Path, samples: NDArray[np.int16], rate: int) -> None:
         w.setsampwidth(2)
         w.setframerate(rate)
         w.writeframes(samples.tobytes())
+
+
+def load_config_and_runtime(config_path: Path) -> tuple[Any, dict[str, Any]]:
+    """Read the config and build the streaming runtime from **[stream_vc.rvc]**.
+
+    Reusing `build_stream_vc_runtime` means the reference and every streaming run share
+    one model load, and that the comparison is against the same weights the streaming path
+    would really use.
+    """
+    from vspeech.config import Config
+    from vspeech.stream_vc.runner import build_stream_vc_runtime
+
+    with open(config_path, "rb") as f:
+        config = Config.read_config_from_file(f)
+    return config.stream_vc, build_stream_vc_runtime(config.stream_vc)
+
+
+def run_batch_reference(
+    rt: dict[str, Any], signal_16k: NDArray[np.float32], seed: int
+) -> NDArray[np.int16]:
+    """The batch `change_voice` over the whole signal = the two-sided-context ceiling.
+
+    `run_change_voice` takes the same runtime dict shape `build_stream_vc_runtime`
+    produces, so no second model load is needed. Seeded, because the RVC synthesizer is
+    stochastic by design but reproducible under a seed.
+    """
+    from scripts.capture_change_voice_golden import run_change_voice
+    from scripts.capture_change_voice_golden import seed_all
+
+    frames = (np.clip(signal_16k, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
+    seed_all(seed)
+    return run_change_voice(rt, frames, 16000)
+
+
+def run_streaming(
+    rt: dict[str, Any],
+    sv_config: Any,
+    signal_16k: NDArray[np.float32],
+    lookahead_ms: float,
+    seed: int,
+) -> tuple[NDArray[np.int16], NDArray[np.float64], int]:
+    """Convert the signal block by block at one lookahead setting.
+
+    Returns (emitted int16, per-block seconds, emit_delay_samples).
+    """
+    import time
+
+    from scripts.capture_change_voice_golden import seed_all
+    from vspeech.lib.stream_vc import StreamingVc
+    from vspeech.stream_vc.capture import ms_to_samples
+
+    block_len = ms_to_samples(sv_config.block_ms)
+    sv = StreamingVc(
+        rvc_config=rt["rvc_config"],
+        device=rt["device"],
+        hubert_model=rt["hubert_model"],
+        session=rt["session"],
+        f0_session=rt["f0_session"],
+        target_sample_rate=rt["target_sample_rate"],
+        f0_enabled=rt["f0_enabled"],
+        emb_output_layer=rt["emb_output_layer"],
+        use_final_proj=rt["use_final_proj"],
+        block_len=block_len,
+        context_len=ms_to_samples(sv_config.context_ms + lookahead_ms),
+        crossfade_len=ms_to_samples(sv_config.crossfade_ms),
+        sola_search_len=ms_to_samples(sv_config.sola_search_ms),
+        lookahead_len=ms_to_samples(lookahead_ms),
+    )
+    sv.warmup()
+    seed_all(seed)
+    emits: list[NDArray[np.int16]] = []
+    durations: list[float] = []
+    for i in range(signal_16k.shape[0] // block_len):
+        block = signal_16k[i * block_len : (i + 1) * block_len]
+        t0 = time.perf_counter()
+        emits.append(sv.process_block(block))
+        durations.append(time.perf_counter() - t0)
+    return (
+        np.concatenate(emits),
+        np.array(durations, dtype=np.float64),
+        sv.emit_delay_samples,
+    )
+
+
+def log_mel(x: NDArray[np.int16], rate: int) -> NDArray[np.float64]:
+    """(n_mels, frames) log-mel on a 10*log10 scale."""
+    import torch
+    import torchaudio.transforms as T
+
+    mel = T.MelSpectrogram(sample_rate=rate, n_fft=1024, hop_length=256, n_mels=80)
+    spec = mel(torch.from_numpy(x.astype(np.float32) / 32768.0))
+    return (10.0 * torch.log10(spec + 1e-10)).numpy().astype(np.float64)
+
+
+def format_table(rows: list[dict[str, Any]]) -> str:
+    header = (
+        "  L(ms) right(ms)  added(ms)  window(ms)  rtf_p50  rtf_p95  "
+        "align_err  logmel_mean  logmel_p95"
+    )
+    lines = [header, "-" * len(header)]
+    for r in rows:
+        lines.append(
+            f"{r['lookahead_ms']:>7.0f} {r['right_ms']:>9.1f} "
+            f"{r['added_ms']:>10.0f} {r['window_ms']:>11.0f} "
+            f"{r['rtf_p50']:>8.2f} {r['rtf_p95']:>8.2f} "
+            f"{r['align_err']:>10d} {r['logmel_mean']:>12.3f} "
+            f"{r['logmel_p95']:>11.3f}"
+        )
+    return "\n".join(lines)
+
+
+def main() -> None:
+    # The description and the ranking guidance below are Japanese. When stdout/stderr is
+    # a pipe/redirect, Windows picks cp1252 by default and this dies with
+    # UnicodeEncodeError before anything is printed (the same encoding guard this project
+    # keeps needing; same shape as stream_vc_rtf.py / convert_hubert.py /
+    # export_hubert_onnx.py). typeshed types sys.stdout/stderr as a TextIO without
+    # .reconfigure, but at runtime they are TextIOWrapper.
+    import sys
+
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # ty: ignore[unresolved-attribute]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # ty: ignore[unresolved-attribute]
+
+    import argparse
+    import json
+
+    from scripts.stream_vc_rtf import load_wav_16k
+    from scripts.stream_vc_rtf import parse_grid
+
+    parser = argparse.ArgumentParser(
+        description="lookahead ごとに streaming VC の出力をバッチ変換と比較する"
+    )
+    parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--input", required=True, type=Path, help="入力 wav")
+    parser.add_argument(
+        "--lookahead", default="0,40,80,160", help="lookahead_ms のリスト"
+    )
+    parser.add_argument("--out-dir", type=Path, default=Path("./lookahead_eval"))
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--json", type=Path, default=None)
+    args = parser.parse_args()
+
+    sv_config, rt = load_config_and_runtime(args.config)
+    rate = rt["target_sample_rate"]
+    signal = load_wav_16k(args.input)
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+
+    ref = run_batch_reference(rt, signal, args.seed)
+    write_wav(args.out_dir / "batch_reference.wav", ref, rate)
+    ref_f = ref.astype(np.float32)
+
+    # The first blocks are rendered against a zeros context, and the batch reference has
+    # no such warm-up, so drop that span from both before comparing.
+    skip = round((sv_config.context_ms + sv_config.block_ms) / 1000.0 * rate)
+    rows: list[dict[str, Any]] = []
+    for lookahead_ms in parse_grid(args.lookahead):
+        stream, durations, delay = run_streaming(
+            rt, sv_config, signal, lookahead_ms, args.seed
+        )
+        write_wav(args.out_dir / f"lookahead_{lookahead_ms:.0f}ms.wav", stream, rate)
+        ref_t = ref_f[skip:]
+        stream_t = stream.astype(np.float32)[skip:]
+        offset = align_offset(ref_t, stream_t, hint=delay)
+        aligned = stream_t[offset : offset + ref_t.shape[0]]
+        m = min(aligned.shape[0], ref_t.shape[0])
+        mean, p95 = spectral_distance(
+            log_mel(ref_t[:m].astype(np.int16), rate),
+            log_mel(aligned[:m].astype(np.int16), rate),
+        )
+        block_seconds = sv_config.block_ms / 1000.0
+        rows.append(
+            {
+                "lookahead_ms": lookahead_ms,
+                "right_ms": 30.0 + lookahead_ms,
+                "added_ms": lookahead_ms,
+                "window_ms": sv_config.context_ms + lookahead_ms + sv_config.block_ms,
+                "rtf_p50": float(np.percentile(durations, 50)) / block_seconds,
+                "rtf_p95": float(np.percentile(durations, 95)) / block_seconds,
+                # Should land near 0: the analytic emit delay is what we aligned by.
+                "align_err": int(offset - delay),
+                "logmel_mean": mean,
+                "logmel_p95": p95,
+            }
+        )
+        print(f"lookahead={lookahead_ms:.0f}ms done", flush=True)
+
+    print()
+    print(format_table(rows))
+    print()
+    print(f"wav: {args.out_dir}  (batch_reference.wav と聞き比べること)")
+    print("logmel 距離が小さいほどバッチ変換に近い。ただしこれは代理指標なので、")
+    print("順位付けに使い、最終判断は wav の耳 A/B で行うこと。")
+    if args.json is not None:
+        args.json.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+        print(f"wrote {args.json}")
+
+
+if __name__ == "__main__":
+    main()
