@@ -89,3 +89,4 @@
 | [0070](0070-device-boundary-inhouse-polyphase-resampler.md) | デバイス境界のサンプルレート変換を OS から自前 numpy ポリフェーズへ移す（0036 を refine） | Proposed | 2026-08-10 |
 | [0071](0071-device-native-rate-resolution.md) | デバイスのネイティブレートを WASAPI カウンターパートから自動解決し、設定で上書きできるようにする | Proposed | 2026-08-10 |
 | [0075](0075-wire-sample-rate-validation.md) | ワイヤ形式の sample_rate を範囲 + 25Hz 格子で検証し、リサンプラ側にも比の上限を置く | Proposed | 2026-08-11 |
+| [0076](0076-preflight-device-rate-open-probe.md) | preflight はデバイスレートを実際に開いて検証し、比が分からない境界は標準レート族に対して確認する | Proposed | 2026-08-11 |

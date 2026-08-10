@@ -5,6 +5,11 @@ without acquiring a real resource (required fields, existence of referenced
 files/directories, device discoverability, presence of dependencies). All detected
 problems are aggregated and raised as a ConfigError. Failures that only surface on a
 real load are handled at worker startup (layer B).
+
+One check is a deliberate exception to "without acquiring a real resource":
+`_check_device_rate` actually opens (and immediately closes) the audio device at its
+resolved rate, because whether PortAudio accepts that rate can only be known by trying
+(ADR-0076). It is the one place in this module that touches real hardware.
 """
 
 from collections.abc import Callable
@@ -12,6 +17,7 @@ from importlib.util import find_spec
 from json import JSONDecodeError
 from pathlib import Path
 from typing import IO
+from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 from toml import TomlDecodeError
@@ -31,7 +37,40 @@ from vspeech.exceptions import ConfigProblem
 from vspeech.lib.obs_text_settings import hex_color_to_obs_int
 from vspeech.lib.subtitle_state import TRANSPARENT_BG_COLOR
 
+if TYPE_CHECKING:
+    # Type-only: importing vspeech.lib.audio for real would pull in sounddevice at
+    # module load, making preflight.py (imported unconditionally by main.py) require
+    # the `audio` extra even for a transcription-only pipeline. Every runtime use below
+    # imports it lazily, inside the enable-gated checker that actually needs it.
+    from vspeech.lib.audio import DeviceInfo
+
 Checker = Callable[[Config], list[ConfigProblem]]
+
+# The standard audio rate family ([0075](docs/adr/0075-wire-sample-rate-validation.md)):
+# 8000 Hz (telephony) through 192000 Hz (hi-res), stepped by 25 Hz -- the family's own
+# gcd. ADR-0075 measured that every pair drawn from this family builds at most 261k taps
+# (84ms), well under MAX_PROTOTYPE_TAPS, so testing a resolved device rate against every
+# member here cannot reject a legitimate combination. Used as the proxy pipeline rate for
+# stream_vc's output boundary (ADR-0076): unlike recording/stream_vc-input, whose
+# pipeline rate is a config constant, stream_vc output's target_sample_rate comes from
+# the RVC model's own metadata, which preflight cannot cheaply read (that would mean
+# building a GPU session here). The RVC model rates this boundary actually carries
+# (32000/40000/48000) all sit inside this family.
+_STANDARD_SAMPLE_RATES = (
+    8000,
+    11025,
+    16000,
+    22050,
+    24000,
+    32000,
+    40000,
+    44100,
+    48000,
+    88200,
+    96000,
+    176400,
+    192000,
+)
 
 
 def _check_gcp_credentials(gcp: GcpConfig, worker: str) -> list[ConfigProblem]:
@@ -70,6 +109,87 @@ def _check_vad_gate(
             )
         ]
     return []
+
+
+def _check_device_rate(
+    *,
+    device: DeviceInfo,
+    override: int | None,
+    input: bool,
+    config_key: str,
+    worker: str,
+    channels: int,
+    dtype: str,
+    ratio_targets: tuple[int, ...] = (),
+) -> list[ConfigProblem]:
+    """Verify the rate `device` would be opened at (ADR-0076). Shared by all four device
+    boundaries ([recording]/[playback]/[stream_vc] in/out); only `resolve_input_device` /
+    `resolve_output_device` / `resolve_stream_vc_*_device` differ per boundary, and those
+    already ran by the time this is called (device resolution and rate resolution are
+    two separate steps, each with its own try/except, so DeviceRateUnresolvedError being
+    a DeviceNotFoundError subclass cannot be caught by the wrong handler here).
+
+    Two independent things can be wrong once a device is found:
+
+    1. The rate cannot be decided at all (DeviceRateUnresolvedError, ADR-0071).
+    2. The decided rate produces a pathological resample ratio against `ratio_targets`
+       (empty for a boundary whose counterpart rate is not known at preflight time --
+       see worker/playback.py's per-utterance warning instead, ADR-0075).
+
+    A third thing -- PortAudio refusing to open the device at that rate at all -- can
+    only be found by trying, so this is the one preflight check that acquires a real
+    device: opened and immediately closed, never read from or written to.
+    """
+    from vspeech.exceptions import DeviceRateUnresolvedError
+    from vspeech.lib.audio import resolve_device_rate
+    from vspeech.lib.resample import make_resampler
+
+    try:
+        rate, _how = resolve_device_rate(
+            device, override, input=input, config_key=config_key
+        )
+    except DeviceRateUnresolvedError as e:
+        return [ConfigProblem(worker, str(e), field=config_key)]
+
+    problems: list[ConfigProblem] = []
+    for target in ratio_targets:
+        try:
+            make_resampler(rate, target)
+        except ValueError as e:
+            problems.append(
+                ConfigProblem(
+                    worker,
+                    f"{config_key} は {rate}Hz に解決されましたが、"
+                    f"{target}Hz への変換比が病的です: {e}",
+                    field=config_key,
+                )
+            )
+            break  # one pathological target is enough to prove the device rate itself
+
+    import sounddevice as sd
+
+    try:
+        stream = (
+            sd.RawInputStream(
+                samplerate=rate, device=device.index, channels=channels, dtype=dtype
+            )
+            if input
+            else sd.RawOutputStream(
+                samplerate=rate, device=device.index, channels=channels, dtype=dtype
+            )
+        )
+        stream.start()
+        stream.close()
+    except (OSError, sd.PortAudioError) as e:
+        kind = "入力" if input else "出力"
+        problems.append(
+            ConfigProblem(
+                worker,
+                f"{kind}デバイス '{device.name}' を {rate}Hz で開けません: {e}",
+                field=config_key,
+            )
+        )
+    return problems
 
 
 def _check_transcription(config: Config) -> list[ConfigProblem]:
@@ -114,17 +234,34 @@ def _check_recording(config: Config) -> list[ConfigProblem]:
     if not config.recording.enable:
         return []
     from vspeech.exceptions import DeviceNotFoundError
+    from vspeech.lib.audio import get_sd_dtype
     from vspeech.lib.audio import resolve_input_device
     from vspeech.shared_context import WorkerOutput
 
     w = "recording"
+    rec = config.recording
     problems: list[ConfigProblem] = []
     try:
-        resolve_input_device(config.recording)
+        device = resolve_input_device(rec)
     except DeviceNotFoundError as e:
         problems.append(ConfigProblem(w, str(e), field="recording.input_device_index"))
+    else:
+        # config.rate is the one fixed pipeline rate this boundary ever converts to
+        # (ADR-0076), so the ratio check tests it exactly instead of a proxy set.
+        problems.extend(
+            _check_device_rate(
+                device=device,
+                override=rec.input_device_rate,
+                input=True,
+                config_key="recording.input_device_rate",
+                worker=w,
+                channels=rec.channels,
+                dtype=get_sd_dtype(rec.format),
+                ratio_targets=(rec.rate,),
+            )
+        )
     try:
-        WorkerOutput.from_routes_list(config.recording.routes_list)
+        WorkerOutput.from_routes_list(rec.routes_list)
     except Exception as e:
         problems.append(
             ConfigProblem(
@@ -142,11 +279,28 @@ def _check_playback(config: Config) -> list[ConfigProblem]:
     from vspeech.exceptions import DeviceNotFoundError
     from vspeech.lib.audio import resolve_output_device
 
+    w = "playback"
+    pb = config.playback
     try:
-        resolve_output_device(config.playback)
+        device = resolve_output_device(pb)
     except DeviceNotFoundError as e:
-        return [ConfigProblem("playback", str(e), field="playback.output_device_index")]
-    return []
+        return [ConfigProblem(w, str(e), field="playback.output_device_index")]
+    # No ratio_targets: the source rate (whatever TTS/VC/remote worker produced the
+    # utterance) is not known until a real utterance arrives, so there is no fixed
+    # pipeline rate to test against here -- worker/playback.py already warns and moves
+    # on to the next utterance for a pathological one (ADR-0075/0076). This is still the
+    # first time the device itself (rate resolution + actually opening it) can be
+    # validated at startup at all -- before ADR-0070/0071 fixed the device to its own
+    # native rate, this boundary's rate was only known once the first utterance arrived.
+    return _check_device_rate(
+        device=device,
+        override=pb.output_device_rate,
+        input=False,
+        config_key="playback.output_device_rate",
+        worker=w,
+        channels=1,
+        dtype="int16",
+    )
 
 
 def _check_translation(config: Config) -> list[ConfigProblem]:
@@ -317,6 +471,7 @@ def _check_stream_vc(config: Config) -> list[ConfigProblem]:
     from vspeech.exceptions import DeviceNotFoundError
     from vspeech.lib.audio import resolve_stream_vc_input_device
     from vspeech.lib.audio import resolve_stream_vc_output_device
+    from vspeech.stream_vc.capture import CAPTURE_RATE
     from vspeech.stream_vc.capture import ms_to_samples
 
     w = "stream_vc"
@@ -357,17 +512,49 @@ def _check_stream_vc(config: Config) -> list[ConfigProblem]:
         # field becomes "stream_vc.vad_model_file" (the worker name is the prefix).
         problems.extend(_check_vad_gate(sv, w))
         try:
-            resolve_stream_vc_input_device(sv)
+            input_device = resolve_stream_vc_input_device(sv)
         except DeviceNotFoundError as e:
             problems.append(
                 ConfigProblem(w, str(e), field="stream_vc.input_device_index")
             )
+        else:
+            # CAPTURE_RATE is the one fixed pipeline rate this boundary ever converts
+            # to (ADR-0076), so the ratio check tests it exactly instead of a proxy set.
+            problems.extend(
+                _check_device_rate(
+                    device=input_device,
+                    override=sv.input_device_rate,
+                    input=True,
+                    config_key="stream_vc.input_device_rate",
+                    worker=w,
+                    channels=1,
+                    dtype="int16",
+                    ratio_targets=(CAPTURE_RATE,),
+                )
+            )
     if does_play:
         try:
-            resolve_stream_vc_output_device(sv)
+            output_device = resolve_stream_vc_output_device(sv)
         except DeviceNotFoundError as e:
             problems.append(
                 ConfigProblem(w, str(e), field="stream_vc.output_device_index")
+            )
+        else:
+            # The counterpart rate here is whatever RVC model is loaded (its
+            # target_sample_rate, read from ONNX metadata at worker startup, layer B --
+            # preflight cannot cheaply know it without building a GPU session). Test
+            # against the whole standard rate family as a proxy instead (ADR-0076).
+            problems.extend(
+                _check_device_rate(
+                    device=output_device,
+                    override=sv.output_device_rate,
+                    input=False,
+                    config_key="stream_vc.output_device_rate",
+                    worker=w,
+                    channels=1,
+                    dtype="int16",
+                    ratio_targets=_STANDARD_SAMPLE_RATES,
+                )
             )
 
     # role != local needs a network transport. Left on in_process nobody receives what
