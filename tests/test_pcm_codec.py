@@ -1,5 +1,7 @@
 """Shared PCM decode/encode used at every device boundary (ADR-0070)."""
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -99,9 +101,23 @@ def test_encode_nan_is_silence_not_full_scale(fmt: SampleFormat) -> None:
     undefined. Measured against the unguarded implementation: UINT8 lands the byte
     on 0x00, which decode_pcm reads back as full-scale -1.0 DC -- exactly the
     failure mode this module exists to prevent. Silence is the only safe fallback
-    at a device boundary."""
+    at a device boundary.
+
+    Two assertions are needed to discriminate every format against the unguarded
+    implementation: on x86, an undefined NaN->int cast happens to land on 0 for
+    INT8/INT16/INT24, which already decodes to silence -- only UINT8's cast lands
+    on a byte that decodes to full-scale DC. So the decoded-value check alone only
+    fails pre-fix for UINT8 (and, separately, for FLOAT32, which has no int cast to
+    misbehave but does propagate the bare NaN). The unguarded cast still raises
+    `RuntimeWarning: invalid value encountered in cast` for all three of
+    INT8/INT16/INT24, though, so promoting that warning to an error here makes all
+    five parametrizations fail against the unguarded implementation for a real
+    reason, landing on 0 by undefined-behaviour luck rather than being a contract.
+    """
     x = np.array([float("nan"), 0.3, float("nan"), -0.3], dtype=np.float32)
-    got = decode_pcm(encode_pcm(x, fmt), fmt, channels=1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        got = decode_pcm(encode_pcm(x, fmt), fmt, channels=1)
     assert got[0] == 0.0
     assert got[2] == 0.0
 
