@@ -30,6 +30,7 @@ def _bare_streaming_vc(
     crossfade_len: int = 400,
     sola_search_len: int = 80,
     target_sample_rate: int = 48000,
+    lookahead_len: int = 0,
 ):
     """A StreamingVc that drives only `_emit_with_crossfade`, with no model and no GPU.
 
@@ -43,6 +44,7 @@ def _bare_streaming_vc(
     sv.context_len = context_len
     sv.crossfade_len = crossfade_len
     sv.sola_search_len = sola_search_len
+    sv.lookahead_len = lookahead_len
     sv.target_sample_rate = target_sample_rate
     sv._xfade_cache = None
     sv._output_tail = None
@@ -429,3 +431,83 @@ def test_sola_offset_zero_when_region_too_short():
     # return value.
     tail = np.full(100, 5000.0, dtype=np.float32)
     assert sola_offset(tail, np.full(50, 5000.0, dtype=np.float32)) == 0
+
+
+def test_lookahead_zero_reads_from_the_unchanged_nominal_position():
+    """lookahead_len=0 moves the read position by not one sample (bit-identical output)."""
+    sr, block_len, ctx_len = 48000, 2560, 8000
+    out_total = round((ctx_len + block_len - 320) * sr / 16000)
+    out = np.arange(out_total, dtype=np.int16)
+    sv = _bare_streaming_vc(target_sample_rate=sr, lookahead_len=0)
+    sv._emit_with_crossfade(out)
+    out_hop = round(block_len * sr / 16000)
+    out_xf = round(400 * sr / 16000)
+    out_sola = round(80 * sr / 16000)
+    expected_nominal = out_total - out_hop - out_xf - out_sola
+    ctx_out = round(ctx_len * sr / 16000)
+    assert sv.emit_delay_samples == ctx_out - expected_nominal
+
+
+def test_lookahead_delays_the_emit_by_exactly_that_much():
+    """Raising the lookahead delays the emit by exactly that much; the emit length is
+    unchanged."""
+    sr, block_len, ctx_len = 48000, 2560, 8000
+    out_total = round((ctx_len + block_len - 320) * sr / 16000)
+    out = np.arange(out_total, dtype=np.int16)
+    expected_hop = round(block_len * sr / 16000)
+    delays: dict[float, int] = {}
+    for look_ms in (0.0, 40.0, 80.0, 160.0):
+        sv = _bare_streaming_vc(
+            target_sample_rate=sr, lookahead_len=round(look_ms * 16)
+        )
+        emitted = [sv._emit_with_crossfade(out).shape[0] for _ in range(3)]
+        # the rate lock is not affected by the lookahead
+        assert set(emitted) == {expected_hop}
+        delays[look_ms] = sv.emit_delay_samples
+    for look_ms in (40.0, 80.0, 160.0):
+        out_look = round(round(look_ms * 16) * sr / 16000)
+        assert delays[look_ms] - delays[0.0] == out_look
+
+
+def test_lookahead_buys_right_context_one_for_one():
+    """The window left beyond the emit end (= right context) grows by exactly the
+    lookahead."""
+    sr, block_len, ctx_len = 48000, 2560, 8000
+    out_total = round((ctx_len + block_len - 320) * sr / 16000)
+    out = np.arange(out_total, dtype=np.int16)
+    ctx_out = round(ctx_len * sr / 16000)
+    out_hop = round(block_len * sr / 16000)
+    rights: dict[float, int] = {}
+    for look_ms in (0.0, 160.0):
+        sv = _bare_streaming_vc(
+            target_sample_rate=sr, lookahead_len=round(look_ms * 16)
+        )
+        sv._emit_with_crossfade(out)
+        # usable end of the render and the emit end, both relative to the block start
+        usable_end = out_total - ctx_out
+        emit_end = out_hop - 1 - sv.emit_delay_samples
+        rights[look_ms] = usable_end - emit_end
+    # the default (lookahead 0) leaves about 30ms of right context
+    assert 0 < rights[0.0] < round(0.035 * sr)
+    assert rights[160.0] - rights[0.0] == round(round(160.0 * 16) * sr / 16000)
+
+
+def test_a_large_lookahead_with_the_extended_window_never_trips_the_guard():
+    """With the window extended by the lookahead, no lookahead is too large.
+
+    The lookahead cancels out of the read-position condition, so the effective ceiling is
+    latency and RTF alone (ADR-0070). If this broke, preflight would need a new check --
+    it is the load-bearing property of the design.
+    """
+    sr, block_len, ctx_ms = 48000, 2560, 500.0
+    for look_ms in (0.0, 160.0, 500.0, 2000.0):
+        ctx_len = round((ctx_ms + look_ms) * 16)
+        out_total = round((ctx_len + block_len - 320) * sr / 16000)
+        sv = _bare_streaming_vc(
+            block_len=block_len,
+            context_len=ctx_len,
+            target_sample_rate=sr,
+            lookahead_len=round(look_ms * 16),
+        )
+        emitted = sv._emit_with_crossfade(np.arange(out_total, dtype=np.int16))
+        assert emitted.shape[0] == round(block_len * sr / 16000)

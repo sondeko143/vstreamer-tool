@@ -188,6 +188,7 @@ class StreamingVc:
         context_len: int,
         crossfade_len: int = 0,
         sola_search_len: int = 0,
+        lookahead_len: int = 0,
     ) -> None:
         import torch
 
@@ -212,6 +213,11 @@ class StreamingVc:
         # SOLA search half-width (in 16kHz input samples). 0 disables SOLA = the previous
         # fixed-position behaviour.
         self.sola_search_len = sola_search_len
+        # How many input samples earlier than the tail anchor to read the emit from.
+        # Buying right context this way costs exactly this much extra latency; the caller
+        # is expected to extend context_len by the same amount so the left context at the
+        # emit start does not shrink (ADR-0070).
+        self.lookahead_len = lookahead_len
         # The output-domain lengths of the crossfade (hop / crossfade / SOLA search
         # half-width) are derived from the real-time clock
         # (`* target_sample_rate / 16000`). Deriving them as a ratio of the render length
@@ -220,7 +226,7 @@ class StreamingVc:
         # out.shape[0] (anchored at the tail) so that the truncated tail is avoided. The
         # lengths are constant across ticks -> computed on the first emit and cached.
         self._xfade_cache: (
-            tuple[int, int, int, NDArray[np.float32], NDArray[np.float32]] | None
+            tuple[int, int, int, int, NDArray[np.float32], NDArray[np.float32]] | None
         ) = None
         self._output_tail = (
             None  # zeros(out_xf) is created lazily on the first crossfade
@@ -420,6 +426,11 @@ class StreamingVc:
           correlation surface is flat) it returns the **centre** `out_sola` of the region,
           so `start == nominal`. That is, it falls back to "no shift" (not to index 0 =
           the largest negative shift).
+        - `lookahead_len` shifts `nominal` earlier by exactly `out_look`, so the emitted
+          content is that much older and every emitted sample gains that much right
+          context. It never changes the emit length, so the rate lock is untouched; the
+          cost is exactly `out_look` of extra latency. `lookahead_len == 0` reproduces the
+          pre-lookahead read position sample for sample.
 
         The algorithmic delay is out_sola samples (from moving the read position one
         search half-width earlier) plus HuBERT's receptive-field truncation of the tail
@@ -439,6 +450,7 @@ class StreamingVc:
             out_hop = round(self.block_len * r / 16000)
             out_xf = round(self.crossfade_len * r / 16000)
             out_sola = round(self.sola_search_len * r / 16000)
+            out_look = round(self.lookahead_len * r / 16000)
             if out_total < out_hop:
                 raise ValueError(
                     f"decoder output ({out_total}) < one hop ({out_hop}): "
@@ -451,20 +463,32 @@ class StreamingVc:
             # guarantee nominal - out_sola >= 0 (the search window never runs off the
             # front of the output)
             out_sola = max(0, min(out_sola, (out_total - out_hop - out_xf) // 2))
+            # nominal - out_sola >= 0 must still hold with the lookahead subtracted. The
+            # caller extends context_len by the lookahead, so out_total grows by the same
+            # amount and this can only trip on a hand-built geometry -- fail loud rather
+            # than clamp, or the measured lookahead would silently differ from the
+            # configured one.
+            if out_total - out_hop - out_xf - 2 * out_sola - out_look < 0:
+                raise ValueError(
+                    f"lookahead ({out_look}) が描画長に対して大きすぎる "
+                    f"(out_total={out_total} hop={out_hop} xf={out_xf} "
+                    f"sola={out_sola}): lookahead_ms を減らすか context_ms を"
+                    "増やすこと。"
+                )
             # The fade law follows whether SOLA is on: with SOLA the adjacent renders are
             # correlated (sum=1), without it they are uncorrelated (equal power). At
             # sola_search_len==0 this matches pre-SOLA to within ~1 ULP.
             fade_in, fade_out = crossfade_weights(
                 out_xf, correlated=self.sola_search_len > 0
             )
-            self._xfade_cache = (out_hop, out_xf, out_sola, fade_in, fade_out)
-        out_hop, out_xf, out_sola, fade_in, fade_out = self._xfade_cache
+            self._xfade_cache = (out_hop, out_xf, out_sola, out_look, fade_in, fade_out)
+        out_hop, out_xf, out_sola, out_look, fade_in, fade_out = self._xfade_cache
         out_f = out.astype(np.float32)
         if self._output_tail is None:
             self._output_tail = np.zeros(out_xf, dtype=np.float32)
         # The read start. With out_sola=0 this is identical to before
         # (= out_total-out_hop-out_xf).
-        nominal = out_total - out_hop - out_xf - out_sola
+        nominal = out_total - out_hop - out_xf - out_sola - out_look
         if out_sola > 0:
             region = out_f[nominal - out_sola : nominal + out_sola + out_xf]
             start = (nominal - out_sola) + sola_offset(self._output_tail, region)
