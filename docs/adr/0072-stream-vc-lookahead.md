@@ -1,4 +1,4 @@
-# 0070. streaming VC の emit 読み出し位置を lookahead ぶん手前へずらして右文脈を買う
+# 0072. streaming VC の emit 読み出し位置を lookahead ぶん手前へずらして右文脈を買う
 
 - Status: Accepted
 - Date: 2026-08-10 (既定値 40ms を実機測定で確定し Accepted へ昇格: 2026-08-11)

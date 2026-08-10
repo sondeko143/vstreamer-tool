@@ -152,7 +152,7 @@ def test_warmup_skip_samples_matches_the_context_plus_block_span():
 
 def test_warmup_skip_samples_grows_with_the_lookahead():
     """The context buffer `run_streaming` builds is context_ms + lookahead_ms long
-    (ADR-0070), so the warm-up span to skip must grow by exactly the lookahead -- a
+    (ADR-0072), so the warm-up span to skip must grow by exactly the lookahead -- a
     fixed skip would leave partially-cold output in the comparison for every
     lookahead_ms > 0."""
     base = warmup_skip_samples(

@@ -50,7 +50,7 @@ export-fcpe-onnx = { cmd = "uv run --extra rvc --with torchfcpe --with onnx --wi
 # 掃引軸は --block-ms / --context-ms / --f0 / --iters / --margin で上書き可。
 stream-vc-rtf = { cmd = "python scripts/stream_vc_rtf.py", help = "Measure per-block latency/RTF of streaming VC across block/context/f0" }
 
-# lookahead(右文脈)ごとの変換品質をバッチ経路と比較する (ADR-0070)。--all-extras で
+# lookahead(右文脈)ごとの変換品質をバッチ経路と比較する (ADR-0072)。--all-extras で
 # sync 済みのプロジェクト環境で走らせる。RTF ハーネスと違い **[stream_vc.rvc] をそのまま
 # 読む**ので、[rvc] へ写す必要は無い。
 #   uv sync --all-extras

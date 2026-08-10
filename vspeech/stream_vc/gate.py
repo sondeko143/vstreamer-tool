@@ -89,7 +89,7 @@ class StreamingVadGate:
         self._since_speech = self._hangover_windows + 1
         # The masks of the most recent blocks, oldest first, as (window_gains, emit_len)
         # pairs. One block is enough while the emit delay stays below a hop, but lookahead
-        # (ADR-0070) pushes the delay past it, and then the head of the emit carries audio
+        # (ADR-0072) pushes the delay past it, and then the head of the emit carries audio
         # decided two or more blocks ago. The length is derived per call from the delay,
         # so it self-sizes and stays at one block for the pre-lookahead geometry.
         self._history: list[tuple[NDArray[np.float64], int]] = []
@@ -172,7 +172,7 @@ class StreamingVadGate:
         block boundary (no step = no click). How many blocks are needed follows from the
         delay: `ceil((delay_samples + step/2) / emit_len)`, which is one block for the
         pre-lookahead geometry and grows as `lookahead_ms` pushes the delay past a hop
-        (ADR-0070). That continuity only holds while `delay_samples` is constant across
+        (ADR-0072). That continuity only holds while `delay_samples` is constant across
         ticks, which is why `StreamingVc` publishes the **nominal** delay, excluding
         SOLA's lag (ADR-0059).
 

@@ -216,7 +216,7 @@ class StreamingVc:
         # How many input samples earlier than the tail anchor to read the emit from.
         # Buying right context this way costs exactly this much extra latency; the caller
         # is expected to extend context_len by the same amount so the left context at the
-        # emit start does not shrink (ADR-0070).
+        # emit start does not shrink (ADR-0072).
         self.lookahead_len = lookahead_len
         # The output-domain lengths of the crossfade (hop / crossfade / SOLA search
         # half-width) are derived from the real-time clock

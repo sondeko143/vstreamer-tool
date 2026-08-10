@@ -1,4 +1,4 @@
-"""Measure what lookahead buys, against the batch path as the reference (ADR-0070).
+"""Measure what lookahead buys, against the batch path as the reference (ADR-0072).
 
 Converts one wav both ways with **the same model** -- streaming at several
 `lookahead_ms` settings, and the batch `change_voice` that has full two-sided context --
@@ -140,7 +140,7 @@ def warmup_skip_samples(
     reference.
 
     `run_streaming` builds `StreamingVc` with a `context_ms + lookahead_ms` long context
-    buffer (ADR-0070), and that buffer starts as zeros -- it only holds real audio once
+    buffer (ADR-0072), and that buffer starts as zeros -- it only holds real audio once
     that much real time has rolled through it. The batch reference has no such warm-up,
     so both must have this span dropped before comparing them. The span therefore grows
     with the lookahead: skipping a fixed amount leaves partially-cold output in the tail

@@ -496,7 +496,7 @@ def test_a_large_lookahead_with_the_extended_window_never_trips_the_guard():
     """With the window extended by the lookahead, no lookahead is too large.
 
     The lookahead cancels out of the read-position condition, so the effective ceiling is
-    latency and RTF alone (ADR-0070). If this broke, preflight would need a new check --
+    latency and RTF alone (ADR-0072). If this broke, preflight would need a new check --
     it is the load-bearing property of the design.
     """
     sr, block_len, ctx_ms = 48000, 2560, 500.0
@@ -518,7 +518,7 @@ def test_lookahead_raises_when_the_window_is_not_extended_for_it():
     rather than silently clamping.
 
     A silent clamp would make the measured lookahead differ from the configured one,
-    defeating the point of an A/B (ADR-0070). This pins the raise side of the guard added
+    defeating the point of an A/B (ADR-0072). This pins the raise side of the guard added
     in `_emit_with_crossfade`, which `test_a_large_lookahead_with_the_extended_window_...`
     only exercises from the non-raising side.
     """

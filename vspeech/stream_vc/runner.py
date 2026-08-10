@@ -227,7 +227,7 @@ def make_streaming_vc(rt: dict[str, Any], sv_config: StreamVcConfig) -> Streamin
     # symmetrically with the utterance path (applied to the block in vc_loop).
     # The analysis window is extended by lookahead_ms on top of context_ms, so that
     # buying right context does not eat into the left context the emit start sees
-    # (ADR-0070). context_ms therefore keeps exactly the meaning it had before.
+    # (ADR-0072). context_ms therefore keeps exactly the meaning it had before.
     return StreamingVc(
         rvc_config=rt["rvc_config"],
         device=rt["device"],

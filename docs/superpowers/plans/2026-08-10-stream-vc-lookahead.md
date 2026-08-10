@@ -36,7 +36,7 @@
 | `scripts/stream_vc_rtf.py` | `_load_wav_16k` を公開名へ改名 (2 人目の利用者が出るため) | 変更 |
 | `scripts/tests/test_stream_vc_lookahead_eval.py` | 整列・距離の純ロジックのテスト | 新規 |
 | `poe_tasks.toml` | `stream-vc-lookahead-eval` タスク | 変更 |
-| `docs/adr/0070-stream-vc-lookahead.md` | 決定記録 | 新規 |
+| `docs/adr/0072-stream-vc-lookahead.md` | 決定記録 | 新規 |
 | `docs/adr/README.md` | 索引 | 変更 |
 
 Task 1 は幾何、Task 2/3 は下流の整列、Task 4 は配線、Task 5/6 は測定、Task 7 は記録。**Task 2 と 3 は Task 1 に依存しない**（遅延一般への対応なので単独でレビュー可能）。Task 4 は Task 1 に依存する。Task 6 は Task 1 と 4 に依存する。
@@ -154,7 +154,7 @@ def test_a_large_lookahead_with_the_extended_window_never_trips_the_guard():
     """With the window extended by the lookahead, no lookahead is too large.
 
     The lookahead cancels out of the read-position condition, so the effective ceiling is
-    latency and RTF alone (ADR-0070). If this broke, preflight would need a new check --
+    latency and RTF alone (ADR-0072). If this broke, preflight would need a new check --
     it is the load-bearing property of the design.
     """
     sr, block_len, ctx_ms = 48000, 2560, 500.0
@@ -195,7 +195,7 @@ uv run pytest tests/test_stream_vc.py::test_lookahead_zero_reads_from_the_unchan
         # How many input samples earlier than the tail anchor to read the emit from.
         # Buying right context this way costs exactly this much extra latency; the caller
         # is expected to extend context_len by the same amount so the left context at the
-        # emit start does not shrink (ADR-0070).
+        # emit start does not shrink (ADR-0072).
         self.lookahead_len = lookahead_len
 ```
 
@@ -398,7 +398,7 @@ uv run pytest tests/test_stream_vc_gate.py::test_apply_reaches_two_blocks_back_w
 ```python
         # The masks of the most recent blocks, oldest first, as (window_gains, emit_len)
         # pairs. One block is enough while the emit delay stays below a hop, but lookahead
-        # (ADR-0070) pushes the delay past it, and then the head of the emit carries audio
+        # (ADR-0072) pushes the delay past it, and then the head of the emit carries audio
         # decided two or more blocks ago. The length is derived per call from the delay,
         # so it self-sizes and stays at one block for the pre-lookahead geometry.
         self._history: list[tuple[NDArray[np.float64], int]] = []
@@ -417,7 +417,7 @@ uv run pytest tests/test_stream_vc_gate.py::test_apply_reaches_two_blocks_back_w
         block boundary (no step = no click). How many blocks are needed follows from the
         delay: `ceil((delay_samples + step/2) / emit_len)`, which is one block for the
         pre-lookahead geometry and grows as `lookahead_ms` pushes the delay past a hop
-        (ADR-0070). That continuity only holds while `delay_samples` is constant across
+        (ADR-0072). That continuity only holds while `delay_samples` is constant across
         ticks, which is why `StreamingVc` publishes the **nominal** delay, excluding
         SOLA's lag (ADR-0059).
 ```
@@ -555,7 +555,7 @@ uv run pytest tests/test_stream_vc_envelope.py::test_shape_reaches_two_blocks_ba
 ```python
         # The shapes of the most recent blocks, oldest first, as (shape, emit_len) pairs.
         # One block suffices while the emit delay stays below one emit length; lookahead
-        # (ADR-0070) pushes it past that, and then the head of the emit carries audio
+        # (ADR-0072) pushes it past that, and then the head of the emit carries audio
         # shaped two or more blocks ago. The length is derived per call from the delay.
         self._history: list[tuple[NDArray[np.float64], int]] = []
 ```
@@ -768,7 +768,7 @@ uv run pytest tests/test_stream_vc_config.py::test_lookahead_defaults_to_zero_an
 ```python
     # The analysis window is extended by lookahead_ms on top of context_ms, so that
     # buying right context does not eat into the left context the emit start sees
-    # (ADR-0070). context_ms therefore keeps exactly the meaning it had before.
+    # (ADR-0072). context_ms therefore keeps exactly the meaning it had before.
 ```
 
 - [ ] **Step 5: 起動ログを足す（純粋ヘルパ経由）**
@@ -814,7 +814,7 @@ def geometry_summary(
 # 先読み(右文脈)ms。0 で無効 = 導入前と完全に同一の出力。
 # 既定構成では emit は入力ブロックの [-50,+110]ms を覆い、emit 開始点の左文脈 450ms に
 # 対し右文脈は 30ms しか残らない。HuBERT は窓全体に attention を張る双方向モデルなので、
-# この非対称が streaming とバッチ変換の品質差の主因になっている (ADR-0070)。
+# この非対称が streaming とバッチ変換の品質差の主因になっている (ADR-0072)。
 # 増やすと読み出し位置がその分手前へ動き、右文脈が 1:1 で増える。代償は
 #   - 片道遅延がちょうど同じだけ増える
 #   - 解析窓が context_ms + lookahead_ms + block_ms へ伸びるので推論コストが上がる
@@ -946,7 +946,7 @@ uv run pytest scripts/tests/test_stream_vc_lookahead_eval.py -v
 `scripts/stream_vc_lookahead_eval.py` を新規作成。
 
 ```python
-"""Measure what lookahead buys, against the batch path as the reference (ADR-0070).
+"""Measure what lookahead buys, against the batch path as the reference (ADR-0072).
 
 Converts one wav both ways with **the same model** -- streaming at several
 `lookahead_ms` settings, and the batch `change_voice` that has full two-sided context --
@@ -1317,7 +1317,7 @@ if __name__ == "__main__":
 `poe_tasks.toml` の `stream-vc-rtf = { ... }` の行の直後に追加。
 
 ```toml
-# lookahead(右文脈)ごとの変換品質をバッチ経路と比較する (ADR-0070)。--all-extras で
+# lookahead(右文脈)ごとの変換品質をバッチ経路と比較する (ADR-0072)。--all-extras で
 # sync 済みのプロジェクト環境で走らせる。RTF ハーネスと違い **[stream_vc.rvc] をそのまま
 # 読む**ので、[rvc] へ写す必要は無い。
 #   uv sync --all-extras
@@ -1352,10 +1352,10 @@ git commit -m "feat(scripts): compare streaming VC against the batch path across
 
 ---
 
-### Task 7: ADR-0070 と索引
+### Task 7: ADR-0072 と索引
 
 **Files:**
-- Create: `docs/adr/0070-stream-vc-lookahead.md`
+- Create: `docs/adr/0072-stream-vc-lookahead.md`
 - Modify: `docs/adr/README.md`（表の末尾に 1 行追加）
 
 **Interfaces:**
@@ -1364,10 +1364,10 @@ git commit -m "feat(scripts): compare streaming VC against the batch path across
 
 - [ ] **Step 1: ADR を書く**
 
-`docs/adr/0070-stream-vc-lookahead.md` を新規作成。実測が入るまで **Status: Proposed**。
+`docs/adr/0072-stream-vc-lookahead.md` を新規作成。実測が入るまで **Status: Proposed**。
 
 ```markdown
-# 0070. streaming VC の emit 読み出し位置を lookahead ぶん手前へずらして右文脈を買う
+# 0072. streaming VC の emit 読み出し位置を lookahead ぶん手前へずらして右文脈を買う
 
 - Status: Proposed
 - Date: 2026-08-10
@@ -1462,7 +1462,7 @@ VAD ゲートと入力エンベロープが K ブロックのマスク履歴を�
 `docs/adr/README.md` の表の末尾（0069 の行の直後）に追加。
 
 ```markdown
-| [0070](0070-stream-vc-lookahead.md) | streaming VC の emit 読み出し位置を lookahead ぶん手前へずらして右文脈を買う | Proposed | 2026-08-10 |
+| [0072](0072-stream-vc-lookahead.md) | streaming VC の emit 読み出し位置を lookahead ぶん手前へずらして右文脈を買う | Proposed | 2026-08-10 |
 ```
 
 - [ ] **Step 3: リンク切れが無いことを確認**
@@ -1471,7 +1471,7 @@ VAD ゲートと入力エンベロープが K ブロックのマスク履歴を�
 uv run python -c "
 import re, sys
 from pathlib import Path
-adr = Path('docs/adr/0070-stream-vc-lookahead.md')
+adr = Path('docs/adr/0072-stream-vc-lookahead.md')
 text = adr.read_text(encoding='utf-8')
 missing = [m for m in re.findall(r'\]\(([^)]+\.md)\)', text)
            if not (adr.parent / m).exists()]
@@ -1484,8 +1484,8 @@ sys.exit(1 if missing else 0)
 - [ ] **Step 4: Commit**
 
 ```bash
-git add docs/adr/0070-stream-vc-lookahead.md docs/adr/README.md
-git commit -m "docs(adr): 0070 — lookahead で streaming VC の右文脈を買う"
+git add docs/adr/0072-stream-vc-lookahead.md docs/adr/README.md
+git commit -m "docs(adr): 0072 — lookahead で streaming VC の右文脈を買う"
 ```
 
 ---
@@ -1495,5 +1495,5 @@ git commit -m "docs(adr): 0070 — lookahead で streaming VC の右文脈を買
 1. `uv sync --all-extras` した GPU ホストで
    `uv run poe stream-vc-lookahead-eval --config <実 config> --input <実声 wav> --json out.json`
 2. 表と wav を持ち帰って耳 A/B → `lookahead_ms` の既定値を決める
-3. ADR-0070 に実測を書き足し、Status を Accepted に上げる。既定値を動かすなら
+3. ADR-0072 に実測を書き足し、Status を Accepted に上げる。既定値を動かすなら
    `config.py` と `config.toml.example` も同時に更新する

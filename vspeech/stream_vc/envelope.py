@@ -63,7 +63,7 @@ class StreamingEnvelope:
         self._ema_level: float | None = None
         # The shapes of the most recent blocks, oldest first, as (shape, emit_len) pairs.
         # One block suffices while the emit delay stays below one emit length; lookahead
-        # (ADR-0070) pushes it past that, and then the head of the emit carries audio
+        # (ADR-0072) pushes it past that, and then the head of the emit carries audio
         # shaped two or more blocks ago. The length is derived per call from the delay.
         self._history: list[tuple[NDArray[np.float64], int]] = []
 

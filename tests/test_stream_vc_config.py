@@ -126,7 +126,7 @@ def test_stream_vc_rejects_out_of_range():
 
 
 def test_lookahead_defaults_to_the_measured_value_and_rejects_negative():
-    """40ms is the on-hardware choice (ADR-0070): 65% of the p95 improvement for 25% of
+    """40ms is the on-hardware choice (ADR-0072): 65% of the p95 improvement for 25% of
     the latency. Pinned so the default cannot drift without the ADR moving with it."""
     import pytest
     from pydantic import ValidationError
