@@ -5,6 +5,8 @@ they run on CPU with no onnxruntime. The vc_loop wiring tests at the end also ru
 with the real models substituted.
 """
 
+from math import ceil
+
 import numpy as np
 import pytest
 
@@ -178,7 +180,7 @@ def test_apply_anchors_the_mask_at_window_centers():
     amp = 10000
     block = np.full(3 * _STEP, amp, dtype=np.int16)
     g = _gate(min_gain=0.0)
-    g._prev_gains = np.zeros(3)  # start with the head closed too
+    g._history = [(np.zeros(3), block.shape[0])]  # start with the head closed too
     out = g.apply(block, np.array([0.0, 1.0, 1.0]), 0, _RATE).astype(np.float64)
     crossed = int(np.argmax(out > amp * 0.5))
     assert crossed == pytest.approx(
@@ -258,11 +260,94 @@ def test_reset_closes_the_gate_and_drops_the_previous_mask():
     g.window_gains(np.array([0.9]))
     g.apply(np.full(_STEP, 100, dtype=np.int16), np.ones(1), 0, _RATE)
     g.reset()
-    assert g._prev_gains is None
+    assert g._history == []
     assert list(g.window_gains(np.zeros(2))) == [
         0.0,
         0.0,
     ]  # the hangover is not carried
+
+
+def test_apply_reaches_two_blocks_back_when_the_delay_exceeds_one_hop():
+    """With a delay past one hop, the emit's head carries the mask from two blocks back.
+
+    With only one block of history the head falls left of the oldest window centre and
+    clamps to the previous block's first value, i.e. the mask stops tracking. Lookahead
+    puts the geometry in exactly that region.
+    """
+    gate = _gate(threshold=0.5, hangover_ms=0.0, min_gain=0.0)
+    rate, n = 40000, 6400  # 160ms @40k
+    delay = 9000  # past one hop (6400) = about 65ms of lookahead
+    ones = np.full(n, 10000, dtype=np.int16)
+    # block 0: all speech / block 1: all silence / block 2: all silence
+    gate.apply(ones.copy(), gate.window_gains(np.full(5, 0.9)), delay, rate)
+    gate.apply(ones.copy(), gate.window_gains(np.zeros(5)), delay, rate)
+    out = gate.apply(ones.copy(), gate.window_gains(np.zeros(5)), delay, rate)
+    g = out.astype(np.float64) / 10000.0
+    # the head carries audio from two blocks back (speech), so the gate is open
+    assert g[0] > 0.9
+    # the tail has come all the way down to the silence side
+    assert g[-1] < 0.05
+
+
+def test_apply_is_unchanged_by_the_history_generalisation_at_the_default_delay():
+    """At the default delay the history generalisation changes nothing: adding knots to
+    the left of the evaluated range cannot move an np.interp value."""
+    rate, n, delay = 40000, 6400, 2000
+    ones = np.full(n, 10000, dtype=np.int16)
+    seq = [np.full(5, 0.9), np.zeros(5), np.full(5, 0.9), np.zeros(5)]
+    got = []
+    gate = _gate(threshold=0.5, hangover_ms=300.0, min_gain=0.0)
+    for probs in seq:
+        got.append(
+            gate.apply(ones.copy(), gate.window_gains(probs), delay, rate).copy()
+        )
+    # expected: the one-block-history algorithm, computed by hand
+    ref_gate = _gate(threshold=0.5, hangover_ms=300.0, min_gain=0.0)
+    step = 512 * rate / 16000
+    prev = None
+    for probs, expected in zip(seq, got, strict=True):
+        gains = ref_gate.window_gains(probs)
+        base = np.full(max(1, ceil(n / step)), 0.0) if prev is None else prev
+        prev = gains
+        centers = np.concatenate(
+            [
+                (np.arange(base.shape[0], dtype=np.float64) + 0.5) * step - n,
+                (np.arange(gains.shape[0], dtype=np.float64) + 0.5) * step,
+            ]
+        )
+        gain = np.interp(
+            np.arange(n, dtype=np.float64) - delay,
+            centers,
+            np.concatenate([base, gains]),
+        )
+        ref = np.clip(
+            np.rint(np.full(n, 10000, dtype=np.int16).astype(np.float32) * gain),
+            -32768.0,
+            32767.0,
+        ).astype(np.int16)
+        assert np.array_equal(expected, ref)
+
+
+def test_apply_has_no_gain_step_at_the_seam_with_a_long_delay():
+    """With a delay past one hop, the gain still does not step at a block boundary
+    (= no click).
+
+    Pins that adding history does not break seam continuity. The gain ramps across a 32ms
+    window, so even a full swing moves at about 1/1280 per sample.
+    """
+    gate = _gate(threshold=0.5, hangover_ms=0.0, min_gain=0.0)
+    rate, n, delay = 40000, 6400, 9000
+    ones = np.full(n, 10000, dtype=np.int16)
+    pattern = [np.zeros(5), np.full(5, 0.9), np.full(5, 0.9), np.zeros(5), np.zeros(5)]
+    curve = [
+        gate.apply(ones.copy(), gate.window_gains(probs), delay, rate).astype(
+            np.float64
+        )
+        / 10000.0
+        for probs in pattern
+    ]
+    full = np.concatenate(curve)
+    assert float(np.abs(np.diff(full)).max()) < 0.01
 
 
 # --- vc_loop wiring ---------------------------------------------------------

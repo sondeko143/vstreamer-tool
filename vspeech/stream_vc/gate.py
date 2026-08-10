@@ -70,8 +70,8 @@ class StreamingVadGate:
 
     `window_gains()` returns this block's per-window gains and `apply()` maps them onto
     the emit's sample grid (with the delay correction) and multiplies. The state is just
-    two things: how many windows have passed since speech was last seen, and the previous
-    block's mask.
+    two things: how many windows have passed since speech was last seen, and the mask
+    history of the most recent blocks.
     """
 
     def __init__(self, threshold: float, hangover_ms: float, min_gain: float) -> None:
@@ -87,11 +87,16 @@ class StreamingVadGate:
         # speech window opens the gate by itself, so there is no need to start open and
         # leak silence.
         self._since_speech = self._hangover_windows + 1
-        self._prev_gains: NDArray[np.float64] | None = None
+        # The masks of the most recent blocks, oldest first, as (window_gains, emit_len)
+        # pairs. One block is enough while the emit delay stays below a hop, but lookahead
+        # (ADR-0070) pushes the delay past it, and then the head of the emit carries audio
+        # decided two or more blocks ago. The length is derived per call from the delay,
+        # so it self-sizes and stays at one block for the pre-lookahead geometry.
+        self._history: list[tuple[NDArray[np.float64], int]] = []
 
     def reset(self) -> None:
-        """Return to the closed state (hangover empty, no previous-block mask, and a fresh
-        VAD state).
+        """Return to the closed state (hangover empty, no mask history, and a fresh VAD
+        state).
 
         Called by the runner on a transition so that, after real time has jumped from a
         pause/resume or a capture reopen, a stale hangover budget, a stale mask, or a VAD
@@ -109,7 +114,7 @@ class StreamingVadGate:
         so it cannot be traded for accuracy.
         """
         self._since_speech = self._hangover_windows + 1
-        self._prev_gains = None
+        self._history = []
         self.vad_carry = VadCarry()
 
     def window_gains(self, probs: NDArray[np.float64]) -> NDArray[np.float64]:
@@ -159,14 +164,19 @@ class StreamingVadGate:
 
         The sound carried by emit sample j sits at position `j - delay_samples` (at the
         output rate) relative to the start of the input block, so the mask is shifted by
-        the same amount when overlaid. The first `delay_samples` of the emit correspond to
-        the **previous** block's input, so the previous block's mask (`_prev_gains`) is
-        concatenated on the left before interpolating -- which simultaneously guarantees
-        gain continuity across the block boundary (no step = no click). That continuity
-        only holds while `delay_samples` is constant across ticks, which is why
-        `StreamingVc` publishes the **nominal** delay, excluding SOLA's lag (ADR-0059).
+        the same amount when overlaid.
 
-        All-1.0 gains (with the previous block also all 1.0) take an identity fast path
+        The first `delay_samples` of the emit correspond to **earlier** input blocks, so
+        the masks of the most recent blocks (`_history`) are concatenated on the left
+        before interpolating -- which simultaneously guarantees gain continuity across the
+        block boundary (no step = no click). How many blocks are needed follows from the
+        delay: `ceil((delay_samples + step/2) / emit_len)`, which is one block for the
+        pre-lookahead geometry and grows as `lookahead_ms` pushes the delay past a hop
+        (ADR-0070). That continuity only holds while `delay_samples` is constant across
+        ticks, which is why `StreamingVc` publishes the **nominal** delay, excluding
+        SOLA's lag (ADR-0059).
+
+        All-1.0 gains (with the history also all 1.0) take an identity fast path
         that returns the input object as-is: with continuous speech, or with the feature
         off by default, the output is bit-identical to the ungated one (the single block
         right after startup or a reset is the exception, since it opens from the closed
@@ -180,40 +190,56 @@ class StreamingVadGate:
         # Output samples per window. Window centres are laid out on this grid and linearly
         # interpolated.
         step = VAD_WINDOW_SAMPLES * sample_rate / VAD_SAMPLE_RATE
-        prev = self._prev_gains
-        self._prev_gains = gains
-        if prev is None:
+        # How many blocks of history the delay reaches back into. Sized off the length of
+        # the most recently *stored* block, not this call's `n`: `n` is the block just
+        # decided, not yet in `_history`, and what determines how far back the already
+        # -stored blocks reach is their own recorded length, not the new one's (a block
+        # can be shorter than the norm, e.g. a short buffer in a test, without shrinking
+        # how much real history is required to be read back). Falls back to `n` itself
+        # before any block has been stored (right after construction or a reset).
+        # Constant across ticks in practice (the delay is nominal and the block length
+        # does not change tick to tick), and exactly 1 for the geometry that existed
+        # before lookahead -- which is why this is a no-op there.
+        ref_n = self._history[-1][1] if self._history else n
+        need = max(1, ceil((delay_samples + step / 2.0) / ref_n))
+        history = self._history[-need:]
+        if len(history) < need:
             # No previous information (right after startup or a reset). The head of the
             # emit is audio rendered from before the real-time jump, or from a zeros
             # context, so start from the closed state (min_gain) -- matching
             # `_since_speech`'s initial value. Seed **a hop's worth of windows, not one**:
-            # with a single element its centre lands a whole hop earlier (-144ms by
-            # default), so the ramp is handed over across 160ms instead of 32ms and the
-            # head never fully closes (measured -4.6dB). Count the windows the same way
-            # the real mask does (ceil): round would give one window fewer when the block
-            # length is not a multiple of the window length (block_ms=80), shifting the
-            # last seed centre earlier and leaving the head not fully closed.
-            prev = np.full(max(1, ceil(n / step)), self.min_gain, dtype=np.float64)
-        if float(gains.min()) == 1.0 and float(prev.min()) == 1.0:
+            # with a single element its centre lands a whole hop earlier, so the ramp is
+            # handed over across a hop instead of one window and the head never fully
+            # closes. Count the windows the same way the real mask does (ceil): round
+            # would give one window fewer when the block length is not a multiple of the
+            # window length (block_ms=80), shifting the last seed centre earlier.
+            seed = np.full(max(1, ceil(n / step)), self.min_gain, dtype=np.float64)
+            history = [(seed, n)] * (need - len(history)) + history
+        self._history.append((gains, n))
+        del self._history[:-need]
+        if float(gains.min()) == 1.0 and all(float(g.min()) == 1.0 for g, _ in history):
             return out_i16
-        n_prev = int(prev.shape[0])
-        # The previous block's origin is **one emit length (= hop) earlier**, not
-        # "window count x window length". speech_probs zero-pads to ceil(block_len/512)
-        # windows, so when block_len is not a multiple of 512 the windows total more than
-        # the block length (e.g. 96ms at block_ms=80). Shifting by n_prev*step would move
-        # the mask earlier by that difference (16ms at the 80ms setting).
-        centers = np.concatenate(
-            [
-                (np.arange(n_prev, dtype=np.float64) + 0.5) * step - n,
-                (np.arange(gains.shape[0], dtype=np.float64) + 0.5) * step,
-            ]
-        )
-        all_gains = np.concatenate([prev, gains])
-        # `prev` only holds one block, so in configurations where `delay_samples` exceeds
-        # the hop (e.g. block_ms=80 with crossfade_ms=70) the head of the emit falls left
-        # of the first window centre and is clamped to `prev[0]`. Being continuous it does
-        # not click, but the mask over that span carries no information from two blocks
-        # back.
+        # Each history block's origin is its own emit length earlier, accumulated. Using
+        # the stored emit length rather than assuming it equals `n` keeps a length change
+        # from silently shifting an origin (the same discipline as envelope.py). Note the
+        # window count times the window length is NOT the block length: speech_probs
+        # zero-pads to ceil(block_len/512) windows, so at block_ms=80 the windows total
+        # more than the block.
+        centers_parts: list[NDArray[np.float64]] = []
+        gains_parts: list[NDArray[np.float64]] = []
+        offset = 0.0
+        for past_gains, past_len in reversed(history):
+            offset -= past_len
+            centers_parts.append(
+                (np.arange(past_gains.shape[0], dtype=np.float64) + 0.5) * step + offset
+            )
+            gains_parts.append(past_gains)
+        centers_parts.reverse()
+        gains_parts.reverse()
+        centers_parts.append((np.arange(gains.shape[0], dtype=np.float64) + 0.5) * step)
+        gains_parts.append(gains)
+        centers = np.concatenate(centers_parts)
+        all_gains = np.concatenate(gains_parts)
         # [Open, deferred 2026-08-06] Interpolating between centres ties the opening ramp
         # to the 32ms window spacing, which puts a floor under onset suppression: measured
         # at the rig's settings the gain is already 0.50 (-6dB) at the moment the first
