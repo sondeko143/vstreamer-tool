@@ -189,18 +189,24 @@ def resolve_stream_vc_output_device(config: StreamVcConfig) -> DeviceInfo:
 _WASAPI_HOST_API = "Windows WASAPI"
 
 
-def _wasapi_counterpart_rates(name: str, *, input: bool) -> set[int]:
-    """Mix rates of the WASAPI devices whose name starts with `name`.
+def _wasapi_counterpart_rates(name: str, *, input: bool) -> dict[int, set[str]]:
+    """WASAPI devices whose name starts with `name`, grouped by mix rate.
 
     PortAudio's WMME/DirectSound backends report a hardcoded 44100 for every device,
     so their `default_samplerate` cannot be trusted. Their device names, however, are
     the WASAPI names truncated to 31 characters, which makes the WASAPI row for the
     same endpoint findable by prefix (ADR-0071).
+
+    Returns a mapping from mix rate to the set of matched WASAPI device names that
+    reported it. The caller uses the number of keys to judge uniqueness, and the
+    matched names to say which WASAPI row a resolved rate was borrowed from (or to
+    list every rate it disagreed on, if more than one key comes back).
     """
     host_apis = sd.query_hostapis()
-    rates: set[int] = set()
+    matches: dict[int, set[str]] = {}
     for raw in sd.query_devices():
-        device = DeviceInfo.model_validate(dict(raw))
+        raw_dict = dict(raw)
+        device = DeviceInfo.model_validate(raw_dict)
         if host_apis[device.host_api]["name"] != _WASAPI_HOST_API:
             continue
         if input and device.max_input_channels <= 0:
@@ -208,8 +214,9 @@ def _wasapi_counterpart_rates(name: str, *, input: bool) -> set[int]:
         if not input and device.max_output_channels <= 0:
             continue
         if device.name.startswith(name):
-            rates.add(int(round(float(dict(raw)["default_samplerate"]))))
-    return rates
+            rate = int(round(raw_dict["default_samplerate"]))
+            matches.setdefault(rate, set()).add(device.name)
+    return matches
 
 
 def resolve_device_rate(
@@ -220,32 +227,50 @@ def resolve_device_rate(
     Order: explicit config -> the device's own default_samplerate when it is a WASAPI
     device -> the mix rate of its WASAPI counterpart (ADR-0071). Anything ambiguous
     raises rather than guessing: opening at the wrong rate silently reinstates the OS
-    resampler that ADR-0070 exists to remove.
+    resampler that ADR-0070 exists to remove. A resolved rate of 0 or less (some host
+    APIs report this for a device in a bad state) is treated as unresolved too, so a
+    broken endpoint fails loud here instead of surfacing later as an opaque English
+    ValueError or PortAudio open error.
     """
     if override is not None:
         return override, f"{config_key} で明示"
     host_apis = sd.query_hostapis()
     host_api_name = host_apis[device.host_api]["name"]
+    kind = "入力" if input else "出力"
     if host_api_name == _WASAPI_HOST_API:
         for raw in sd.query_devices():
             raw_dict = dict(raw)
-            if raw_dict["index"] == device.index:
-                return (
-                    int(round(float(raw_dict["default_samplerate"]))),
-                    "WASAPI のミックス形式",
+            # Guard against a device table that shifted under us (e.g. after a
+            # sd._terminate()/_initialize() cycle): an index match with a different
+            # name is not this device, so treat it the same as "not found" (M4).
+            if raw_dict["index"] != device.index or raw_dict["name"] != device.name:
+                continue
+            rate = int(round(raw_dict["default_samplerate"]))
+            if rate <= 0:
+                raise DeviceRateUnresolvedError(
+                    f"WASAPI デバイス '{device.name}' の default_samplerate が "
+                    f"{rate} で異常です。{config_key} に明示してください"
                 )
+            return rate, "WASAPI のミックス形式"
         raise DeviceRateUnresolvedError(
             f"WASAPI デバイス '{device.name}' (index={device.index}) が"
             f"デバイス一覧に見つかりません。{config_key} に明示してください"
         )
-    rates = _wasapi_counterpart_rates(device.name, input=input)
-    if len(rates) == 1:
-        return rates.pop(), f"WASAPI の同名デバイス ({host_api_name} 経由)"
-    kind = "入力" if input else "出力"
-    if not rates:
+    matches = _wasapi_counterpart_rates(device.name, input=input)
+    if len(matches) == 1:
+        rate = next(iter(matches))
+        matched_name = ", ".join(sorted(matches[rate]))
+        if rate <= 0:
+            raise DeviceRateUnresolvedError(
+                f"{kind}デバイス '{device.name}' ({host_api_name}) の WASAPI 同名デバイス "
+                f"'{matched_name}' の default_samplerate が {rate} で異常です。"
+                f"{config_key} に明示してください"
+            )
+        return rate, f"WASAPI の '{matched_name}' から逆引き ({host_api_name} デバイス)"
+    if not matches:
         detail = "対応する WASAPI デバイスが見つかりません"
     else:
-        detail = f"対応する WASAPI デバイスのレートが一致しません ({sorted(rates)})"
+        detail = f"対応する WASAPI デバイスのレートが一致しません ({sorted(matches)})"
     raise DeviceRateUnresolvedError(
         f"{kind}デバイス '{device.name}' ({host_api_name}) の実レートを判定できません: "
         f"{detail}。Windows のサウンド設定で「既定の形式」を確認し "
