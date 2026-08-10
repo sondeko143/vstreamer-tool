@@ -37,6 +37,14 @@ silence_threshold = -45
 max_recording_sec = 10.0
 input_host_api_name = ""
 input_device_name = ""
+# デバイスを開くサンプルレート。未指定 (コメントアウト) なら自動判定する。
+# 自動判定に失敗すると起動時にエラーになるので、そのときだけ Windows の
+# サウンド設定 → デバイスのプロパティ → 詳細 →「既定の形式」の値を書く。
+# input_device_rate = 48000
+# 注意: Windows では index 0/1 が「Microsoft サウンド マッパー」等の疑似デバイスに
+# 割り当てられていることが多く、疑似デバイスはレートを自動判定できない (ADR-0074)。
+# preflight で失敗する場合は実デバイスのインデックス/名前に書き換えるか、上の
+# *_device_rate を明示すること。
 input_device_index = 0
 
 [transcription]
@@ -72,6 +80,12 @@ enable = true
 volume = "100"
 output_host_api_name = ""
 output_device_name = ""
+# 再生デバイスを開くサンプルレート。未指定なら自動判定。
+# output_device_rate = 48000
+# 注意: Windows では index 0/1 が「Microsoft サウンド マッパー」等の疑似デバイスに
+# 割り当てられていることが多く、疑似デバイスはレートを自動判定できない (ADR-0074)。
+# preflight で失敗する場合は実デバイスのインデックス/名前に書き換えるか、上の
+# *_device_rate を明示すること。
 output_device_index = 1
 
 [subtitle]
@@ -304,11 +318,21 @@ vad_min_gain = 0.0
 # 発話系 recording は無改変のまま別途マイクを開く)。未指定(空)ならシステム既定入力。
 input_host_api_name = ""
 input_device_name = ""
+# input_device_rate = 48000
+# 注意: Windows では index 0/1 が「Microsoft サウンド マッパー」等の疑似デバイスに
+# 割り当てられていることが多く、疑似デバイスはレートを自動判定できない (ADR-0074)。
+# preflight で失敗する場合は実デバイスのインデックス/名前に書き換えるか、上の
+# *_device_rate を明示すること。
 input_device_index = 0
 
 # 出力デバイス。[playback] とは別に開く。未指定(空)ならシステム既定出力。
 output_host_api_name = ""
 output_device_name = ""
+# output_device_rate = 48000
+# 注意: Windows では index 0/1 が「Microsoft サウンド マッパー」等の疑似デバイスに
+# 割り当てられていることが多く、疑似デバイスはレートを自動判定できない (ADR-0074)。
+# preflight で失敗する場合は実デバイスのインデックス/名前に書き換えるか、上の
+# *_device_rate を明示すること。
 output_device_index = 1
 
 # 入出力ストリームがデバイスへ要求する latency (ADR-0071)。既定は両方 "low" で、
@@ -317,9 +341,9 @@ output_device_index = 1
 #   "high" = デバイス既定の高遅延。overflow/underflow が止まらないときの逃げ道
 #   数値   = 秒での明示指定 (例 0.02 = 20ms)。low と high の中間を狙うとき
 # 入力(マイク)と出力(再生)は別デバイス、role を分ければ別マシンなので、独立に指定する。
-# PortAudio は要求値を保証しない。実際に得られた値は起動時のログ
-# ("stream_vc input/output stream latency: N.NNNs") に出るので、block_ms を詰める前に
-# まずそれを読むこと。
+# PortAudio は要求値を保証しない。実際に得られた値は要求値と並べて起動時のログ
+# ("stream_vc input/output stream latency: N.NNNs granted (X requested)") に出るので、
+# block_ms を詰める前にまずそれを読むこと。
 input_latency = "low"
 output_latency = "low"
 

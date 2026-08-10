@@ -2,7 +2,6 @@ from asyncio import CancelledError
 from asyncio import Queue
 from asyncio import Task
 from asyncio import TaskGroup
-from asyncio import to_thread
 from collections import deque
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
@@ -21,8 +20,14 @@ from vspeech.config import RecordingConfig
 from vspeech.config import get_sample_size
 from vspeech.exceptions import shutdown_worker
 from vspeech.exceptions import worker_startup
+from vspeech.lib.audio import DeviceStreamThread
 from vspeech.lib.audio import get_sd_dtype
+from vspeech.lib.audio import open_device_stream
 from vspeech.lib.audio import resolve_input_device
+from vspeech.lib.pcm import decode_pcm
+from vspeech.lib.pcm import encode_pcm
+from vspeech.lib.resample import PolyphaseResampler
+from vspeech.lib.resample import make_resampler
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
 from vspeech.shared_context import SharedContext
@@ -30,18 +35,72 @@ from vspeech.shared_context import SoundOutput
 from vspeech.shared_context import WorkerOutput
 
 
-def open_input_stream(config: RecordingConfig) -> sd.RawInputStream:
+def device_frames_per_read(chunk: int, device_rate: int, config_rate: int) -> int:
+    """How many device-rate frames make up one `chunk`-sized block at config_rate.
+
+    Mirrors stream_vc/capture.py's device_frames_per_read, parameterized by the
+    recording pipeline's own rate instead of a fixed CAPTURE_RATE (ADR-0073).
+    """
+    if device_rate == config_rate:
+        return chunk
+    return max(1, round(chunk * device_rate / config_rate))
+
+
+def open_input_stream(config: RecordingConfig) -> tuple[sd.RawInputStream, int]:
+    """Open the mic at its native rate; return the stream and that rate.
+
+    The resolve -> log -> open -> verify sequence is `open_device_stream`'s
+    (lib/audio.py), shared with the three other device boundaries; only the device
+    lookup and the stream's own shape are decided here. Asking the device for
+    `config.rate` directly would hand the conversion to the OS, whose filter we can
+    neither test nor log, and WASAPI shared mode refuses any rate but its mix format
+    (ADR-0073/0074).
+    """
     device = resolve_input_device(config)
-    logger.info("use input device %s: %s", device.index, device.name)
-    stream = sd.RawInputStream(
-        samplerate=config.rate,
-        blocksize=config.chunk,
-        device=device.index,
-        channels=config.channels,
-        dtype=get_sd_dtype(config.format),
+    return open_device_stream(
+        device=device,
+        override=config.input_device_rate,
+        input=True,
+        config_key="recording.input_device_rate",
+        opening="use input device",
+        subject="recording",
+        pipeline_rate=config.rate,
+        open_stream=lambda rate: sd.RawInputStream(
+            samplerate=rate,
+            blocksize=device_frames_per_read(config.chunk, rate, config.rate),
+            device=device.index,
+            channels=config.channels,
+            dtype=get_sd_dtype(config.format),
+        ),
     )
-    stream.start()
-    return stream
+
+
+def convert_chunk(
+    data: bytes, resampler: PolyphaseResampler | None, config: RecordingConfig
+) -> tuple[bytes, int]:
+    """Convert one device-rate read into bytes at config.rate, plus the number of
+    config.rate frames those bytes represent.
+
+    Returns `data` untouched when `resampler` is None (the device already runs at
+    config.rate), which keeps that path bit-identical to the pre-ADR-0073 code --
+    decode+encode is not bit-exact at full-scale values (e.g. int16 -32768 round-trips
+    to -32767 through decode_pcm/encode_pcm), so skipping the round trip matters, not
+    just its cost.
+
+    The returned frame count is measured from the actual conversion, not a config
+    constant: under resampling, the polyphase filter's per-call output length is not
+    fixed (it depends on the running phase), so a constant would drift from the real
+    elapsed time -- exactly the trap this task exists to avoid, since interval_sec /
+    max_recording_sec / silence timing all compare against this count.
+    """
+    if resampler is None:
+        frame_size = get_sample_size(config.format) * config.channels
+        return data, len(data) // frame_size
+    samples = decode_pcm(data, config.format, config.channels)
+    converted = resampler.process(samples)
+    # encode_pcm saturates: resampling overshoots the original peak (Gibbs), and a
+    # wrapping cast would turn that overshoot into a sign flip = an audible click.
+    return encode_pcm(converted, config.format), converted.shape[0]
 
 
 def get_dbfs(interval_frames: bytes, sample_width: int):
@@ -87,19 +146,49 @@ async def sd_recording_worker(
         status = "waiting"
         last_voice_ts = perf_counter()
         with worker_startup("recording"):
-            stream = open_input_stream(config)
+            stream, device_rate = open_input_stream(config)
         sample_width = get_sample_size(config.format)
         n_move_avg_amp = config.gradually_stopping_interval
         approx_max_amps: list[float] = []
+        # Reads go through a thread of this stream's own rather than the shared
+        # to_thread pool, so that the close below cannot start while a read is still
+        # inside PortAudio -- that frees the stream under the reader and kills the
+        # process with an access violation (ADR-0077). Built per stream open: it is
+        # retired together with the stream it belongs to.
+        device_thread = DeviceStreamThread("recording_dev")
         try:
+            # Built once per stream open, not inside the read loop: construction costs
+            # 0.2-8ms measured across the rate pairs this boundary meets, and the read
+            # cadence here (>= one chunk, 64ms by default) makes a rebuild cost invisible
+            # either way, but a fresh resampler starts from a zeroed filter tail, so
+            # rebuilding per read would put a transient at every chunk boundary. None on
+            # a matching rate keeps the pass-through path bit-identical to the
+            # pre-ADR-0073 code. Built inside the try, after device_thread exists, so
+            # that a pathological rate pair (ValueError from make_resampler, ADR-0075)
+            # still reaches the `finally` below and closes the stream that was just
+            # opened, instead of leaking it (ADR-0077).
+            resampler = make_resampler(device_rate, config.rate)
+            frames_per_read = device_frames_per_read(
+                config.chunk, device_rate, config.rate
+            )
             while stream.active:
-                chunk_data, overflowed = await to_thread(stream.read, config.chunk)
+                chunk_data, overflowed = await device_thread.call(
+                    stream.read, frames_per_read
+                )
                 if overflowed:
                     # sounddevice reports an overflow with a flag rather than an
                     # exception, so at least leave a log line.
                     logger.warning("recording input overflow: samples were dropped")
-                in_data = bytes(chunk_data)
-                interval_frame_count += config.chunk
+                # Unlike the output boundaries (stream_vc/playback.py's write,
+                # worker/playback.py's _write), this conversion stays on the event loop
+                # rather than moving to device_thread: the blocking read above already
+                # crossed the thread boundary, and PolyphaseResampler.process measured
+                # well under 1ms per call at this boundary's rate pairs (p50 ~0.44ms at
+                # chunk=64ms, 48000->16000Hz), so a second thread hop buys nothing.
+                in_data, frame_count = convert_chunk(
+                    bytes(chunk_data), resampler, config
+                )
+                interval_frame_count += frame_count
                 interval_frames += in_data
                 if interval_frame_count >= config.rate * config.interval_sec:
                     approx_max_amp = get_dbfs(
@@ -116,6 +205,21 @@ async def sd_recording_worker(
                         approx_max_amps = []
                     elif status == "speaking":
                         speaking_frames += interval_frames
+                        # [Open, deferred 2026-08-11] This adds the constant
+                        # config.interval_sec per tick, but the `>=` check above (not `==`)
+                        # lets interval_frame_count -- and therefore the real audio inside
+                        # interval_frames -- overshoot the threshold by up to one read's
+                        # worth before this branch fires. Each tick therefore represents MORE
+                        # real audio than it is credited with, so max_recording_sec caps LESS
+                        # real time than configured. At the defaults (chunk=1024,
+                        # interval_sec=0.1, rate=16000: threshold=1600 frames, but reads land
+                        # on 1024/2048/... so a tick fires every 2048 frames = 0.128s of real
+                        # audio credited as only 0.1s), a configured 0.25s cap is closer to
+                        # ~0.32s in practice. Pre-existing (unchanged by ADR-0073's
+                        # device-rate read -- at a matching rate the read size and the
+                        # overshoot geometry are identical to the pre-ADR-0073 code); out of
+                        # this task's scope. A fix would need to measure real elapsed frames
+                        # per tick instead of crediting a constant.
                         total_seconds_of_this_recording += config.interval_sec
                         if speaking:
                             last_voice_ts = perf_counter()
@@ -156,9 +260,13 @@ async def sd_recording_worker(
                     interval_frame_count = 0
                     interval_frames = b""
         except (OSError, sd.PortAudioError) as e:
-            logger.warning("retry for %e", e)
+            logger.warning("retry for %r", e)
         finally:
-            stream.close()
+            # Immediate on every path that got here with the read already out (a device
+            # fault, aclose() at the yield, a stream never read from); queued behind the
+            # read when a cancellation arrived mid-read, which is the one case that used
+            # to crash.
+            device_thread.close(stream.close)
 
 
 def build_recording_output(

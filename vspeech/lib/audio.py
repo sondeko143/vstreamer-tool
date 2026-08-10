@@ -1,3 +1,10 @@
+from asyncio import wrap_future
+from collections.abc import Callable
+from concurrent.futures import Future
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
+from typing import Protocol
+
 import sounddevice as sd
 from pydantic import AliasChoices
 from pydantic import BaseModel
@@ -9,6 +16,8 @@ from vspeech.config import RecordingConfig
 from vspeech.config import SampleFormat
 from vspeech.config import StreamVcConfig
 from vspeech.exceptions import DeviceNotFoundError
+from vspeech.exceptions import DeviceRateUnresolvedError
+from vspeech.logger import logger
 
 
 class HostAPIInfo(BaseModel):
@@ -183,6 +192,322 @@ def resolve_stream_vc_output_device(config: StreamVcConfig) -> DeviceInfo:
         name_key="stream_vc.output_device_name",
         output=True,
     )
+
+
+_WASAPI_HOST_API = "Windows WASAPI"
+
+
+def _wasapi_counterpart_rates(name: str, *, input: bool) -> dict[int, set[str]]:
+    """WASAPI devices whose name starts with `name`, grouped by mix rate.
+
+    PortAudio's WMME/DirectSound backends report a hardcoded 44100 for every device,
+    so their `default_samplerate` cannot be trusted. Their device names, however, are
+    the WASAPI names truncated to 31 characters, which makes the WASAPI row for the
+    same endpoint findable by prefix (ADR-0074).
+
+    Returns a mapping from mix rate to the set of matched WASAPI device names that
+    reported it. The caller uses the number of keys to judge uniqueness, and the
+    matched names to say which WASAPI row a resolved rate was borrowed from (or to
+    list every rate it disagreed on, if more than one key comes back).
+    """
+    host_apis = sd.query_hostapis()
+    matches: dict[int, set[str]] = {}
+    for raw in sd.query_devices():
+        raw_dict = dict(raw)
+        device = DeviceInfo.model_validate(raw_dict)
+        if host_apis[device.host_api]["name"] != _WASAPI_HOST_API:
+            continue
+        if input and device.max_input_channels <= 0:
+            continue
+        if not input and device.max_output_channels <= 0:
+            continue
+        if device.name.startswith(name):
+            rate = int(round(raw_dict["default_samplerate"]))
+            matches.setdefault(rate, set()).add(device.name)
+    return matches
+
+
+def resolve_device_rate(
+    device: DeviceInfo, override: int | None, *, input: bool, config_key: str
+) -> tuple[int, str]:
+    """The rate to open `device` at, plus a human-readable note on how it was decided.
+
+    Order: explicit config -> the device's own default_samplerate when it is a WASAPI
+    device -> the mix rate of its WASAPI counterpart (ADR-0074). Anything ambiguous
+    raises rather than guessing: opening at the wrong rate silently reinstates the OS
+    resampler that ADR-0073 exists to remove. A resolved rate of 0 or less (some host
+    APIs report this for a device in a bad state) is treated as unresolved too, so a
+    broken endpoint fails loud here instead of surfacing later as an opaque English
+    ValueError or PortAudio open error.
+    """
+    if override is not None:
+        return override, f"{config_key} で明示"
+    host_apis = sd.query_hostapis()
+    host_api_name = host_apis[device.host_api]["name"]
+    kind = "入力" if input else "出力"
+    if host_api_name == _WASAPI_HOST_API:
+        for raw in sd.query_devices():
+            raw_dict = dict(raw)
+            # Guard against a device table that shifted under us (e.g. after a
+            # sd._terminate()/_initialize() cycle): an index match with a different
+            # name is not this device, so treat it the same as "not found" (M4).
+            if raw_dict["index"] != device.index or raw_dict["name"] != device.name:
+                continue
+            rate = int(round(raw_dict["default_samplerate"]))
+            if rate <= 0:
+                raise DeviceRateUnresolvedError(
+                    f"WASAPI デバイス '{device.name}' の default_samplerate が "
+                    f"{rate} で異常です。{config_key} に明示してください"
+                )
+            return rate, "WASAPI のミックス形式"
+        raise DeviceRateUnresolvedError(
+            f"WASAPI デバイス '{device.name}' (index={device.index}) が"
+            f"デバイス一覧に見つかりません。{config_key} に明示してください"
+        )
+    matches = _wasapi_counterpart_rates(device.name, input=input)
+    if len(matches) == 1:
+        rate = next(iter(matches))
+        matched_name = ", ".join(sorted(matches[rate]))
+        if rate <= 0:
+            raise DeviceRateUnresolvedError(
+                f"{kind}デバイス '{device.name}' ({host_api_name}) の WASAPI 同名デバイス "
+                f"'{matched_name}' の default_samplerate が {rate} で異常です。"
+                f"{config_key} に明示してください"
+            )
+        return rate, f"WASAPI の '{matched_name}' から逆引き ({host_api_name} デバイス)"
+    if not matches:
+        detail = "対応する WASAPI デバイスが見つかりません"
+    else:
+        detail = f"対応する WASAPI デバイスのレートが一致しません ({sorted(matches)})"
+    raise DeviceRateUnresolvedError(
+        f"{kind}デバイス '{device.name}' ({host_api_name}) の実レートを判定できません: "
+        f"{detail}。Windows のサウンド設定で「既定の形式」を確認し "
+        f"{config_key} に明示してください"
+    )
+
+
+class ReportsSampleRate(Protocol):
+    """The little `open_device_stream` needs back from a freshly built stream.
+
+    Both `sd.RawInputStream` and `sd.RawOutputStream` satisfy it, which is what lets one
+    helper serve the input and the output boundaries without knowing which it is holding.
+    `close` is here (despite the name) because `open_device_stream` must be able to
+    close a stream whose `start()` failed, to avoid leaking the native handle.
+    """
+
+    def start(self) -> None: ...
+
+    def close(self) -> None: ...
+
+    @property
+    def samplerate(self) -> float: ...
+
+
+def open_device_stream[StreamT: ReportsSampleRate](
+    *,
+    device: DeviceInfo,
+    override: int | None,
+    input: bool,
+    config_key: str,
+    opening: str,
+    subject: str,
+    open_stream: Callable[[int], StreamT],
+    pipeline_rate: int | None = None,
+) -> tuple[StreamT, int]:
+    """Open `device` at its own native rate; return the stream and that rate.
+
+    All four device boundaries (streaming VC in/out, utterance recording/playback) open a
+    device the same way, and the *order* of the steps is what makes the open honest, so it
+    lives here once instead of four times:
+
+    1. resolve the rate right next to the device that was just resolved, so an open stays
+       a single decision point and the rate has no second, cached copy to drift from. It
+       re-decides nothing within one process: sd.query_devices() is cached at PortAudio
+       init and nothing here re-initialises it (see the deferred note in
+       worker/playback.py's search_appropriate_device), so a reopen resolves the same rate;
+    2. log what is about to be attempted *before* the open, so a failing open still says
+       which device, which rate, and how that rate was decided;
+    3. build the stream -- the caller's own call, because blocksize / channels / dtype /
+       latency differ per boundary -- and start it;
+    4. say out loud when PortAudio reports a rate other than the one it was asked for.
+
+    Callers keep converting at the **requested** rate, never at the reported one: the
+    polyphase ratio has to be built from a sane number (44099 -> 16000 would mean 16000
+    phases), so a hardware rate that differs by a hair is only a slow drift in the audio --
+    invisible unless step 4 says so.
+
+    `opening` leads the info line ("use input device"), `subject` names the boundary in the
+    warning ("recording"). They are two arguments rather than one because the two sentences
+    were worded per boundary before this helper existed, and their wording is what an
+    operator greps a log for. `pipeline_rate` is the fixed rate the boundary converts to,
+    and is appended to the info line together with whether that means a conversion; the
+    playback boundaries pass None because their other side arrives with the audio.
+
+    DeviceRateUnresolvedError from step 1 escapes unhandled: it is a config problem no
+    retry can fix (ADR-0074), and every caller deliberately keeps it out of its device
+    -fault retry path.
+
+    If `open_stream(rate)` itself raises (Pa_OpenStream failing), sounddevice never
+    allocates a native stream -- nothing to close. But if the open succeeds and
+    `stream.start()` (Pa_StartStream) is what fails, sounddevice's stream object has no
+    `__del__` and `close()` is the only caller of Pa_CloseStream, so an unclosed `stream`
+    here leaks the native handle permanently once this function's frame is torn down and
+    the reference is lost. Every caller retries a device fault in a loop (steady-state
+    reconnect in stream_vc, per-utterance reopen in worker/playback.py) -- a persistent
+    fault (e.g. the device held exclusively by another process) would otherwise leak one
+    handle per retry, unboundedly, for as long as the pipeline keeps running.
+    """
+    rate, how = resolve_device_rate(
+        device, override, input=input, config_key=config_key
+    )
+    if pipeline_rate is None:
+        logger.info(
+            "%s %s: %s @%dHz (%s)", opening, device.index, device.name, rate, how
+        )
+    else:
+        logger.info(
+            "%s %s: %s @%dHz (%s) -> %dHz (%s)",
+            opening,
+            device.index,
+            device.name,
+            rate,
+            how,
+            pipeline_rate,
+            "プロセス内で変換" if rate != pipeline_rate else "変換なし",
+        )
+    stream = open_stream(rate)
+    try:
+        stream.start()
+    except OSError, sd.PortAudioError:
+        stream.close()
+        raise
+    reported = float(stream.samplerate)
+    if abs(reported - rate) > 0.5:
+        logger.warning(
+            "%s デバイスが要求した %dHz とは異なる %.4fHz を報告しています; "
+            "変換は要求したレートのまま行います",
+            subject,
+            rate,
+            reported,
+        )
+    return stream, rate
+
+
+class DeviceStreamThread:
+    """Owns every blocking PortAudio call made on one device stream, on one thread.
+
+    `read()`/`write()` block for a whole block period, so they belong off the event loop.
+    `close()` (Pa_CloseStream) frees the stream and its host buffers, and PortAudio
+    synchronises none of it against a read/write another thread is still executing:
+    closing while a read is inside the stream frees it under the reader, which then walks
+    freed memory. Windows reports that as an access violation (0xC0000005) that kills the
+    process outright -- no Python exception, no traceback, exit code -1073741819 -- and it
+    only fires when the freed block happens to have been reused already, so it looks
+    intermittent (ADR-0077).
+
+    Cancellation is what makes the overlap ordinary rather than exotic. `await
+    to_thread(stream.read, n)` hands control back the instant the task is cancelled, but
+    concurrent.futures cannot cancel a job that already started, so the thread stays inside
+    Pa_ReadStream while the `finally: stream.close()` right behind it runs. Every teardown
+    that cancels a worker mid-call hits it -- which is how a taken gRPC port turned the
+    `exit 1` of ADR-0038 into an access violation.
+
+    So both calls go through one thread: `close()` queued behind an in-flight call cannot
+    start before that call returns, and nothing waits for it on the event loop.
+
+    All four device boundaries own one of these (the utterance recorder holds it directly;
+    the three others hold it inside the object that owns the stream -- capture's InputTap,
+    stream_vc's OutputSink, playback's OutputStream). It adds nothing to the real-time
+    path: a call still costs one executor submit plus one wakeup, exactly what
+    `asyncio.to_thread` costs, and each boundary's calls were already serialised by the
+    `await` in its own loop, so a private single-worker executor never makes one wait for
+    another. It only stops sharing the default pool with everything else that runs there.
+    """
+
+    def __init__(self, name: str) -> None:
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=name)
+        # Every call submitted and not yet known to be finished. Any, not object: Future
+        # is invariant, so a Future[bytes] does not fit a Future[object] slot; only done()
+        # is ever read off them. Touched from the event loop thread only (`call` and
+        # `close` are both called from there), so it needs no lock of its own.
+        self._calls: list[Future[Any]] = []
+        self._closed = False
+
+    def _unfinished(self) -> list[Future[Any]]:
+        """The submitted calls that have not finished, pruning the ones that have."""
+        self._calls = [call for call in self._calls if not call.done()]
+        return self._calls
+
+    async def call[T](self, fn: Callable[..., T], *args: object) -> T:
+        """Run one blocking stream call on the owning thread and await its result.
+
+        Submitting rather than `to_thread`-ing is what makes `close()` able to see whether
+        a call is still inside the device: the concurrent futures are kept, and awaiting a
+        cancelled wrapper around one does not (cannot) stop the thread.
+        """
+        self._unfinished()
+        future = self._executor.submit(fn, *args)
+        self._calls.append(future)
+        return await wrap_future(future)
+
+    def close(self, close_stream: Callable[[], None]) -> None:
+        """Run `close_stream` without ever overlapping a call still inside the device.
+
+        A callable rather than the stream itself, because each boundary closes its device
+        its own way (a bare `stream.close()`, or `close_quietly` where a raise would
+        replace the WorkerShutdown in flight). It must do nothing but close that device:
+        with a call in flight it runs on the owning thread, not the caller's.
+
+        Runs on the caller's thread when nothing is outstanding, so the paths that were
+        always safe (a call that ended by raising, a generator closed at its `yield`, a
+        stream that was never read from) keep closing synchronously, with their exceptions
+        still reaching the caller -- callers and tests can go on assuming the device is
+        shut by the time this returns.
+
+        With one outstanding the close is queued on the owning thread instead, i.e. behind
+        it. `done()` flips to True only after the worker thread has returned from `fn`, so
+        every future being done proves the thread is out of PortAudio; a flip right after
+        the check merely queues a close that was safe to run inline, which is harmless.
+
+        Every outstanding call is consulted, not just the newest, so that the decision does
+        not rest on there being at most one caller. Two would be enough to break a
+        newest-only check: the second call sits queued behind the first, its awaiter is
+        cancelled, cancelling a queued future succeeds, and "the newest is done" would then
+        close the device inline while the *first* call is still inside it -- the very
+        use-after-free this class exists to prevent. Today all four boundaries drive their
+        device from a single task, but nothing here enforces that, so nothing here relies
+        on it.
+
+        Queued work survives `shutdown(wait=False)` and interpreter exit alike --
+        `_python_exit` puts its stop sentinel at the *end* of the queue and then joins --
+        so the close cannot be dropped, and the handle cannot leak.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            if self._unfinished():
+                self._executor.submit(self._close_logging_errors, close_stream)
+            else:
+                close_stream()
+        finally:
+            # In the `finally` because the inline close raises on a live path: closing a
+            # device that already faulted is exactly what `close_quietly` (stream_vc's
+            # reconnect loop) exists to swallow. Letting that escape before the shutdown
+            # would leave this executor's thread parked on its queue until the last
+            # reference to this object was collected, which is not something a fix whose
+            # whole point is deterministic teardown gets to leave to the GC.
+            self._executor.shutdown(wait=False)
+
+    @staticmethod
+    def _close_logging_errors(close_stream: Callable[[], None]) -> None:
+        """The deferred close. Nobody is left to observe the future it returns, and
+        concurrent.futures (unlike asyncio) says nothing about an unretrieved exception, so
+        anything raised here would vanish without a trace -- hence the broad catch."""
+        try:
+            close_stream()
+        except Exception as e:
+            logger.warning("error while closing a device stream: %r", e)
 
 
 def get_sd_dtype(format: SampleFormat) -> str:

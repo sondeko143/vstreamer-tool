@@ -1,4 +1,7 @@
+import logging
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from pydantic import SecretStr
@@ -27,6 +30,81 @@ def _device(index: int = 1):
         name="Line 4",
         index=index,
     )
+
+
+# --- sounddevice stub (Task 9, ADR-0076) --------------------------------------------
+#
+# Task 9 makes preflight resolve+open the device rate for recording/playback/stream_vc,
+# which reaches sd.query_hostapis / sd.query_devices / sd.default / sd.RawInputStream /
+# sd.RawOutputStream directly (below the audio.get_device_info/search_device wrappers
+# some tests above already monkeypatch). Without a stub, any of those tests that leave
+# the device unconfigured (falling through to sd.default.device) would resolve to and
+# briefly open this machine's REAL microphone/speaker on every test run. The fixture
+# below is autouse so no test in this file can do that by omission; a test that wants a
+# specific device table or open outcome overrides these further with its own
+# monkeypatch calls (the same monkeypatch fixture instance, so later calls win).
+_SD_HOSTAPIS = [{"name": "Windows WASAPI"}]
+_SD_DEVICES = [
+    {
+        "index": 0,
+        "name": "Test Mic",
+        "hostapi": 0,
+        "max_input_channels": 2,
+        "max_output_channels": 0,
+        "default_samplerate": 48000.0,
+    },
+    {
+        "index": 1,
+        "name": "Test Speaker",
+        "hostapi": 0,
+        "max_input_channels": 0,
+        "max_output_channels": 2,
+        "default_samplerate": 48000.0,
+    },
+]
+
+
+class _FakeSdStream:
+    """Stands in for sd.RawInputStream/RawOutputStream. Opens successfully by default.
+
+    `start_error`, when given, makes `start()` raise instead -- the
+    Pa_OpenStream-succeeds/Pa_StartStream-fails case a real sounddevice stream can hit
+    (e.g. the device grabbed exclusively between open and start). `closed` records
+    whether `close()` ran, so a test can prove the stream is never leaked either way.
+    """
+
+    def __init__(self, start_error: Exception | None = None, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+        self.samplerate = float(kwargs["samplerate"])
+        self.closed = False
+        self._start_error = start_error
+
+    def start(self) -> None:
+        if self._start_error is not None:
+            raise self._start_error
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@pytest.fixture(autouse=True)
+def _stub_sounddevice(monkeypatch: pytest.MonkeyPatch) -> None:
+    from vspeech.lib import audio
+
+    def _query_devices(index: int | None = None):
+        if index is None:
+            return list(_SD_DEVICES)
+        return next(d for d in _SD_DEVICES if d["index"] == index)
+
+    monkeypatch.setattr(audio.sd, "query_devices", _query_devices)
+    monkeypatch.setattr(audio.sd, "query_hostapis", lambda: _SD_HOSTAPIS)
+    # Device 0 (input) / 1 (output) so the role-branching tests below, which leave the
+    # device unconfigured on purpose (they test which *fields* get checked per role, not
+    # device specifics), resolve to a real-looking fake instead of sd.default's real
+    # system device.
+    monkeypatch.setattr(audio.sd, "default", SimpleNamespace(device=(0, 1)))
+    monkeypatch.setattr(audio.sd, "RawInputStream", lambda **kw: _FakeSdStream(**kw))
+    monkeypatch.setattr(audio.sd, "RawOutputStream", lambda **kw: _FakeSdStream(**kw))
 
 
 def _acp(**ami_kw):
@@ -143,6 +221,237 @@ def test_recording_bad_route_is_reported(monkeypatch):
     with pytest.raises(ConfigError) as ei:
         preflight(cfg)
     assert any("routes_list" in p.detail for p in ei.value.problems)
+
+
+# --- recording: device rate resolution + open probe (Task 9, ADR-0076) -------------
+
+
+def test_recording_rate_unresolved_is_reported_on_its_own_field(monkeypatch):
+    """DeviceRateUnresolvedError is a DeviceNotFoundError subclass -- the trap this
+    task warns about is the *index* handler swallowing it under the wrong field. Device
+    resolution itself must succeed (no input_device_index problem) while the *rate*
+    handler reports it separately, under input_device_rate."""
+    from vspeech.config import RecordingConfig
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(
+        audio,
+        "get_device_info",
+        lambda i: DeviceInfo(
+            host_api=0,
+            max_input_channels=2,
+            max_output_channels=0,
+            name="Ghost Mic",  # not in _SD_DEVICES and not a WASAPI row itself
+            index=i,
+        ),
+    )
+    cfg = Config(recording=RecordingConfig(enable=True, input_device_index=5))
+    problems = collect_problems(cfg)
+    assert any(p.field == "recording.input_device_rate" for p in problems), problems
+    assert not any(p.field == "recording.input_device_index" for p in problems)
+
+
+def test_recording_device_open_failure_reports_the_rate(monkeypatch):
+    from vspeech.config import RecordingConfig
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(
+        audio, "get_device_info", lambda i: DeviceInfo.model_validate(_SD_DEVICES[0])
+    )
+
+    def _boom(**kw):
+        raise audio.sd.PortAudioError("Invalid sample rate")
+
+    monkeypatch.setattr(audio.sd, "RawInputStream", _boom)
+    cfg = Config(recording=RecordingConfig(enable=True, input_device_index=0))
+    problems = collect_problems(cfg)
+    matches = [p for p in problems if p.field == "recording.input_device_rate"]
+    assert len(matches) == 1, problems
+    assert "48000" in matches[0].detail  # the resolved rate, not just the error text
+    # The probe's own shape, so a future reader does not blame the rate alone for a
+    # failure that might really be about channels/format/device contention.
+    assert "channels=1" in matches[0].detail
+    assert "dtype=int16" in matches[0].detail
+
+
+def test_recording_start_failure_still_closes_the_stream(monkeypatch):
+    """Pa_OpenStream succeeding but Pa_StartStream failing must still close the stream
+    -- an unclosed sounddevice stream has no __del__ and leaks the native handle for
+    good (found in review, ADR-0076). Direct assertion, not a mutation: this proves the
+    fix, not merely that some other test would fail without it."""
+    from vspeech.config import RecordingConfig
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(
+        audio, "get_device_info", lambda i: DeviceInfo.model_validate(_SD_DEVICES[0])
+    )
+    made: list[_FakeSdStream] = []
+
+    def _open(**kw):
+        stream = _FakeSdStream(start_error=audio.sd.PortAudioError("device busy"), **kw)
+        made.append(stream)
+        return stream
+
+    monkeypatch.setattr(audio.sd, "RawInputStream", _open)
+    cfg = Config(recording=RecordingConfig(enable=True, input_device_index=0))
+    problems = collect_problems(cfg)
+    assert any(p.field == "recording.input_device_rate" for p in problems), problems
+    assert len(made) == 1
+    assert made[0].closed is True
+
+
+def test_recording_pathological_ratio_does_not_open_the_device(monkeypatch):
+    """Once the ratio check already condemns the device rate, the open probe must not
+    run at all -- touching hardware known to be unusable is wasted and could report a
+    second, unrelated problem on the same field (ADR-0076)."""
+    from vspeech.config import RecordingConfig
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(
+        audio, "get_device_info", lambda i: DeviceInfo.model_validate(_SD_DEVICES[0])
+    )
+    opened: list[int] = []
+    monkeypatch.setattr(
+        audio.sd,
+        "RawInputStream",
+        lambda **kw: opened.append(1) or _FakeSdStream(**kw),
+    )
+    cfg = Config(
+        recording=RecordingConfig(
+            enable=True, input_device_index=0, input_device_rate=44101
+        )
+    )
+    collect_problems(cfg)
+    assert opened == []
+
+
+def test_recording_pathological_ratio_is_rejected_at_preflight(monkeypatch):
+    """recording.rate (config.recording.rate) is a fixed pipeline rate, so a device
+    rate that cannot resample to it fails every time the worker runs -- reject it at
+    startup instead (ADR-0076)."""
+    from vspeech.config import RecordingConfig
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(
+        audio, "get_device_info", lambda i: DeviceInfo.model_validate(_SD_DEVICES[0])
+    )
+    # An explicit override skips device-table lookup entirely (resolve_device_rate
+    # returns it immediately), so this is deterministic regardless of the device table.
+    cfg = Config(
+        recording=RecordingConfig(
+            enable=True, input_device_index=0, input_device_rate=44101
+        )
+    )
+    problems = collect_problems(cfg)
+    matches = [p for p in problems if p.field == "recording.input_device_rate"]
+    assert len(matches) == 1, problems
+    assert "44101" in matches[0].detail
+    assert "16000" in matches[0].detail  # config.recording.rate's default
+
+
+def test_recording_realistic_rate_pair_passes(monkeypatch):
+    # The autouse fixture's device resolves to 48000Hz; against recording.rate=16000
+    # (the default) that is an ordinary, safe ratio.
+    from vspeech.config import RecordingConfig
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(
+        audio, "get_device_info", lambda i: DeviceInfo.model_validate(_SD_DEVICES[0])
+    )
+    cfg = Config(recording=RecordingConfig(enable=True, input_device_index=0))
+    assert collect_problems(cfg) == []
+
+
+def test_recording_rate_drift_is_logged_not_a_config_problem(monkeypatch, caplog):
+    """Parity with the worker's own open path (lib/audio.open_device_stream step 4): a
+    rate PortAudio reports back a hair off from what was requested is not itself a
+    config problem (the worker still converts at the requested rate) -- it becomes
+    visible at preflight time too, as a warning, instead of only once the real worker
+    opens the same device (ADR-0076)."""
+    from vspeech.config import RecordingConfig
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(
+        audio, "get_device_info", lambda i: DeviceInfo.model_validate(_SD_DEVICES[0])
+    )
+
+    class _DriftingStream(_FakeSdStream):
+        def __init__(self, **kw: Any) -> None:
+            super().__init__(**kw)
+            self.samplerate += 1.0  # PortAudio reports a hair off the requested rate
+
+    monkeypatch.setattr(audio.sd, "RawInputStream", lambda **kw: _DriftingStream(**kw))
+    cfg = Config(recording=RecordingConfig(enable=True, input_device_index=0))
+    with caplog.at_level(logging.WARNING):
+        problems = collect_problems(cfg)
+    assert problems == []
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("recording.input_device_rate" in m and "48001" in m for m in messages)
+
+
+# --- playback: device rate resolution + open probe (Task 9, ADR-0076) --------------
+
+
+def test_playback_rate_unresolved_is_reported(monkeypatch):
+    from vspeech.config import PlaybackConfig
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(
+        audio,
+        "get_device_info",
+        lambda i: DeviceInfo(
+            host_api=0,
+            max_input_channels=0,
+            max_output_channels=2,
+            name="Ghost Speaker",
+            index=i,
+        ),
+    )
+    cfg = Config(playback=PlaybackConfig(enable=True, output_device_index=9))
+    problems = collect_problems(cfg)
+    assert any(p.field == "playback.output_device_rate" for p in problems), problems
+    assert not any(p.field == "playback.output_device_index" for p in problems)
+
+
+def test_playback_device_open_failure_reports_the_rate(monkeypatch):
+    from vspeech.config import PlaybackConfig
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(
+        audio, "get_device_info", lambda i: DeviceInfo.model_validate(_SD_DEVICES[1])
+    )
+
+    def _boom(**kw):
+        raise audio.sd.PortAudioError("Invalid sample rate")
+
+    monkeypatch.setattr(audio.sd, "RawOutputStream", _boom)
+    cfg = Config(playback=PlaybackConfig(enable=True, output_device_index=1))
+    problems = collect_problems(cfg)
+    matches = [p for p in problems if p.field == "playback.output_device_rate"]
+    assert len(matches) == 1, problems
+    assert "48000" in matches[0].detail
+    assert "channels=1" in matches[0].detail
+    assert "dtype=int16" in matches[0].detail
+
+
+def test_playback_pathological_rate_is_not_rejected_at_preflight(monkeypatch):
+    """Unlike recording/stream_vc, playback's counterpart rate is whatever TTS/VC/a
+    remote worker produced the utterance -- not known until an utterance actually
+    arrives -- so preflight must not reject a device rate here even one that would
+    explode against every standard pipeline rate. worker/playback.py already handles
+    it per-utterance (a warning, ADR-0075/0076)."""
+    from vspeech.config import PlaybackConfig
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(
+        audio, "get_device_info", lambda i: DeviceInfo.model_validate(_SD_DEVICES[1])
+    )
+    cfg = Config(
+        playback=PlaybackConfig(
+            enable=True, output_device_index=1, output_device_rate=44101
+        )
+    )
+    assert collect_problems(cfg) == []
 
 
 def test_translation_missing_gcp_key_is_reported():
@@ -543,3 +852,297 @@ def test_local_role_default_transport_has_no_transport_problem():
     # The defaults (role=local, transport_type=in_process) raise no transport problem.
     cfg = Config.model_validate({"stream_vc": {"enable": True}})
     assert "stream_vc.transport_type" not in _fields(collect_problems(cfg))
+
+
+# --- stream_vc: device rate resolution + open probe (Task 9, ADR-0076) -------------
+
+
+def test_stream_vc_input_rate_unresolved_is_reported(monkeypatch):
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(
+        audio,
+        "get_device_info",
+        lambda i: DeviceInfo(
+            host_api=0,
+            max_input_channels=2,
+            max_output_channels=0,
+            name="Ghost Stream Mic",
+            index=i,
+        ),
+    )
+    cfg = Config.model_validate(
+        {
+            "stream_vc": {
+                "enable": True,
+                "role": "producer",
+                "transport_type": "udp",
+                "peer_host": "127.0.0.1",
+                "peer_port": 9000,
+                "input_device_index": 3,
+            }
+        }
+    )
+    problems = collect_problems(cfg)
+    assert any(p.field == "stream_vc.input_device_rate" for p in problems), problems
+    assert not any(p.field == "stream_vc.input_device_index" for p in problems)
+
+
+def test_stream_vc_output_rate_unresolved_is_reported(monkeypatch):
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(
+        audio,
+        "get_device_info",
+        lambda i: DeviceInfo(
+            host_api=0,
+            max_input_channels=0,
+            max_output_channels=2,
+            name="Ghost Stream Speaker",
+            index=i,
+        ),
+    )
+    cfg = Config.model_validate(
+        {
+            "stream_vc": {
+                "enable": True,
+                "role": "consumer",
+                "transport_type": "udp",
+                "bind_port": 9000,
+                "output_device_index": 4,
+            }
+        }
+    )
+    problems = collect_problems(cfg)
+    assert any(p.field == "stream_vc.output_device_rate" for p in problems), problems
+    assert not any(p.field == "stream_vc.output_device_index" for p in problems)
+
+
+def test_stream_vc_output_device_open_failure_reports_the_rate(monkeypatch):
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(
+        audio, "get_device_info", lambda i: DeviceInfo.model_validate(_SD_DEVICES[1])
+    )
+
+    def _boom(**kw):
+        raise audio.sd.PortAudioError("Invalid sample rate")
+
+    monkeypatch.setattr(audio.sd, "RawOutputStream", _boom)
+    cfg = Config.model_validate(
+        {
+            "stream_vc": {
+                "enable": True,
+                "role": "consumer",
+                "transport_type": "udp",
+                "bind_port": 9000,
+                "output_device_index": 1,
+            }
+        }
+    )
+    problems = collect_problems(cfg)
+    matches = [p for p in problems if p.field == "stream_vc.output_device_rate"]
+    assert len(matches) == 1, problems
+    assert "48000" in matches[0].detail
+    assert "channels=1" in matches[0].detail
+    assert "dtype=int16" in matches[0].detail
+
+
+def test_stream_vc_output_start_failure_still_closes_the_stream(monkeypatch):
+    """Same guarantee as recording (see
+    test_recording_start_failure_still_closes_the_stream) for the output boundary."""
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(
+        audio, "get_device_info", lambda i: DeviceInfo.model_validate(_SD_DEVICES[1])
+    )
+    made: list[_FakeSdStream] = []
+
+    def _open(**kw):
+        stream = _FakeSdStream(start_error=audio.sd.PortAudioError("device busy"), **kw)
+        made.append(stream)
+        return stream
+
+    monkeypatch.setattr(audio.sd, "RawOutputStream", _open)
+    cfg = Config.model_validate(
+        {
+            "stream_vc": {
+                "enable": True,
+                "role": "consumer",
+                "transport_type": "udp",
+                "bind_port": 9000,
+                "output_device_index": 1,
+            }
+        }
+    )
+    problems = collect_problems(cfg)
+    assert any(p.field == "stream_vc.output_device_rate" for p in problems), problems
+    assert len(made) == 1
+    assert made[0].closed is True
+
+
+def test_stream_vc_input_pathological_ratio_is_rejected(monkeypatch):
+    """CAPTURE_RATE (16000) is a fixed pipeline rate for this boundary, so a device
+    rate that cannot resample to it fails every time the worker runs -- reject it at
+    startup instead (ADR-0076)."""
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(
+        audio, "get_device_info", lambda i: DeviceInfo.model_validate(_SD_DEVICES[0])
+    )
+    cfg = Config.model_validate(
+        {
+            "stream_vc": {
+                "enable": True,
+                "role": "producer",
+                "transport_type": "udp",
+                "peer_host": "127.0.0.1",
+                "peer_port": 9000,
+                "input_device_index": 0,
+                "input_device_rate": 44101,
+            }
+        }
+    )
+    problems = collect_problems(cfg)
+    matches = [p for p in problems if p.field == "stream_vc.input_device_rate"]
+    assert len(matches) == 1, problems
+    assert "44101" in matches[0].detail
+    assert "16000" in matches[0].detail  # CAPTURE_RATE
+
+
+def test_stream_vc_output_pathological_ratio_is_rejected(monkeypatch):
+    """stream_vc output has no single known counterpart rate (it comes from whichever
+    RVC model is loaded), so the check is against the whole standard rate family
+    instead (ADR-0076) -- one exploding member is enough to prove the device rate
+    itself is the problem."""
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(
+        audio, "get_device_info", lambda i: DeviceInfo.model_validate(_SD_DEVICES[1])
+    )
+    cfg = Config.model_validate(
+        {
+            "stream_vc": {
+                "enable": True,
+                "role": "consumer",
+                "transport_type": "udp",
+                "bind_port": 9000,
+                "output_device_index": 1,
+                "output_device_rate": 44101,
+            }
+        }
+    )
+    problems = collect_problems(cfg)
+    matches = [p for p in problems if p.field == "stream_vc.output_device_rate"]
+    assert len(matches) == 1, problems
+    assert "44101" in matches[0].detail
+
+
+def test_stream_vc_output_realistic_rates_all_pass(monkeypatch):
+    """The controller requirement's own example combinations must all pass -- none may
+    be rejected as a pathological ratio against the standard rate family."""
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(
+        audio, "get_device_info", lambda i: DeviceInfo.model_validate(_SD_DEVICES[1])
+    )
+    for rate in (16000, 22050, 24000, 32000, 40000, 44100, 48000, 96000, 192000):
+        cfg = Config.model_validate(
+            {
+                "stream_vc": {
+                    "enable": True,
+                    "role": "consumer",
+                    "transport_type": "udp",
+                    "bind_port": 9000,
+                    "output_device_index": 1,
+                    "output_device_rate": rate,
+                }
+            }
+        )
+        assert collect_problems(cfg) == [], (rate, collect_problems(cfg))
+
+
+def test_producer_validates_input_rate_not_output_rate(monkeypatch):
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(
+        audio, "get_device_info", lambda i: DeviceInfo.model_validate(_SD_DEVICES[0])
+    )
+    cfg = Config.model_validate(
+        {
+            "stream_vc": {
+                "enable": True,
+                "role": "producer",
+                "transport_type": "udp",
+                "peer_host": "127.0.0.1",
+                "peer_port": 9000,
+                "input_device_index": 0,
+                "input_device_rate": 44101,  # pathological, must be reported
+                "output_device_rate": 44101,  # also pathological, must NOT even be
+                # checked -- producer never touches the output boundary at all
+            }
+        }
+    )
+    fields = _fields(collect_problems(cfg))
+    assert "stream_vc.input_device_rate" in fields
+    assert "stream_vc.output_device_rate" not in fields
+
+
+def test_consumer_validates_output_rate_not_input_rate(monkeypatch):
+    from vspeech.lib import audio
+
+    monkeypatch.setattr(
+        audio, "get_device_info", lambda i: DeviceInfo.model_validate(_SD_DEVICES[1])
+    )
+    cfg = Config.model_validate(
+        {
+            "stream_vc": {
+                "enable": True,
+                "role": "consumer",
+                "transport_type": "udp",
+                "bind_port": 9000,
+                "output_device_index": 1,
+                "output_device_rate": 44101,  # pathological, must be reported
+                "input_device_rate": 44101,  # also pathological, must NOT even be
+                # checked -- consumer never touches the input boundary at all
+            }
+        }
+    )
+    fields = _fields(collect_problems(cfg))
+    assert "stream_vc.output_device_rate" in fields
+    assert "stream_vc.input_device_rate" not in fields
+
+
+def test_disabled_recording_playback_stream_vc_skip_rate_checks():
+    """`input_device_rate=1` / `output_device_rate=1` are deliberately pathological
+    (1Hz cannot resample to any real pipeline rate) on all three, including stream_vc:
+    with the enable guard removed, role=local's default would check *both*
+    input_device_rate against CAPTURE_RATE and output_device_rate against the standard
+    rate family, and either one would explode -- so this test only passes if `enable`
+    genuinely stops the rate check specifically, not just incidentally because some
+    other stream_vc check (e.g. missing RVC assets) also happens to fire."""
+    from vspeech.config import PlaybackConfig
+    from vspeech.config import RecordingConfig
+    from vspeech.config import StreamVcConfig
+
+    cfg = Config(
+        recording=RecordingConfig(enable=False, input_device_rate=1),
+        playback=PlaybackConfig(enable=False, output_device_rate=1),
+        stream_vc=StreamVcConfig(
+            enable=False, input_device_rate=1, output_device_rate=1
+        ),
+    )
+    assert collect_problems(cfg) == []
+
+
+def test_standard_sample_rate_family_never_needs_a_pathological_resampler():
+    """Regression guard for the proxy set stream_vc's output check uses (ADR-0076):
+    every pair drawn from _STANDARD_SAMPLE_RATES must resample without exceeding
+    MAX_PROTOTYPE_TAPS (ADR-0075), or the output check would reject legitimate
+    device-rate/model-rate combinations that must pass."""
+    from vspeech.lib.resample import make_resampler
+    from vspeech.preflight import _STANDARD_SAMPLE_RATES
+
+    for a in _STANDARD_SAMPLE_RATES:
+        for b in _STANDARD_SAMPLE_RATES:
+            make_resampler(a, b)  # must not raise ValueError

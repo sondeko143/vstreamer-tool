@@ -5,14 +5,15 @@ audio). transport.recv -> push into the jitter buffer -> poll and push the rest 
 one block -> write to the output. Only skew-immune quantities are measured: interarrival
 jitter and seq gaps (one-way delay is contaminated by clock skew and is deliberately not
 measured, ADR-0056). Output device faults self-heal exactly as in playback.py (lazy
-reopen on the next packet).
+reopen on the next packet), and the same `OutputSink` opens the device at its own rate
+and converts the packet rate into it in process (ADR-0073) -- numpy only, so the
+torch-free property of this role is untouched.
 """
 
 from __future__ import annotations
 
 from asyncio import CancelledError
 from asyncio import sleep
-from asyncio import to_thread
 from time import perf_counter
 
 import sounddevice as sd
@@ -26,7 +27,8 @@ from vspeech.logger import logger
 from vspeech.stream_vc.jitter import JitterBuffer
 from vspeech.stream_vc.jitter import PopKind
 from vspeech.stream_vc.packet import StreamPacket
-from vspeech.stream_vc.playback import open_stream_vc_output_stream
+from vspeech.stream_vc.playback import OutputSink
+from vspeech.stream_vc.playback import open_stream_vc_output
 from vspeech.stream_vc.retry import BACKOFF_START
 from vspeech.stream_vc.retry import close_quietly
 from vspeech.stream_vc.retry import next_backoff
@@ -63,7 +65,7 @@ async def network_playback_loop(config: StreamVcConfig, transport: Transport) ->
     target_depth = round(config.jitter_buffer_ms / config.block_ms)
     buffer = JitterBuffer(target_depth=target_depth)
     logger.info("stream_vc consumer jitter buffer depth: %d block(s)", target_depth)
-    stream: sd.RawOutputStream | None = None
+    sink: OutputSink | None = None
     session: str | None = None
     prev_recv: float | None = None
     started = False
@@ -87,11 +89,14 @@ async def network_playback_loop(config: StreamVcConfig, transport: Transport) ->
             if packet.session_id != session:
                 if session is not None:
                     logger.info("stream_vc consumer: producer session changed; reset")
-                    if stream is not None:
-                        # a new session may use a different target_sample_rate; drop the
-                        # stream so it reopens at the incoming packet's rate.
-                        close_quietly(stream)
-                        stream = None
+                    if sink is not None:
+                        # The device is open at its own rate, which no sender can change,
+                        # so a new session no longer costs a reopen (it used to, back when
+                        # the stream was opened at the packet's rate). Only the resampler
+                        # state is discontinuous: drop the filter tail so the old
+                        # session's decay is not smeared into the new one. A new
+                        # target_sample_rate rebuilds the resampler on the next write.
+                        sink.reset()
                 session = packet.session_id
                 buffer.reset()
             # The block above always makes session equal packet.session_id (== the current
@@ -113,21 +118,23 @@ async def network_playback_loop(config: StreamVcConfig, transport: Transport) ->
             if result.dropped:
                 telemetry.record("stream_vc_playback_drop", float(result.dropped))
             try:
-                if stream is None:
+                if sink is None:
                     if started:
-                        stream = open_stream_vc_output_stream(
-                            config, packet.sample_rate
-                        )
+                        sink = open_stream_vc_output(config)
                         logger.info("stream vc consumer playback reopened")
                     else:
                         with worker_startup("stream_vc"):
-                            stream = open_stream_vc_output_stream(
-                                config, packet.sample_rate
-                            )
+                            sink = open_stream_vc_output(config)
                         started = True
                         logger.info("stream vc consumer playback started")
                     backoff = BACKOFF_START
-                underflowed = await to_thread(stream.write, result.pcm)
+                # `result.pcm` may be a concealment or prebuffer block rather than the
+                # packet's own audio, but the jitter buffer sizes those from the first
+                # packet of the current session, whose rate is the one `packet` carries
+                # (a session's target_sample_rate is fixed for the producer's lifetime,
+                # and a session change resets the buffer). So this rate is the right one
+                # for every kind of block.
+                underflowed = await sink.play(result.pcm, packet.sample_rate)
                 if underflowed:
                     telemetry.record("stream_vc_playback_underflow", 1.0)
                     if (n := underflow_throttle.hit()) is not None:
@@ -137,13 +144,13 @@ async def network_playback_loop(config: StreamVcConfig, transport: Transport) ->
             except (OSError, sd.PortAudioError) as e:
                 logger.warning("stream_vc consumer output fault; reopen: %r", e)
                 telemetry.record("stream_vc_playback_reopen", 1.0)
-                if stream is not None:
-                    close_quietly(stream)
-                stream = None
+                if sink is not None:
+                    close_quietly(sink)
+                sink = None
                 await sleep(backoff)
                 backoff = next_backoff(backoff)
     except CancelledError as e:
         raise shutdown_worker(e)
     finally:
-        if stream is not None:
-            close_quietly(stream)
+        if sink is not None:
+            close_quietly(sink)

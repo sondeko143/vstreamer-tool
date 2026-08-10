@@ -9,21 +9,35 @@ through telemetry and the seq (gap) bookkeeping -- this module promises never to
 loss into a silent hole, so even deliberate drops are recorded (nothing is dropped
 silently). Seq jumps are recorded the same way (an acceptance criterion). Actual
 concealment and reordering belong to the stage that introduces the network transport.
+
+The device is opened at its own native rate and the packet's rate (the sender's RVC model
+rate) is converted to it here, in process (ADR-0073/0074). Opening at the packet's rate
+instead would hand the conversion to the OS, whose filter we can neither test nor log,
+and WASAPI shared mode refuses any rate but its mix format. `OutputSink` below is the
+whole of that; both this module's loop and the consumer's (consumer.py) go through it, so
+the two roles cannot drift apart.
 """
 
 from asyncio import CancelledError
 from asyncio import sleep
-from asyncio import to_thread
 
 import sounddevice as sd
 
 from vspeech.config import StreamVcConfig
 from vspeech.exceptions import shutdown_worker
 from vspeech.exceptions import worker_startup
+from vspeech.lib.audio import DeviceStreamThread
+from vspeech.lib.audio import open_device_stream
 from vspeech.lib.audio import resolve_stream_vc_output_device
 from vspeech.lib.log_throttle import LogThrottle
+from vspeech.lib.pcm import decode_pcm
+from vspeech.lib.pcm import encode_pcm
+from vspeech.lib.resample import PolyphaseResampler
+from vspeech.lib.resample import make_resampler
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
+from vspeech.stream_vc.packet import PACKET_CHANNELS
+from vspeech.stream_vc.packet import PACKET_FORMAT
 from vspeech.stream_vc.retry import BACKOFF_START
 from vspeech.stream_vc.retry import close_quietly
 from vspeech.stream_vc.retry import next_backoff
@@ -39,30 +53,162 @@ def detect_gap(prev_seq: int | None, seq: int) -> int:
     return missing if missing > 0 else 0
 
 
-def open_stream_vc_output_stream(
-    config: StreamVcConfig, sample_rate: int
-) -> sd.RawOutputStream:
+class OutputSink:
+    """An open output stream together with the resampler that feeds it (ADR-0073).
+
+    The two are created and discarded as a unit so a resampler can never be paired with a
+    rate its stream was not opened at -- the device rate is fixed for the life of the
+    stream, while the packet rate arrives with every packet and may change under us.
+
+    The filter state is kept **across packets**: consecutive packets are one continuous
+    signal, and resetting (or rebuilding) per packet would put a transient at every block
+    boundary. It is dropped only where the signal really is discontinuous -- `reset()`,
+    which the consumer calls when the sender starts a new session.
+    """
+
+    def __init__(self, stream: sd.RawOutputStream, device_rate: int) -> None:
+        self.stream = stream
+        self.device_rate = device_rate
+        self._src_rate: int | None = None
+        self._resampler: PolyphaseResampler | None = None
+        # Every native call on this stream is made from this one thread (ADR-0077):
+        # Pa_WriteStream blocks, so it has to leave the event loop, and Pa_CloseStream
+        # frees the stream -- closing while a write is still inside it frees it under the
+        # writer, which Windows reports as an access violation that kills the process.
+        # Both callers of this sink close it on every reconnect, not only at teardown.
+        self._device = DeviceStreamThread("stream_vc_out")
+
+    def close(self) -> None:
+        """Close the device, never while a write is still inside it.
+
+        Kept `_Closable`-shaped so `close_quietly` takes the sink itself and the stream
+        never has to be unwrapped at a call site. A close asked for mid-write is queued
+        behind that write on the owning thread; with nothing in flight it happens right
+        here, so `close_quietly` still sees (and swallows) a device error from it.
+        """
+        self._device.close(self.stream.close)
+
+    def reset(self) -> None:
+        """Drop the filter tail **without touching the device**.
+
+        A new sender session is a cut in the audio, not in the device: carrying the tail
+        across would smear the end of the old session into the start of the new one, while
+        reopening the stream would throw away whatever PortAudio still holds and cost a
+        device open on every producer restart. The device rate no sender can change, so
+        there is nothing else to rebuild here.
+        """
+        if self._resampler is not None:
+            self._resampler.reset()
+
+    def convert(self, pcm: bytes, src_rate: int) -> bytes:
+        """`pcm` (int16 mono at `src_rate`) as int16 mono at the device rate.
+
+        Returns the input object untouched when the rates already match, which keeps that
+        path bit-identical to the pre-ADR-0073 code.
+
+        The resampler is rebuilt whenever `src_rate` changes -- the sender's model rate
+        travels with every packet, so keying the rebuild on the rate rather than on the
+        session id means the ratio cannot silently disagree with the audio, whatever the
+        session bookkeeping does.
+
+        A rebuild is a rare event (a producer restart with another model) and has to stay
+        one -- not for its cost, which is 0.2-8 ms across every rate pair this boundary
+        can now meet (measured: 16000->48000 0.26 ms, 48000->44100 2.5 ms, 11025->48000
+        7.7 ms; the pathological coprime pairs that used to dominate this number are
+        refused by wire.py now), but because a fresh resampler starts from a zeroed filter
+        tail. Rebuilding per packet would fade in the first taps of every block.
+        """
+        if src_rate != self._src_rate:
+            # Built before either field moves: make_resampler rejects a non-positive
+            # rate, and recording the new rate first would leave a sink that answers
+            # "already at that rate" and passes the next packet through unconverted.
+            resampler = make_resampler(src_rate, self.device_rate)
+            self._resampler = resampler
+            self._src_rate = src_rate
+            logger.info(
+                "stream_vc output %dHz -> %dHz (%s)",
+                src_rate,
+                self.device_rate,
+                "変換なし" if self._resampler is None else "プロセス内で変換",
+            )
+        if self._resampler is None:
+            return pcm
+        samples = decode_pcm(pcm, PACKET_FORMAT, PACKET_CHANNELS)
+        # encode_pcm saturates: resampling overshoots the original peak (Gibbs), and a
+        # wrapping cast would turn that overshoot into a sign flip = an audible click.
+        return encode_pcm(self._resampler.process(samples), PACKET_FORMAT)
+
+    def write(self, pcm: bytes, src_rate: int) -> bool:
+        """Convert one packet and write it. Returns paOutputUnderflowed.
+
+        Runs on the sink's own device thread (see `play`), so the conversion happens off
+        the event loop alongside the blocking write it belongs to. No lock guards the
+        filter state: the loops await one `play` at a time, so nothing else touches the
+        sink while a write is in flight.
+        """
+        return self.stream.write(self.convert(pcm, src_rate))
+
+    async def play(self, pcm: bytes, src_rate: int) -> bool:
+        """`write` on the owning thread, awaited. Returns paOutputUnderflowed.
+
+        The one entry point the real-time loops use, so that a close can never overlap a
+        write. It costs exactly what `to_thread` did (one executor submit plus one
+        wakeup); this thread is private to the sink, and the loops already awaited each
+        write before starting the next, so nothing new is serialised.
+        """
+        return await self._device.call(self.write, pcm, src_rate)
+
+
+def open_stream_vc_output(config: StreamVcConfig) -> OutputSink:
+    """Open the output device at its own rate and return it paired with its converter.
+
+    The resolve -> log -> open -> verify sequence is `open_device_stream`'s (lib/audio.py),
+    shared with the three other device boundaries; only the device lookup, the stream's own
+    shape -- here including the requested latency (ADR-0071) -- and the pairing with the
+    converter are decided here.
+
+    Both resolvers raise the DeviceNotFoundError family, which is deliberately in neither
+    the callers' `(OSError, sd.PortAudioError)` handler nor retry.py's DEVICE_ERRORS: it
+    escapes the reopen path and ends the subsystem rather than backing off forever.
+    Backing off cannot help -- an unresolvable rate stays unresolvable however long you
+    wait -- and ADR-0050 wants an unrecoverable fault in an explicitly enabled feature to
+    fail loud for the supervisor.
+    """
     device = resolve_stream_vc_output_device(config)
-    # Logged before the open so a failing open still says which device was attempted.
-    logger.info(
-        "stream_vc output device %s: %s (latency %s requested)",
-        device.index,
-        device.name,
-        config.output_latency,
+
+    def _open(rate: int) -> sd.RawOutputStream:
+        stream = sd.RawOutputStream(
+            samplerate=rate,
+            channels=1,
+            device=device.index,
+            dtype="int16",
+            # Handed to sounddevice untouched: a float is seconds, PortAudio's own unit
+            # for suggestedLatency (ADR-0071).
+            latency=config.output_latency,
+        )
+        # PortAudio does not have to honour the request, and "low" resolves to a
+        # different number per host API, so the granted value is the only one worth
+        # tuning against. Logged from inside the opener, not after open_device_stream
+        # returns: that helper start()s the stream, and a failing start would otherwise
+        # take the number with it. consumer.py reuses this function, so the consumer
+        # machine gets the same line for its own speaker.
+        logger.info(
+            "stream_vc output stream latency: %.3fs granted (%s requested)",
+            stream.latency,
+            config.output_latency,
+        )
+        return stream
+
+    stream, rate = open_device_stream(
+        device=device,
+        override=config.output_device_rate,
+        input=False,
+        config_key="stream_vc.output_device_rate",
+        opening="stream_vc output device",
+        subject="stream_vc playback",
+        open_stream=_open,
     )
-    stream = sd.RawOutputStream(
-        samplerate=sample_rate,
-        channels=1,
-        device=device.index,
-        dtype="int16",
-        latency=config.output_latency,
-    )
-    # PortAudio does not have to honour the request, and "low" resolves to a different
-    # number per host API. Report what was actually granted, before start() so a failing
-    # start still leaves the number in the log.
-    logger.info("stream_vc output stream latency: %.3fs", stream.latency)
-    stream.start()
-    return stream
+    return OutputSink(stream, rate)
 
 
 async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
@@ -71,10 +217,11 @@ async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
 
     The first open is fail-loud (worker_startup). Runtime device faults from later
     writes/reopens self-heal via close -> backoff -> lazy reopen on the next packet
-    (without dragging in the utterance path or sibling tasks, ADR-0050). The output
-    sample_rate travels with the packet, so a reopen can also happen on packet arrival.
+    (without dragging in the utterance path or sibling tasks, ADR-0050). A device fault is
+    now the only thing that reopens: the stream is opened at the device's own rate, so the
+    sample_rate travelling with the packet is converted into it instead (ADR-0073).
     """
-    stream: sd.RawOutputStream | None = None
+    sink: OutputSink | None = None
     prev_seq: int | None = None
     # One per condition. Output underflows, stale drops and seq gaps all fire on every
     # block once they start (about 6 times a second at block_ms=160), so throttle by time
@@ -119,19 +266,15 @@ async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
                 # this does not block.
                 packet = await transport.recv()
             try:
-                if stream is None:
+                if sink is None:
                     if started:
                         # A runtime reopen is not made fail-loud (it is already backed
                         # off).
-                        stream = open_stream_vc_output_stream(
-                            config, packet.sample_rate
-                        )
+                        sink = open_stream_vc_output(config)
                         logger.info("stream vc playback reopened")
                     else:
                         with worker_startup("stream_vc"):
-                            stream = open_stream_vc_output_stream(
-                                config, packet.sample_rate
-                            )
+                            sink = open_stream_vc_output(config)
                         started = True
                         logger.info("stream vc playback started")
                     backoff = BACKOFF_START
@@ -148,7 +291,7 @@ async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
                 # write()'s return value = paOutputUnderflowed (symmetric with read()'s
                 # overflowed in capture.py). Discarding it would let a "silent hole" slip
                 # out -- exactly what this module claims to prevent, so always look at it.
-                underflowed = await to_thread(stream.write, packet.pcm)
+                underflowed = await sink.play(packet.pcm, packet.sample_rate)
                 if underflowed:
                     telemetry.record("stream_vc_playback_underflow", 1.0)
                     if (n := underflow_throttle.hit()) is not None:
@@ -165,10 +308,10 @@ async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
                     backoff,
                 )
                 telemetry.record("stream_vc_playback_reopen", 1.0)
-                # When the reopen itself failed stream is still None, so guard it.
-                if stream is not None:
-                    close_quietly(stream)
-                stream = None
+                # When the reopen itself failed sink is still None, so guard it.
+                if sink is not None:
+                    close_quietly(sink)
+                sink = None
                 await sleep(backoff)
                 backoff = next_backoff(backoff)
     except CancelledError as e:
@@ -178,5 +321,5 @@ async def playback_loop(config: StreamVcConfig, transport: Transport) -> None:
         # raw close() raises sd.PortAudioError, which escapes the finally and replaces
         # the WorkerShutdown that was in flight (turning a clean cancel into an error
         # exit).
-        if stream is not None:
-            close_quietly(stream)
+        if sink is not None:
+            close_quietly(sink)

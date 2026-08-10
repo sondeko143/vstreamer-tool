@@ -89,3 +89,8 @@
 | [0070](0070-f0-voiced-run-median-filter.md) | f0 の中央値フィルタを有声区間単位で全抽出器に掛ける（本家 RVC の filter_radius 相当） | Accepted | 2026-08-10 |
 | [0071](0071-stream-vc-device-latency-config.md) | ストリーミング VC のデバイス latency を入出力別の設定値にする | Accepted | 2026-08-10 |
 | [0072](0072-stream-vc-lookahead.md) | streaming VC の emit 読み出し位置を lookahead ぶん手前へずらして右文脈を買う | Accepted | 2026-08-11 |
+| [0073](0073-device-boundary-inhouse-polyphase-resampler.md) | デバイス境界のサンプルレート変換を OS から自前 numpy ポリフェーズへ移す（0036 を refine） | Accepted | 2026-08-10 |
+| [0074](0074-device-native-rate-resolution.md) | デバイスのネイティブレートを WASAPI カウンターパートから自動解決し、設定で上書きできるようにする | Accepted | 2026-08-10 |
+| [0075](0075-wire-sample-rate-validation.md) | ワイヤ形式の sample_rate を範囲 + 25Hz 格子で検証し、リサンプラ側にも比の上限を置く | Accepted | 2026-08-11 |
+| [0076](0076-preflight-device-rate-open-probe.md) | preflight はデバイスレートを実際に開いて検証し、比が分からない境界は標準レート族に対して確認する | Accepted | 2026-08-11 |
+| [0077](0077-device-stream-calls-on-one-thread.md) | デバイスストリームの blocking 呼び出しと close を 1 本のスレッドに直列化する | Accepted | 2026-08-11 |

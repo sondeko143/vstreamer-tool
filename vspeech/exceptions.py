@@ -65,6 +65,14 @@ class DeviceNotFoundError(Exception):
     pass
 
 
+class DeviceRateUnresolvedError(DeviceNotFoundError):
+    """The device's true sample rate could not be determined (ADR-0074).
+
+    A subclass of DeviceNotFoundError so the existing preflight handlers keep
+    catching it, while callers that care can tell the two apart.
+    """
+
+
 @contextmanager
 def worker_startup(worker: str):
     """Convert a resource-acquisition failure at worker startup into a

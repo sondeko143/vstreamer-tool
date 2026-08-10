@@ -58,6 +58,13 @@ def close_quietly(stream: _Closable) -> None:
     There is a path that double-closes an already broken/closed device
     (fault -> close -> close again in finally), so DEVICE_ERRORS from close itself are
     logged and ignored.
+
+    What it is handed is never a bare PortAudio stream but the object that owns one
+    (capture's InputTap, playback's OutputSink), whose `close()` runs on that stream's own
+    thread when a call is still inside the device -- otherwise this close could land while
+    a read/write is in PortAudio and free the stream under it (ADR-0077). This function
+    still sees the error of a close that happened inline; a deferred one is logged on that
+    thread instead, because there is no longer anybody here to catch it.
     """
     try:
         stream.close()
