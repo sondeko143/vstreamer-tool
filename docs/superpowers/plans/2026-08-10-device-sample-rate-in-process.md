@@ -24,6 +24,26 @@ Spec: [2026-08-10-device-sample-rate-in-process-design.md](../specs/2026-08-10-d
 
 ---
 
+## Implementer Authority
+
+この plan が拘束するのは 3 つだけ: **公開契約**（各 task の「契約」欄の名前・型・方向）、
+**Global Constraints の逐語値**、**各 task の受入基準**。
+
+それ以外 — 内部設計、関数・ファイルの分割、命名、アルゴリズム、テストの設計と粒度、
+エラー処理の形、依存の使い方 — はすべて実装者が決める。plan に書かれていない実装を
+選んだことは逸脱ではない。
+
+plan の記述より良い方法を見つけたら、良い方を採る。plan は使い捨てなので書き換えない。
+その選択が adr-writing の基準に当たるならトリガ2 で ADR を起票する。
+
+停止して人間に確認するのは、上の 3 つのいずれかを**変える必要がある**と判断したときだけ。
+
+> **Task 1-4 は旧形式（実装コード込み）で実行済み。** その 4 task すべてで brief の
+> コードに誤りが見つかり、実装者が訂正した。Task 5 以降はこの節の規律で実行する。
+
+---
+
+
 ### Task 1: ポリフェーズリサンプラ (`vspeech/lib/resample.py`)
 
 **Files:**
@@ -1055,1198 +1075,207 @@ git commit -m "feat(config): デバイスを開くレートの上書き設定を
 
 ### Task 5: stream_vc の入口 (`vspeech/stream_vc/capture.py`)
 
-**Files:**
-- Modify: `vspeech/stream_vc/capture.py:58-70`（`open_stream_vc_input_stream`）、`73-125`（`_capture_read_loop`）、`128-167`（`capture_loop`）
-- Test: `tests/test_stream_vc_capture_resample.py`
+**目的:** ストリーミング VC の入力デバイスをネイティブレートで開き、16kHz への変換をプロセス内で行う。
 
-**Interfaces:**
-- Consumes: `make_resampler`（Task 1）, `resolve_device_rate`（Task 3）, `StreamVcConfig.input_device_rate`（Task 4）
+**範囲:** `vspeech/stream_vc/capture.py`。テストは `tests/`。
+
+**契約**
+
+- Consumes:
+  - `vspeech.lib.resample.make_resampler(src_rate: int, dst_rate: int) -> PolyphaseResampler | None`（`src == dst` なら `None` = 素通し）
+  - `PolyphaseResampler.process(x) -> NDArray[np.float32]`（状態保持。`(n,)` と `(n, channels)`）、`.reset() -> None`、`.out_len(n_in) -> int`、`.delay_samples: int`
+  - `vspeech.lib.audio.resolve_device_rate(device, override, *, input: bool, config_key: str) -> tuple[int, str]`。解決できないときは `vspeech.exceptions.DeviceRateUnresolvedError`
+  - `StreamVcConfig.input_device_rate: int | None`
+  - 既存: `resolve_stream_vc_input_device`, `run_with_device_retry`, `drop_oldest_put`, `CaptureSignal`, `CAPTURE_RATE`
 - Produces:
-  - `open_stream_vc_input_stream(config: StreamVcConfig, hop: int) -> tuple[sd.RawInputStream, PolyphaseResampler | None, int]` — `(stream, resampler, device_hop)`
-  - `class HopAccumulator(hop: int)` — `push(x) -> list[NDArray[np.float32]]`（正確に `hop` サンプルのブロックだけ返す）, `reset()`
+  - `capture_loop(config, out_queue, hop, ready, running)` のシグネチャは**不変**（`subsystem.py` が呼ぶ）。
+  - `out_queue` に載る要素の型と意味は**不変**（長さ `hop` の `NDArray[np.float32]`、または `CaptureSignal.REOPEN`）。`vspeech/stream_vc/runner.py` は無改造で動くこと。
 
-デバイスは `dev_rate` で開き、1 回の read で `device_hop = round(hop * dev_rate / CAPTURE_RATE)` フレーム読む。リサンプル後は `HopAccumulator` でちょうど `hop` サンプルへ切り直す（比が割り切れる常用ケースでは 1 read = 1 ブロックだが、割り切れない設定でも壊れないようにする）。**事前充填は入れない** — Task 1 の `test_fixed_hop_cadence_needs_no_priming` が示すとおり不要。
+**この task 固有の制約**
 
-- [ ] **Step 1: 失敗するテストを書く**
+- `run_with_device_retry` は `[T: _Closable]` に束縛され、`open_stream` の戻り値をそのまま `close_quietly()` に渡す。したがって `open_stream` はストリーム自体を返さなければならず、タプルは返せない。`vspeech/stream_vc/retry.py` は変更しない。
+- **事前充填を入れないこと。** 因果ポリフェーズは出力本数が欠けないので、1 device tick あたり 1 ブロックがそのまま出る（Task 1 の受入基準として検証済み）。滞留を抱える実装向けの対策をここに持ち込むと、逆に丸ごと 1 hop ぶんの遅延が乗る。
 
-`tests/test_stream_vc_capture_resample.py` を新規作成:
+**受入基準**
 
-```python
-"""Capture-side resampling and re-blocking (ADR-0070)."""
+- [ ] 入力デバイスは `resolve_device_rate` が返したレートで開かれる。`stream_vc.input_device_rate` を明示した場合はその値で開かれる。
+- [ ] 解決したレートが `CAPTURE_RATE` と等しいときはリサンプラを構築せず、変更前と出力がビット一致する。
+- [ ] 解決したレートが `CAPTURE_RATE` と異なるとき、`out_queue` に載るブロックは常にちょうど `hop` サンプルである。
+- [ ] デバイスの 1 回の読み取りにつき `out_queue` へ載るブロック数が定常的に 1 である。48000Hz と 44100Hz の両方で満たすこと。
+- [ ] 比が割り切れず 1 回の読み取りが `hop` に満たない／超える場合でも、端数サンプルは失われず次へ繰り越される。
+- [ ] デバイス再オープン後、再オープン前のフィルタ状態と作りかけのブロックが新しいストリームへ持ち越されない。
+- [ ] 開いたレート、その決定根拠、変換の有無がログに残る。
+- [ ] 一時停止中のドロップ、キュー満杯のドロップ、入力オーバーフローについて、テレメトリの記録とログ間引きの挙動が変更前と同じである。
 
-import numpy as np
+**検証**
 
-from vspeech.stream_vc.capture import CAPTURE_RATE
-from vspeech.stream_vc.capture import HopAccumulator
-from vspeech.stream_vc.capture import device_hop_size
-
-
-def test_device_hop_maps_the_pipeline_hop_onto_the_device_clock() -> None:
-    assert device_hop_size(2560, 48000) == 7680
-    assert device_hop_size(2560, 44100) == 7056
-    assert device_hop_size(2560, CAPTURE_RATE) == 2560
-
-
-def test_accumulator_emits_only_whole_hops() -> None:
-    acc = HopAccumulator(4)
-    assert acc.push(np.arange(3, dtype=np.float32)) == []
-    blocks = acc.push(np.arange(3, 9, dtype=np.float32))
-    assert len(blocks) == 2
-    assert np.array_equal(blocks[0], np.arange(0, 4, dtype=np.float32))
-    assert np.array_equal(blocks[1], np.arange(4, 8, dtype=np.float32))
-    assert acc.push(np.zeros(0, dtype=np.float32)) == []
-
-
-def test_accumulator_reset_drops_the_partial_block() -> None:
-    acc = HopAccumulator(4)
-    acc.push(np.ones(3, dtype=np.float32))
-    acc.reset()
-    assert acc.push(np.zeros(3, dtype=np.float32)) == []
-
-
-def test_one_device_read_yields_exactly_one_block_at_48k() -> None:
-    """The capture cadence must stay 1:1 with the device clock -- otherwise the
-    conversion loop starves on some ticks and gets two blocks on others."""
-    from vspeech.lib.resample import make_resampler
-
-    hop = 2560
-    dev_rate = 48000
-    resampler = make_resampler(dev_rate, CAPTURE_RATE)
-    assert resampler is not None
-    acc = HopAccumulator(hop)
-    chunk = np.zeros(device_hop_size(hop, dev_rate), dtype=np.float32)
-    for tick in range(100):
-        blocks = acc.push(resampler.process(chunk))
-        assert len(blocks) == 1, f"tick {tick}: {len(blocks)} block(s)"
-        assert blocks[0].shape == (hop,)
-
-
-def test_one_device_read_yields_exactly_one_block_at_44k1() -> None:
-    from vspeech.lib.resample import make_resampler
-
-    hop = 2560
-    resampler = make_resampler(44100, CAPTURE_RATE)
-    assert resampler is not None
-    acc = HopAccumulator(hop)
-    chunk = np.zeros(device_hop_size(hop, 44100), dtype=np.float32)
-    for tick in range(100):
-        assert len(acc.push(resampler.process(chunk))) == 1, f"tick {tick}"
-
-
-def test_native_rate_device_needs_no_resampler() -> None:
-    from vspeech.lib.resample import make_resampler
-
-    assert make_resampler(CAPTURE_RATE, CAPTURE_RATE) is None
 ```
-
-- [ ] **Step 2: テストが失敗することを確認**
-
-Run: `PYTHONIOENCODING=utf-8 uv run pytest tests/test_stream_vc_capture_resample.py -q`
-Expected: FAIL — `ImportError: cannot import name 'HopAccumulator'`
-
-- [ ] **Step 3: `capture.py` を実装**
-
-先頭の import に追加:
-
-```python
-from vspeech.lib.audio import resolve_device_rate
-from vspeech.lib.resample import PolyphaseResampler
-from vspeech.lib.resample import make_resampler
-```
-
-`ms_to_samples` の直後（50 行目付近）に追加:
-
-```python
-def device_hop_size(hop: int, device_rate: int) -> int:
-    """The pipeline hop expressed in device-clock frames."""
-    return round(hop * device_rate / CAPTURE_RATE)
-
-
-class HopAccumulator:
-    """Re-blocks a variable-length sample stream into exact `hop`-sized blocks.
-
-    The conversion core takes a fixed block (ADR-0053), but a resampler's output
-    length is not tied to the device's read size once the ratio is not exact. Buffer
-    the remainder and emit only whole hops.
-    """
-
-    def __init__(self, hop: int) -> None:
-        self._hop = hop
-        self._buf: NDArray[np.float32] = np.zeros(0, dtype=np.float32)
-
-    def reset(self) -> None:
-        self._buf = np.zeros(0, dtype=np.float32)
-
-    def push(self, samples: NDArray[np.float32]) -> list[NDArray[np.float32]]:
-        if samples.shape[0]:
-            self._buf = np.concatenate([self._buf, samples])
-        blocks: list[NDArray[np.float32]] = []
-        while self._buf.shape[0] >= self._hop:
-            blocks.append(np.ascontiguousarray(self._buf[: self._hop]))
-            self._buf = self._buf[self._hop :]
-        return blocks
-```
-
-`open_stream_vc_input_stream`（58-70 行）を差し替え:
-
-```python
-def open_stream_vc_input_stream(
-    config: StreamVcConfig, hop: int
-) -> tuple[sd.RawInputStream, PolyphaseResampler | None, int]:
-    """Open the mic at its native rate and build the resampler down to CAPTURE_RATE.
-
-    Opening at CAPTURE_RATE instead would hand the conversion to the OS, whose
-    filter we cannot inspect or test, and would make WASAPI unopenable outright
-    (shared mode rejects any rate but the mix format) -- ADR-0070.
-    """
-    device = resolve_stream_vc_input_device(config)
-    device_rate, how = resolve_device_rate(
-        device,
-        config.input_device_rate,
-        input=True,
-        config_key="stream_vc.input_device_rate",
-    )
-    resampler = make_resampler(device_rate, CAPTURE_RATE)
-    logger.info(
-        "stream_vc input device %s: %s @%dHz (%s)%s",
-        device.index,
-        device.name,
-        device_rate,
-        how,
-        ""
-        if resampler is None
-        else f" -> {CAPTURE_RATE}Hz 変換 (遅延 {resampler.delay_samples} sample)",
-    )
-    stream = sd.RawInputStream(
-        samplerate=device_rate,
-        blocksize=device_hop_size(hop, device_rate),
-        device=device.index,
-        channels=1,
-        dtype="int16",
-        latency="low",
-    )
-    stream.start()
-    return stream, resampler, device_hop_size(hop, device_rate)
-```
-
-`run_with_device_retry` は `[T: _Closable]` に束縛されていて `close_quietly(stream)` を呼ぶので、`open_stream` はストリームだけを返さなければならない（タプルは返せない）。`retry.py` の契約は変えず、per-connection の値は保持オブジェクトで渡す。`ms_to_samples` の import 群のあとに追加:
-
-```python
-@dataclass
-class _CaptureState:
-    """Per-connection values that open_stream produces and the read loop consumes.
-
-    run_with_device_retry owns the stream (it closes it), so its open_stream must
-    return the stream itself. The resampler and the device-clock hop travel through
-    this holder instead of widening that contract.
-    """
-
-    resampler: PolyphaseResampler | None = None
-    device_hop: int = 0
-```
-
-`from dataclasses import dataclass` を import に足す。
-
-`_capture_read_loop`（73-125 行）を丸ごと差し替え（docstring は既存のものを保持しつつ、リサンプルと再ブロック化の説明を足す）:
-
-```python
-async def _capture_read_loop(
-    stream: sd.RawInputStream,
-    state: _CaptureState,
-    accumulator: HopAccumulator,
-    out_queue: Queue[CaptureItem],
-    running: Event,
-) -> None:
-    """Steady state: keep reading a device-clock hop at a time until a device fault.
-
-    The device runs at its own rate, so each read is `state.device_hop` frames and the
-    resampler maps them onto CAPTURE_RATE; `accumulator` cuts the result back into the
-    exact `hop`-sized blocks the conversion core needs (ADR-0053/0070). At the common
-    ratios one read yields exactly one block, but the accumulator keeps a ratio that
-    does not divide evenly from desynchronising the pipeline.
-
-    Device loss surfaces as stream.read() raising (OSError, sd.PortAudioError). It is not
-    caught here; it escapes to run_with_device_retry, which recovers within the subsystem
-    via close -> backoff -> reopen (without dragging in the sibling vc/playback tasks or
-    the utterance path, ADR-0050). `while stream.active` would return silently on
-    deactivate and could stall siblings waiting in get()/recv() without a word, so this
-    is `while True`.
-
-    `running` is the pause/resume gate shared with the utterance path
-    (`context.running`). Capture is **not** stopped by it -- ADR-0050 decided that
-    capture keeps running while paused and drop_oldest_put discards the backlog; it is
-    consulted here only to avoid misreporting those drops as an anomaly.
-    """
-    # A drop while running = real backpressure. Throttle by time (ADR-0062).
-    drop_throttle = LogThrottle()
-    # An input overflow means the reader was late, which persists once it starts, so this
-    # fires on every block (about 6 a second at block_ms=160) until it clears. Thin it by
-    # time and meter it every occurrence -- exactly what its counterpart on the sink side
-    # (playback.py's paOutputUnderflowed) already does.
-    overflow_throttle = LogThrottle()
-    while True:
-        data, overflowed = await to_thread(stream.read, state.device_hop)
-        if overflowed:
-            telemetry.record("stream_vc_capture_overflow", 1.0)
-            if (n := overflow_throttle.hit()) is not None:
-                logger.warning("stream_vc capture input overflow (total %d)", n)
-        samples = pcm16_to_float32(bytes(data))
-        if state.resampler is not None:
-            samples = state.resampler.process(samples)
-        for block in accumulator.push(samples):
-            if not drop_oldest_put(out_queue, block):
-                if not running.is_set():
-                    # While paused vc_loop stops consuming, so the queue stays full and
-                    # every subsequent block is dropped. That is exactly the behaviour
-                    # ADR-0050 intended (do not accumulate paused audio) and not an
-                    # anomaly, so no warning. Warning every time would emit about 6 lines
-                    # a second at block_ms=160 for the whole pause and make the warning
-                    # meaningless. They are still not discarded silently: they are counted
-                    # under a pause-specific stage -- mixing them into the same stage would
-                    # pollute the backpressure metric (stream_vc_capture_drop, used to
-                    # assess RTF) with the length of the pause.
-                    telemetry.record("stream_vc_capture_drop_paused", 1.0)
-                    continue
-                telemetry.record("stream_vc_capture_drop", 1.0)
-                if (n := drop_throttle.hit()) is not None:
-                    logger.warning(
-                        "stream_vc capture queue full; dropped oldest block (total %d)",
-                        n,
-                    )
-```
-
-`capture_loop`（128-167 行）の末尾、`_signal_reopen` の定義から `run_with_device_retry` の呼び出しまでを差し替え（先頭の docstring はそのまま残す）:
-
-```python
-    state = _CaptureState()
-    accumulator = HopAccumulator(hop)
-
-    def _open() -> sd.RawInputStream:
-        stream, resampler, device_hop = open_stream_vc_input_stream(config, hop)
-        state.resampler = resampler
-        state.device_hop = device_hop
-        # A reopened device restarts from silence, so the filter tail and the partial
-        # block of the pre-fault stream must not be spliced onto it. open_stream_vc_
-        # input_stream hands back a fresh resampler, so only the accumulator needs
-        # clearing here.
-        accumulator.reset()
-        return stream
-
-    def _signal_reopen() -> None:
-        drop_oldest_put(out_queue, CaptureSignal.REOPEN)
-
-    # Wait for the VC warmup to finish before opening the mic. Opening earlier lets the
-    # audio that accumulated in real time during model loading flood the queue right
-    # after startup, causing a storm of drops and filling the first few hundred ms with
-    # stale audio (confirmed in the logs on real hardware).
-    await ready.wait()
-    await run_with_device_retry(
-        open_stream=_open,
-        run=lambda stream: _capture_read_loop(
-            stream, state, accumulator, out_queue, running
-        ),
-        worker="stream_vc",
-        label="stream vc capture",
-        on_reopen=_signal_reopen,
-        reopen_metric="stream_vc_capture_reopen",
-    )
-```
-
-- [ ] **Step 4: テストが通ることを確認**
-
-Run: `PYTHONIOENCODING=utf-8 uv run pytest tests/test_stream_vc_capture_resample.py tests/test_stream_vc_capture.py -q`
-Expected: PASS
-
-- [ ] **Step 5: stream_vc 全体の既存テストが緑か確認**
-
-Run: `PYTHONIOENCODING=utf-8 uv run pytest tests/test_stream_vc.py tests/test_stream_vc_capture.py tests/test_stream_vc_config.py tests/test_stream_vc_consumer.py tests/test_stream_vc_entrypoint.py tests/test_stream_vc_envelope.py tests/test_stream_vc_gate.py -q`
-Expected: PASS
-
-- [ ] **Step 6: lint / 型検査 / コミット**
-
-```bash
+PYTHONIOENCODING=utf-8 uv run pytest tests/test_stream_vc.py tests/test_stream_vc_capture.py tests/test_stream_vc_config.py tests/test_stream_vc_consumer.py tests/test_stream_vc_entrypoint.py tests/test_stream_vc_envelope.py tests/test_stream_vc_gate.py -q
 uv run ruff format . && uv run ruff check . && uv run ty check
-git add vspeech/stream_vc/capture.py tests/test_stream_vc_capture_resample.py
-git commit -m "feat(stream_vc): 入口をネイティブレートで開き 16k へ自前リサンプルする (ADR-0070)"
 ```
+
+既存テストが緑のままであること、いずれも終了コード 0 であること。上の受入基準を検証する新規テストを足すこと。
+
+**コミット単位:** capture の変更と新規テストで 1 コミット。
 
 ---
 
 ### Task 6: stream_vc の出口 (`playback.py` / `consumer.py`)
 
-**Files:**
-- Modify: `vspeech/stream_vc/playback.py:42-55`（`open_stream_vc_output_stream`）、`58-173`（`playback_loop`）
-- Modify: `vspeech/stream_vc/consumer.py:87-100`（セッション変更時の扱い）、`115-136`（書き込み）
-- Test: `tests/test_stream_vc_output_resample.py`
+**目的:** ストリーミング再生の出力デバイスを固定のデバイスレートで開き、パケットのレートからの変換をプロセス内で行う。
 
-**Interfaces:**
-- Consumes: `make_resampler`, `resolve_device_rate`, `StreamVcConfig.output_device_rate`, `decode_pcm` / `encode_pcm`
-- Produces:
-  - `open_stream_vc_output_stream(config: StreamVcConfig) -> tuple[sd.RawOutputStream, int]` — `(stream, device_rate)`。**`sample_rate` 引数が無くなる**（呼び出し側 2 箇所を直す）
-  - `class OutputResampler(device_rate: int)` — `convert(pcm: bytes, src_rate: int) -> bytes`（int16 モノラル前提）, `reset()`
+**範囲:** `vspeech/stream_vc/playback.py`, `vspeech/stream_vc/consumer.py`。テストは `tests/`。
 
-出力ストリームのレートがパケット由来でなくなるので、**セッション変更でストリームを閉じる必要がなくなる**（`consumer.py:91-94`）。閉じるのはデバイス障害時だけになる。
+**契約**
 
-- [ ] **Step 1: 失敗するテストを書く**
+- Consumes:
+  - `vspeech.lib.resample.make_resampler`, `PolyphaseResampler.process`, `.reset`
+  - `vspeech.lib.pcm.decode_pcm(data, format, channels)`, `vspeech.lib.pcm.encode_pcm(x, format)`（`encode_pcm` は飽和クリップ済み）
+  - `vspeech.lib.audio.resolve_device_rate`, `StreamVcConfig.output_device_rate`
+- Produces: 後続 task はこの 2 ファイルに依存しない。ただし出力ストリームを開く関数は `playback.py` と `consumer.py` の両方から使われるので、両者で整合していること。
 
-`tests/test_stream_vc_output_resample.py` を新規作成:
+**この task 固有の制約**
 
-```python
-"""Output-side resampling for the streaming path (ADR-0070)."""
+- `consumer.py` から到達するコードは **torch を import してはならない**（ADR-0055）。`tests/test_forbidden_imports.py` を壊さないこと。
+- パケットの PCM は int16 モノラル。jitter buffer の concealment が返す PCM のブロック長は `packet.sample_rate` ではなく `JitterBuffer` 内部の値に由来する。両者が整合しているかを実装時に確認し、**整合していなければ実装で辻褄を合わせず、その事実を報告すること。**
 
-import numpy as np
+**受入基準**
 
-from vspeech.stream_vc.playback import OutputResampler
+- [ ] 出力デバイスは `resolve_device_rate` が返したレートで開かれ、`packet.sample_rate` では開かれない。
+- [ ] `packet.sample_rate` がデバイスのレートと等しいとき、PCM は変換されずそのまま書き込まれる。
+- [ ] 異なるとき、書き込まれる PCM はデバイスのレートに変換されている。
+- [ ] 連続するパケットをまたいでフィルタ状態が保たれ、パケット境界に不連続が生じない。
+- [ ] 送信側のセッションが変わっても出力ストリームは開き直されない。リサンプラの状態だけが破棄される。
+- [ ] 送信側のモデルレートが変わったとき、リサンプラが作り直される。
+- [ ] 変換で振幅が int16 の範囲を超えた場合、ラップアラウンドせず飽和する。
+- [ ] デバイス障害からの遅延再オープンと、underflow / seq gap / stale drop のテレメトリとログ間引きの挙動が変更前と同じである。
+- [ ] `role=consumer` の経路が torch を import せずに動く。
 
+**検証**
 
-def _tone_pcm(freq: float, rate: int, seconds: float = 0.16) -> bytes:
-    t = np.arange(int(rate * seconds)) / rate
-    return np.rint(np.sin(2 * np.pi * freq * t) * 20000.0).astype(np.int16).tobytes()
-
-
-def test_converts_the_model_rate_to_the_device_rate() -> None:
-    out = OutputResampler(48000)
-    pcm = _tone_pcm(440.0, 40000)
-    converted = out.convert(pcm, 40000)
-    in_frames = len(pcm) // 2
-    assert len(converted) // 2 == round(in_frames * 48000 / 40000)
-
-
-def test_matching_rates_pass_the_bytes_through_untouched() -> None:
-    out = OutputResampler(48000)
-    pcm = _tone_pcm(440.0, 48000)
-    assert out.convert(pcm, 48000) is pcm
-
-
-def test_state_is_continuous_across_packets() -> None:
-    """Two consecutive packets must convert the same as one long buffer, or every
-    packet boundary becomes a click."""
-    whole = _tone_pcm(440.0, 40000, seconds=0.32)
-    half = len(whole) // 2
-    half -= half % 2
-    one = OutputResampler(48000)
-    joined = one.convert(whole[:half], 40000) + one.convert(whole[half:], 40000)
-    other = OutputResampler(48000)
-    single = other.convert(whole, 40000)
-    a = np.frombuffer(joined, dtype=np.int16).astype(np.float32)
-    b = np.frombuffer(single, dtype=np.int16).astype(np.float32)
-    assert len(a) == len(b)
-    assert np.max(np.abs(a - b)) <= 1.0
-
-
-def test_source_rate_change_rebuilds_the_resampler() -> None:
-    out = OutputResampler(48000)
-    out.convert(_tone_pcm(440.0, 40000), 40000)
-    converted = out.convert(_tone_pcm(440.0, 24000), 24000)
-    assert len(converted) // 2 == round(int(24000 * 0.16) * 48000 / 24000)
-
-
-def test_overshoot_saturates_instead_of_wrapping() -> None:
-    """Resampling a near-full-scale signal overshoots; a wrapping cast would flip the
-    sign and click."""
-    out = OutputResampler(48000)
-    # A near-full-scale tone whose resampled peaks exceed the input peaks.
-    t = np.arange(4000) / 40000
-    loud = np.rint(np.sin(2 * np.pi * 3000 * t) * 32700).astype(np.int16)
-    converted = np.frombuffer(out.convert(loud.tobytes(), 40000), dtype=np.int16)
-    # A wrapping cast turns an overshoot of +1.02 into roughly -32700: the sign flips
-    # while the magnitude stays large. Saturation cannot produce that, because the
-    # resampled envelope never actually swings that fast between adjacent samples.
-    flipped = (np.abs(np.diff(converted.astype(np.int32))) > 60000).sum()
-    assert flipped == 0, f"{flipped} wrap-around discontinuities"
 ```
-
-- [ ] **Step 2: テストが失敗することを確認**
-
-Run: `PYTHONIOENCODING=utf-8 uv run pytest tests/test_stream_vc_output_resample.py -q`
-Expected: FAIL — `ImportError: cannot import name 'OutputResampler'`
-
-- [ ] **Step 3: `playback.py` を実装**
-
-import に追加:
-
-```python
-from vspeech.config import SampleFormat
-from vspeech.lib.audio import resolve_device_rate
-from vspeech.lib.pcm import decode_pcm
-from vspeech.lib.pcm import encode_pcm
-from vspeech.lib.resample import PolyphaseResampler
-from vspeech.lib.resample import make_resampler
-```
-
-`detect_gap` の直後に追加:
-
-```python
-class OutputResampler:
-    """Converts a packet's PCM from the producer's rate to the output device's rate.
-
-    The stream is continuous across packets, so the filter state is kept and only
-    rebuilt when the source rate actually changes (a new producer session with a
-    different model). Rebuilding per packet would put a filter edge at every packet
-    boundary.
-    """
-
-    def __init__(self, device_rate: int) -> None:
-        self._device_rate = device_rate
-        self._src_rate: int | None = None
-        self._resampler: PolyphaseResampler | None = None
-
-    def reset(self) -> None:
-        if self._resampler is not None:
-            self._resampler.reset()
-
-    def convert(self, pcm: bytes, src_rate: int) -> bytes:
-        if src_rate != self._src_rate:
-            self._src_rate = src_rate
-            self._resampler = make_resampler(src_rate, self._device_rate)
-            if self._resampler is not None:
-                logger.info(
-                    "stream_vc output resample %dHz -> %dHz (遅延 %d sample)",
-                    src_rate,
-                    self._device_rate,
-                    self._resampler.delay_samples,
-                )
-        if self._resampler is None:
-            return pcm
-        samples = decode_pcm(pcm, SampleFormat.INT16, channels=1)
-        return encode_pcm(self._resampler.process(samples), SampleFormat.INT16)
-```
-
-`open_stream_vc_output_stream`（42-55 行）を差し替え:
-
-```python
-def open_stream_vc_output_stream(
-    config: StreamVcConfig,
-) -> tuple[sd.RawOutputStream, int]:
-    """Open the sink at its native rate (ADR-0070).
-
-    The rate no longer comes from the packet, so the stream survives a producer
-    session that switches to a model with a different sample rate -- only the
-    resampler is rebuilt.
-    """
-    device = resolve_stream_vc_output_device(config)
-    device_rate, how = resolve_device_rate(
-        device,
-        config.output_device_rate,
-        input=False,
-        config_key="stream_vc.output_device_rate",
-    )
-    logger.info(
-        "stream_vc output device %s: %s @%dHz (%s)",
-        device.index,
-        device.name,
-        device_rate,
-        how,
-    )
-    stream = sd.RawOutputStream(
-        samplerate=device_rate,
-        channels=1,
-        device=device.index,
-        dtype="int16",
-        latency="low",
-    )
-    stream.start()
-    return stream, device_rate
-```
-
-`playback_loop` 内の変更:
-- `stream = open_stream_vc_output_stream(config, packet.sample_rate)` の 2 箇所（117・123 行）を `stream, device_rate = open_stream_vc_output_stream(config)` にし、直後に `converter = OutputResampler(device_rate)` を作る（`converter` はループ外で `None` 初期化し、ここで代入）。
-- `await to_thread(stream.write, packet.pcm)`（141 行）を次に:
-
-```python
-                pcm = converter.convert(packet.pcm, packet.sample_rate)
-                underflowed = await to_thread(stream.write, pcm)
-```
-
-- デバイス障害の `except` 節（148-163 行）で `stream = None` にするとき、`converter = None` も一緒にクリアする（次のオープンで作り直す）。
-
-- [ ] **Step 4: `consumer.py` を実装**
-
-import に `from vspeech.stream_vc.playback import OutputResampler` を追加。
-
-- `open_stream_vc_output_stream(config, packet.sample_rate)` の 2 箇所（118-120・124-126 行）を `stream, device_rate = open_stream_vc_output_stream(config)` にし、`converter = OutputResampler(device_rate)` を作る。
-- セッション変更の分岐（87-96 行）から**ストリームを閉じる処理を外す**。コメントを次に差し替え:
-
-```python
-            if packet.session_id != session:
-                if session is not None:
-                    logger.info("stream_vc consumer: producer session changed; reset")
-                    # The output stream now runs at the device's own rate, so a new
-                    # session with a different model rate no longer needs a reopen
-                    # (ADR-0070). Only the resampler is rebuilt, which convert() does
-                    # on its own when the source rate changes; reset it so the filter
-                    # state from the old session is not spliced onto the new one.
-                    if converter is not None:
-                        converter.reset()
-                session = packet.session_id
-                buffer.reset()
-```
-
-- `await to_thread(stream.write, result.pcm)`（130 行）を:
-
-```python
-                pcm = converter.convert(result.pcm, packet.sample_rate)
-                underflowed = await to_thread(stream.write, pcm)
-```
-
-- 障害時の `except` 節で `converter = None` もクリアする。
-
-**注意**: `result.pcm` は jitter buffer の concealment を通っていることがあり、その場合も int16 モノラルなので扱いは同じ。ただし concealment のブロック長は `_block_bytes` 由来なので、`packet.sample_rate` と整合していることを確認すること。
-
-- [ ] **Step 5: テストが通ることを確認**
-
-Run: `PYTHONIOENCODING=utf-8 uv run pytest tests/test_stream_vc_output_resample.py tests/test_stream_vc_consumer.py tests/test_stream_vc.py -q`
-Expected: PASS
-
-- [ ] **Step 6: consumer が torch を引かないことを確認**
-
-Run: `PYTHONIOENCODING=utf-8 uv run pytest tests/test_forbidden_imports.py -q`
-Expected: PASS
-
-- [ ] **Step 7: lint / 型検査 / コミット**
-
-```bash
+PYTHONIOENCODING=utf-8 uv run pytest tests/test_stream_vc.py tests/test_stream_vc_consumer.py tests/test_stream_vc_capture.py tests/test_forbidden_imports.py -q
 uv run ruff format . && uv run ruff check . && uv run ty check
-git add vspeech/stream_vc/playback.py vspeech/stream_vc/consumer.py tests/test_stream_vc_output_resample.py
-git commit -m "feat(stream_vc): 出口を固定のデバイスレートで開き自前リサンプルする (ADR-0070)"
 ```
+
+既存テストが緑のままであること、いずれも終了コード 0 であること。上の受入基準を検証する新規テストを足すこと。
+
+**コミット単位:** playback.py と consumer.py の変更と新規テストで 1 コミット。
 
 ---
 
 ### Task 7: 発話系の録音 (`vspeech/worker/recording.py`)
 
-**Files:**
-- Modify: `vspeech/worker/recording.py:33-44`（`open_input_stream`）、`76-161`（`sd_recording_worker`）
-- Test: `tests/test_recording_resample.py`
+**目的:** 録音デバイスをネイティブレートで開き、`recording.rate` への変換をプロセス内で行う。
 
-**Interfaces:**
-- Consumes: `make_resampler`, `resolve_device_rate`, `decode_pcm` / `encode_pcm`, `RecordingConfig.input_device_rate`
-- Produces: `open_input_stream(config: RecordingConfig) -> tuple[sd.RawInputStream, PolyphaseResampler | None, int]`
+**範囲:** `vspeech/worker/recording.py`。テストは `tests/`。
 
-**下流の契約は不変**: `SoundOutput.rate` は今までどおり `config.rate`。transcription も vc も無改造。
+**契約**
 
-**必ず直す罠**: `interval_frame_count += config.chunk`（102 行）。リサンプル後は 1 read が `config.chunk` フレームとは限らないので、**実際に得られたフレーム数**で数える。ここを直さないと `interval_sec` / `silence_threshold` / `max_recording_sec` の時間換算が全部ずれる。
+- Consumes: `make_resampler`, `PolyphaseResampler.process`, `decode_pcm`/`encode_pcm`, `resolve_device_rate`, `RecordingConfig.input_device_rate`
+- Produces: **下流の契約は不変。** この worker が出す `SoundOutput` の `rate` は今までどおり `config.rate`、`format` は `config.format`、`channels` は `config.channels`。`worker/transcription.py` と `worker/vc.py` は無改造で動くこと。
 
-- [ ] **Step 1: 失敗するテストを書く**
+**この task 固有の制約**
 
-`tests/test_recording_resample.py` を新規作成:
+- 既存コードは 1 回の読み取りで得たフレーム数を、実測ではなく設定値の定数で数えている。デバイスレートで読むようになるとその定数は実際のフレーム数と一致しなくなる。これは推測ではなく現在のコードの事実であり、見落とすと下の時間換算の受入基準が壊れる。
 
-```python
-"""Recording-side resampling keeps the downstream contract and the time base
-(ADR-0070)."""
+**受入基準**
 
-import numpy as np
+- [ ] 録音デバイスは `resolve_device_rate` が返したレートで開かれる。
+- [ ] 下流が受け取る `SoundOutput` の `rate` / `format` / `channels` が変更前と同じである。
+- [ ] デバイスのレートと `recording.rate` が等しいときは変換されず、変更前と出力がビット一致する。
+- [ ] **無音判定・`interval_sec`・`max_recording_sec` の時間換算が実時間の秒数と一致する。** 48000Hz のデバイスを `rate = 16000` で使う設定で、1 秒ぶんの音声が 1 秒として扱われること。
+- [ ] `channels > 1` の設定でチャンネル数が保たれる（モノラルに畳まれない）。
+- [ ] 開いたレートと決定根拠がログに残る。
+- [ ] 入力オーバーフローのログと、デバイス障害時の再試行の挙動が変更前と同じである。
 
-from vspeech.config import RecordingConfig
-from vspeech.config import SampleFormat
-from vspeech.lib.pcm import decode_pcm
-from vspeech.lib.pcm import encode_pcm
-from vspeech.lib.resample import make_resampler
-from vspeech.worker.recording import device_chunk_size
-from vspeech.worker.recording import utterance_capture_sec
+**検証**
 
-
-def test_device_chunk_maps_the_configured_chunk_onto_the_device_clock() -> None:
-    assert device_chunk_size(1024, 48000, 16000) == 3072
-    assert device_chunk_size(1024, 16000, 16000) == 1024
-
-
-def test_resampled_frames_carry_the_configured_rate_downstream() -> None:
-    """A one-second capture at 48 kHz must become one second at config.rate."""
-    config = RecordingConfig(rate=16000, channels=1, format=SampleFormat.INT16)
-    resampler = make_resampler(48000, config.rate)
-    assert resampler is not None
-    chunk = device_chunk_size(1024, 48000, config.rate)
-    frames = b""
-    for _ in range(48000 // chunk):
-        block = np.zeros(chunk, dtype=np.float32)
-        frames += encode_pcm(resampler.process(block), config.format)
-    seconds = utterance_capture_sec(frames, config)
-    assert abs(seconds - (48000 // chunk) * chunk / 48000) < 0.01
-
-
-def test_interval_counting_uses_resampled_frames_not_the_device_chunk() -> None:
-    """Counting the device chunk would make the silence/length clock run 3x fast at
-    48 kHz. Guard the arithmetic the worker relies on."""
-    config = RecordingConfig(rate=16000)
-    resampler = make_resampler(48000, config.rate)
-    assert resampler is not None
-    device_chunk = device_chunk_size(1024, 48000, config.rate)
-    produced = sum(
-        len(resampler.process(np.zeros(device_chunk, dtype=np.float32)))
-        for _ in range(50)
-    )
-    # 50 device reads of 3072 frames = 153600 device frames = 3.2 s -> 51200 at 16 kHz.
-    assert abs(produced - 51200) <= 2
-    assert produced != 50 * device_chunk
-
-
-def test_multichannel_capture_keeps_its_channels() -> None:
-    config = RecordingConfig(rate=16000, channels=2, format=SampleFormat.INT16)
-    resampler = make_resampler(48000, config.rate)
-    assert resampler is not None
-    interleaved = np.zeros(3072 * config.channels, dtype=np.float32)
-    decoded = decode_pcm(
-        encode_pcm(interleaved, config.format), config.format, config.channels
-    )
-    assert decoded.shape == (3072, 2)
-    out = resampler.process(decoded)
-    assert out.shape == (1024, 2)
 ```
-
-- [ ] **Step 2: テストが失敗することを確認**
-
-Run: `PYTHONIOENCODING=utf-8 uv run pytest tests/test_recording_resample.py -q`
-Expected: FAIL — `ImportError: cannot import name 'device_chunk_size'`
-
-- [ ] **Step 3: `recording.py` を実装**
-
-import に追加:
-
-```python
-from vspeech.lib.audio import resolve_device_rate
-from vspeech.lib.pcm import decode_pcm
-from vspeech.lib.pcm import encode_pcm
-from vspeech.lib.resample import PolyphaseResampler
-from vspeech.lib.resample import make_resampler
-```
-
-`open_input_stream`（33-44 行）を差し替え:
-
-```python
-def device_chunk_size(chunk: int, device_rate: int, config_rate: int) -> int:
-    """The configured chunk expressed in device-clock frames."""
-    return round(chunk * device_rate / config_rate)
-
-
-def open_input_stream(
-    config: RecordingConfig,
-) -> tuple[sd.RawInputStream, PolyphaseResampler | None, int]:
-    """Open the mic at its native rate; resample down to config.rate in-process.
-
-    Opening at config.rate would hand the conversion to the OS (ADR-0070). The
-    downstream contract is unchanged: what leaves this worker is still config.rate.
-    """
-    device = resolve_input_device(config)
-    device_rate, how = resolve_device_rate(
-        device,
-        config.input_device_rate,
-        input=True,
-        config_key="recording.input_device_rate",
-    )
-    resampler = make_resampler(device_rate, config.rate)
-    chunk = device_chunk_size(config.chunk, device_rate, config.rate)
-    logger.info(
-        "use input device %s: %s @%dHz (%s)%s",
-        device.index,
-        device.name,
-        device_rate,
-        how,
-        "" if resampler is None else f" -> {config.rate}Hz 変換",
-    )
-    stream = sd.RawInputStream(
-        samplerate=device_rate,
-        blocksize=chunk,
-        device=device.index,
-        channels=config.channels,
-        dtype=get_sd_dtype(config.format),
-    )
-    stream.start()
-    return stream, resampler, chunk
-```
-
-`sd_recording_worker`（76-161 行）の変更:
-
-- 89-90 行を差し替え:
-
-```python
-        with worker_startup("recording"):
-            stream, resampler, device_chunk = open_input_stream(config)
-```
-
-- 96-103 行（read から `interval_frames += in_data` まで）を差し替え:
-
-```python
-                chunk_data, overflowed = await to_thread(stream.read, device_chunk)
-                if overflowed:
-                    # sounddevice reports an overflow with a flag rather than an
-                    # exception, so at least leave a log line.
-                    logger.warning("recording input overflow: samples were dropped")
-                in_data = bytes(chunk_data)
-                if resampler is not None:
-                    decoded = decode_pcm(in_data, config.format, config.channels)
-                    in_data = encode_pcm(resampler.process(decoded), config.format)
-                # Count the frames we actually produced, not the device read size.
-                # After resampling they differ (3072 device frames -> 1024 at 16 kHz),
-                # and counting the device size would run the silence / interval_sec /
-                # max_recording_sec clock at the device's rate instead of config.rate.
-                frame_count = len(in_data) // (
-                    get_sample_size(config.format) * config.channels
-                )
-                interval_frame_count += frame_count
-                interval_frames += in_data
-```
-
-- `finally: stream.close()`（160-161 行）はそのまま。ジェネレータが作り直されるたびに `open_input_stream` が新しい resampler を返すので、明示的な `reset()` は不要。
-
-- [ ] **Step 4: テストが通ることを確認**
-
-Run: `PYTHONIOENCODING=utf-8 uv run pytest tests/test_recording_resample.py tests/test_recording_metrics.py tests/test_recording_trace.py -q`
-Expected: PASS
-
-- [ ] **Step 5: lint / 型検査 / コミット**
-
-```bash
+PYTHONIOENCODING=utf-8 uv run pytest tests/test_recording_metrics.py tests/test_recording_trace.py -q
 uv run ruff format . && uv run ruff check . && uv run ty check
-git add vspeech/worker/recording.py tests/test_recording_resample.py
-git commit -m "feat(recording): 録音デバイスをネイティブレートで開き config.rate へ自前リサンプルする (ADR-0070)"
 ```
+
+既存テストが緑のままであること、いずれも終了コード 0 であること。上の受入基準を検証する新規テストを足すこと。
+
+**コミット単位:** recording.py の変更と新規テストで 1 コミット。
 
 ---
 
 ### Task 8: 発話系の再生 (`vspeech/worker/playback.py`)
 
-**Files:**
-- Modify: `vspeech/worker/playback.py:64-135`（`OutputStream`）
-- Test: `tests/test_playback_resample.py`
+**目的:** 再生デバイスを固定のデバイスレートで開き、音声ソースのレートからの変換をプロセス内で行う。
 
-**Interfaces:**
-- Consumes: `make_resampler`, `resolve_device_rate`, `decode_pcm` / `encode_pcm`, `PlaybackConfig.output_device_rate`
-- Produces: `OutputStream.device_rate: int`, `OutputStream.prepare(data, rate, format, channels) -> bytes`
+**範囲:** `vspeech/worker/playback.py`。テストは `tests/`。
 
-**中心の変更**: デバイスは `device_rate` 固定で開く。`update_stream_if_changed` の再オープン条件から **rate が外れる**（format / channels / デバイス同一性の変化だけ）。ソースのレート変化はリサンプラの作り直しで吸収する。
+**契約**
 
-**ワンショットである点に注意**: 発話は 1 件ずつ独立した buffer なので `process()` ではなく **`resample_full()`** を使う。`process()` だと末尾 `delay_samples` ぶん（3ms 前後）が毎回フィルタ内に残って出てこない。
+- Consumes: `make_resampler`, `PolyphaseResampler.resample_full`（ワンショット。末尾までフラッシュし群遅延を除去して、呼び出し後は状態を残さない）, `decode_pcm`/`encode_pcm`, `resolve_device_rate`, `PlaybackConfig.output_device_rate`
+- Produces: 後続 task はこのファイルに依存しない。
 
-- [ ] **Step 1: 失敗するテストを書く**
+**この task 固有の制約**
 
-`tests/test_playback_resample.py` を新規作成:
+- 発話は 1 件ずつ独立した buffer であって連続ストリームではない。`PolyphaseResampler` はストリーミング用とワンショット用で入口が分かれており、ストリーミング用を使うと毎回末尾が欠ける。
+- この worker は TTS(VOICEROID2 / VOICEVOX)・VC・録音の各ソースから、異なるレート・フォーマット・チャンネル数の音声を受け取る。
 
-```python
-"""Utterance playback: fixed device rate + one-shot resampling (ADR-0070)."""
+**受入基準**
 
-import numpy as np
-import pytest
+- [ ] 再生デバイスは `resolve_device_rate` が返したレートで開かれ、音声ソースの `rate` では開かれない。
+- [ ] **音声ソースのサンプルレートが変わってもデバイスは開き直されない。**（24000Hz の TTS と 40000Hz の VC を交互に再生してもリオープンが起きないこと。）
+- [ ] 1 発話ぶんの音声を変換したとき、出力の長さが公称の長さと一致し、末尾が欠けない。
+- [ ] 発話をまたいでリサンプラの状態が持ち越されない。同じ入力を続けて 2 回渡すと同じ出力が返ること。
+- [ ] ソースのレートとデバイスのレートが等しいときは変換されない。
+- [ ] 変換で振幅が範囲を超えた場合、ラップアラウンドせず飽和する。
+- [ ] 音量調整、e2e テレメトリ、デバイス障害時の挙動が変更前と同じである。
 
-from vspeech.config import SampleFormat
+**検証**
 
-
-def _tone(freq: float, rate: int, seconds: float) -> bytes:
-    t = np.arange(int(rate * seconds)) / rate
-    return np.rint(np.sin(2 * np.pi * freq * t) * 20000.0).astype(np.int16).tobytes()
-
-
-@pytest.fixture
-def output_stream(monkeypatch: pytest.MonkeyPatch):
-    """An OutputStream whose device resolution and PortAudio calls are stubbed."""
-    import vspeech.worker.playback as pb
-    from vspeech.config import PlaybackConfig
-    from vspeech.lib.audio import DeviceInfo
-
-    device = DeviceInfo(
-        host_api=2,
-        max_input_channels=0,
-        max_output_channels=2,
-        name="Stub Speakers",
-        index=7,
-    )
-    monkeypatch.setattr(pb, "get_output_device", lambda config: device)
-    monkeypatch.setattr(
-        pb, "resolve_device_rate", lambda *a, **k: (48000, "テスト用スタブ")
-    )
-    return pb.OutputStream(PlaybackConfig())
-
-
-def test_device_rate_is_resolved_once(output_stream) -> None:
-    assert output_stream.device_rate == 48000
-
-
-def test_prepare_converts_the_source_rate_to_the_device_rate(output_stream) -> None:
-    pcm = _tone(440.0, 24000, 0.5)
-    out = output_stream.prepare(pcm, 24000, SampleFormat.INT16, 1)
-    assert len(out) // 2 == round((len(pcm) // 2) * 48000 / 24000)
-
-
-def test_prepare_passes_matching_rates_through_untouched(output_stream) -> None:
-    pcm = _tone(440.0, 48000, 0.5)
-    assert output_stream.prepare(pcm, 48000, SampleFormat.INT16, 1) is pcm
-
-
-def test_one_shot_keeps_the_tail_of_the_utterance(output_stream) -> None:
-    """The whole utterance comes out, tail included.
-
-    Keeping streaming state across utterances would drop the trailing
-    `delay_samples` of each one. Note the very last samples legitimately taper: any
-    FIR reconstructs the signal edge from a window that is half past the end. So
-    assert the last 20 ms still carries the tone, not that every sample is full
-    scale. The precise numeric fidelity of one-shot mode is Task 1's job
-    (test_resample_full_keeps_length_and_alignment, -60 dB against a reference).
-    """
-    rate = 24000
-    n = int(rate * 0.3)
-    pcm = _tone(1000.0, rate, 0.3)
-    out = np.frombuffer(
-        output_stream.prepare(pcm, rate, SampleFormat.INT16, 1), dtype=np.int16
-    )
-    assert len(out) == round(n * 48000 / rate)
-    assert np.max(np.abs(out[-960:])) > 18000
-
-
-def test_consecutive_utterances_are_independent(output_stream) -> None:
-    """No state may leak between utterances -- they are separated by silence."""
-    pcm = _tone(440.0, 24000, 0.2)
-    first = output_stream.prepare(pcm, 24000, SampleFormat.INT16, 1)
-    second = output_stream.prepare(pcm, 24000, SampleFormat.INT16, 1)
-    assert first == second
-
-
-def test_source_rate_change_does_not_reopen_the_device(output_stream, monkeypatch) -> None:
-    """TTS at 24 kHz followed by VC at 40 kHz used to close and reopen the device."""
-    opened: list[int] = []
-
-    class _FakeStream:
-        def __init__(self, **kwargs) -> None:
-            opened.append(kwargs["samplerate"])
-
-        def start(self) -> None: ...
-        def close(self) -> None: ...
-        def write(self, data) -> None: ...
-
-    import vspeech.worker.playback as pb
-
-    monkeypatch.setattr(pb.sd, "RawOutputStream", _FakeStream)
-    monkeypatch.setattr(
-        pb, "get_device_info", lambda index: output_stream.device
-    )
-    monkeypatch.setattr(
-        output_stream, "search_appropriate_device", lambda: output_stream.device
-    )
-    output_stream.update_stream_if_changed(24000, SampleFormat.INT16, 1)
-    output_stream.update_stream_if_changed(40000, SampleFormat.INT16, 1)
-    assert opened == [48000]
 ```
-
-- [ ] **Step 2: テストが失敗することを確認**
-
-Run: `PYTHONIOENCODING=utf-8 uv run pytest tests/test_playback_resample.py -q`
-Expected: FAIL — `AttributeError: module 'vspeech.worker.playback' has no attribute 'resolve_device_rate'`
-
-- [ ] **Step 3: `playback.py` を実装**
-
-import に追加:
-
-```python
-from vspeech.lib.audio import resolve_device_rate
-from vspeech.lib.pcm import decode_pcm
-from vspeech.lib.pcm import encode_pcm
-from vspeech.lib.resample import make_resampler
-```
-
-`OutputStream`（64-135 行）を差し替え。`rate` フィールドは「デバイスを開いているレート」の意味になる:
-
-```python
-@dataclass
-class OutputStream:
-    config: InitVar[PlaybackConfig]
-    rate: int = 0
-    format: SampleFormat = SampleFormat.INVALID
-    channels: int = 0
-    stream: sd.RawOutputStream | None = None
-    device: DeviceInfo = field(init=False)
-    device_rate: int = field(init=False, default=0)
-
-    def __post_init__(self, config: PlaybackConfig) -> None:
-        self.device = get_output_device(config=config)
-        self.device_rate, how = resolve_device_rate(
-            self.device,
-            config.output_device_rate,
-            input=False,
-            config_key="playback.output_device_rate",
-        )
-        logger.info(
-            "setting device %s: %s @%dHz (%s)",
-            self.device.index,
-            self.device.name,
-            self.device_rate,
-            how,
-        )
-
-    def prepare(
-        self, data: bytes, rate: int, format: SampleFormat, channels: int
-    ) -> bytes:
-        """Convert one utterance's PCM to the device rate.
-
-        One-shot, not streaming: utterances are independent buffers separated by
-        silence, so the resampler must flush its tail here. Keeping state across
-        utterances would clip the last few ms of every one of them.
-        """
-        if rate == self.device_rate:
-            return data
-        resampler = make_resampler(rate, self.device_rate)
-        if resampler is None:
-            return data
-        decoded = decode_pcm(data, format, channels)
-        return encode_pcm(resampler.resample_full(decoded), format)
-
-    def update_stream_if_changed(
-        self,
-        rate: int,
-        format: SampleFormat,
-        channels: int,
-    ):
-        """Open the sink if needed. `rate` is the SOURCE rate and deliberately does
-        NOT take part in the decision: the device always runs at device_rate, so a
-        source whose rate changed (TTS 24 kHz -> VC 40 kHz) no longer reopens it
-        (ADR-0070). Only the format, the channel count and the device identity do.
-        """
-        output_device = get_device_info(self.device.index)
-        if (
-            self.stream
-            and self.format == format
-            and self.channels == channels
-            and output_device.name == self.device.name
-        ):
-            logger.debug("stream is reused.")
-            return
-
-        if self.stream:
-            self.stream.close()
-        self.device = self.search_appropriate_device()
-        logger.info("use device %s: %s", self.device.index, self.device.name)
-        self.rate = self.device_rate
-        self.format = format
-        self.channels = channels
-        self.stream = sd.RawOutputStream(
-            samplerate=self.device_rate,
-            channels=channels,
-            device=self.device.index,
-            dtype=get_sd_dtype(format),
-        )
-        self.stream.start()
-```
-
-`search_appropriate_device` と `playback` メソッドはそのまま。
-
-`sd_playback_worker`（150-163 行）の呼び出しを差し替え:
-
-```python
-                output_stream.update_stream_if_changed(
-                    rate=speech.sound.rate,
-                    format=speech.sound.format,
-                    channels=speech.sound.channels,
-                )
-                given_volume = speech.current_event.params.volume
-                logger.debug("playback... %s", speech.text)
-                pcm = output_stream.prepare(
-                    speech.sound.data,
-                    speech.sound.rate,
-                    speech.sound.format,
-                    speech.sound.channels,
-                )
-                with telemetry.timer("playback", trace_id=speech.trace_id):
-                    await output_stream.playback(
-                        volume=given_volume
-                        if given_volume is not None
-                        else config.volume,
-                        data=pcm,
-                    )
-```
-
-- [ ] **Step 4: テストが通ることを確認**
-
-Run: `PYTHONIOENCODING=utf-8 uv run pytest tests/test_playback_resample.py tests/test_playback_e2e.py -q`
-Expected: PASS
-
-- [ ] **Step 5: lint / 型検査 / コミット**
-
-```bash
+PYTHONIOENCODING=utf-8 uv run pytest tests/test_playback_e2e.py -q
 uv run ruff format . && uv run ruff check . && uv run ty check
-git add vspeech/worker/playback.py tests/test_playback_resample.py
-git commit -m "feat(playback): 再生デバイスを固定レートで開きワンショットで自前リサンプルする (ADR-0070)"
 ```
+
+既存テストが緑のままであること、いずれも終了コード 0 であること。上の受入基準を検証する新規テストを足すこと。
+
+**コミット単位:** playback.py の変更と新規テストで 1 コミット。
 
 ---
 
 ### Task 9: preflight でレート解決とデバイス開通を検証
 
-**Files:**
-- Modify: `vspeech/preflight.py:113-137`（`_check_recording`）、`139-149`（`_check_playback`）、`312-414`（`_check_stream_vc`）
-- Test: `tests/test_preflight_device_rate.py`
+**目的:** 解決したデバイスレートと、そのレートでデバイスを実際に開けるかどうかを、起動時に fail-loud で検証する。
 
-**Interfaces:**
-- Consumes: `resolve_device_rate`, `DeviceRateUnresolvedError`
-- Produces: `_check_device_rate(device, override, *, input, worker, config_key) -> list[ConfigProblem]`（`preflight.py` 内の private ヘルパ）
+**範囲:** `vspeech/preflight.py`。テストは `tests/`。
 
-出力ストリームのレートが静的になったので、**再生系も起動時に `check_output_settings` で検証できるようになる**（これまでは実行時にしかレートが決まらず不可能だった）。
+**契約**
 
-- [ ] **Step 1: 失敗するテストを書く**
+- Consumes: `resolve_device_rate`, `DeviceRateUnresolvedError`, 4 つの設定フィールド（`recording.input_device_rate` / `playback.output_device_rate` / `stream_vc.input_device_rate` / `stream_vc.output_device_rate`）, 既存の `ConfigProblem` と `Checker`
+- Produces: 後続 task はこのファイルに依存しない。
 
-`tests/test_preflight_device_rate.py` を新規作成:
+**この task 固有の制約**
 
-```python
-"""Preflight validates the resolved device rate before anything opens a stream
-(ADR-0038 + ADR-0071)."""
+- `DeviceRateUnresolvedError` は `DeviceNotFoundError` の派生なので、既存のハンドラが先に捕まえてしまう位置関係に注意すること。
+- 出力側のレートが静的になったのは Task 6/8 の結果であり、それ以前は実行時にしか決まらなかった。出力デバイスをここで検証できるようになったのは今回が初めてである。
 
-import pytest
+**受入基準**
 
-from vspeech.config import Config
-from vspeech.exceptions import DeviceRateUnresolvedError
-from vspeech.lib.audio import DeviceInfo
-from vspeech.preflight import collect_problems
+- [ ] recording / playback / stream_vc の入力 / stream_vc の出力について、そのワーカーが有効なときにレート解決が検証される。
+- [ ] レートを解決できない場合に `ConfigProblem` が上がり、その `field` が操作者の指定すべき設定キーを指す。
+- [ ] 解決したレートでデバイスを開けない場合に `ConfigProblem` が上がり、メッセージにそのレートが含まれる。
+- [ ] `role=producer` では入力側のみ、`role=consumer` では出力側のみが検証される（既存の役割分岐に従う）。
+- [ ] 無効化されているワーカーについては何も検証されない。
+- [ ] 既存の preflight 検査の結果が変わらない。
 
-_DEVICE = DeviceInfo(
-    host_api=2, max_input_channels=2, max_output_channels=2, name="Stub", index=3
-)
+**検証**
 
-
-@pytest.fixture
-def base_config() -> Config:
-    config = Config()
-    config.recording.enable = True
-    config.playback.enable = True
-    return config
-
-
-def test_unresolvable_rate_is_reported_with_the_config_key(
-    base_config: Config, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import vspeech.lib.audio as audio
-
-    monkeypatch.setattr(audio, "resolve_input_device", lambda config: _DEVICE)
-    monkeypatch.setattr(audio, "resolve_output_device", lambda config: _DEVICE)
-
-    def _boom(*args, **kwargs):
-        raise DeviceRateUnresolvedError("判定できません")
-
-    monkeypatch.setattr(audio, "resolve_device_rate", _boom)
-    fields = {p.field for p in collect_problems(base_config)}
-    assert "recording.input_device_rate" in fields
-    assert "playback.output_device_rate" in fields
-
-
-def test_undopenable_rate_is_reported(
-    base_config: Config, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import sounddevice as sd
-
-    import vspeech.lib.audio as audio
-
-    monkeypatch.setattr(audio, "resolve_input_device", lambda config: _DEVICE)
-    monkeypatch.setattr(audio, "resolve_output_device", lambda config: _DEVICE)
-    monkeypatch.setattr(audio, "resolve_device_rate", lambda *a, **k: (192000, "stub"))
-
-    def _reject(**kwargs):
-        raise sd.PortAudioError("Invalid sample rate [PaErrorCode -9997]")
-
-    monkeypatch.setattr(sd, "check_input_settings", _reject)
-    monkeypatch.setattr(sd, "check_output_settings", _reject)
-    messages = [p.message for p in collect_problems(base_config)]
-    assert any("192000" in m for m in messages)
-
-
-def test_resolvable_and_openable_rate_reports_nothing(
-    base_config: Config, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import sounddevice as sd
-
-    import vspeech.lib.audio as audio
-
-    monkeypatch.setattr(audio, "resolve_input_device", lambda config: _DEVICE)
-    monkeypatch.setattr(audio, "resolve_output_device", lambda config: _DEVICE)
-    monkeypatch.setattr(audio, "resolve_device_rate", lambda *a, **k: (48000, "stub"))
-    monkeypatch.setattr(sd, "check_input_settings", lambda **kwargs: None)
-    monkeypatch.setattr(sd, "check_output_settings", lambda **kwargs: None)
-    fields = {p.field for p in collect_problems(base_config)}
-    assert "recording.input_device_rate" not in fields
-    assert "playback.output_device_rate" not in fields
 ```
-
-- [ ] **Step 2: テストが失敗することを確認**
-
-Run: `PYTHONIOENCODING=utf-8 uv run pytest tests/test_preflight_device_rate.py -q`
-Expected: FAIL — レート関連の ConfigProblem がまだ出ない
-
-- [ ] **Step 3: `preflight.py` に共通ヘルパを足す**
-
-`_check_vad_gate` の直後に追加:
-
-```python
-def _check_device_rate(
-    device,
-    override: int | None,
-    *,
-    input: bool,
-    worker: str,
-    config_key: str,
-) -> list[ConfigProblem]:
-    """Resolve the rate the device will be opened at, then check it can be opened.
-
-    Both halves are layer A: they need no model load and no audio to flow. The output
-    side only became checkable here once the stream stopped taking its rate from the
-    incoming packet (ADR-0070).
-    """
-    import sounddevice as sd
-
-    from vspeech.exceptions import DeviceRateUnresolvedError
-    from vspeech.lib.audio import resolve_device_rate
-
-    try:
-        rate, _ = resolve_device_rate(
-            device, override, input=input, config_key=config_key
-        )
-    except DeviceRateUnresolvedError as e:
-        return [ConfigProblem(worker, str(e), field=config_key)]
-    try:
-        if input:
-            sd.check_input_settings(device=device.index, samplerate=rate)
-        else:
-            sd.check_output_settings(device=device.index, samplerate=rate)
-    except Exception as e:
-        return [
-            ConfigProblem(
-                worker,
-                f"デバイス '{device.name}' を {rate}Hz で開けません: {e}",
-                field=config_key,
-            )
-        ]
-    return []
-```
-
-- [ ] **Step 4: 3 つの checker から呼ぶ**
-
-`_check_recording`: `resolve_input_device` が成功した場合にその戻り値を使って呼ぶ。
-
-```python
-    try:
-        device = resolve_input_device(config.recording)
-    except DeviceNotFoundError as e:
-        problems.append(ConfigProblem(w, str(e), field="recording.input_device_index"))
-    else:
-        problems += _check_device_rate(
-            device,
-            config.recording.input_device_rate,
-            input=True,
-            worker=w,
-            config_key="recording.input_device_rate",
-        )
-```
-
-`_check_playback`: 同様に `resolve_output_device` の戻り値を使い、`playback.output_device_rate` で呼ぶ（早期 return をやめて problems リストにする）。
-
-`_check_stream_vc`: `does_vc` の入力側（359-364 行）と `does_play` の出力側（365-371 行）を同じ形にし、`stream_vc.input_device_rate` / `stream_vc.output_device_rate` で呼ぶ。
-
-- [ ] **Step 5: テストが通ることを確認**
-
-Run: `PYTHONIOENCODING=utf-8 uv run pytest tests/test_preflight_device_rate.py tests/test_preflight.py -q`
-Expected: PASS
-
-- [ ] **Step 6: lint / 型検査 / コミット**
-
-```bash
+PYTHONIOENCODING=utf-8 uv run pytest tests/test_preflight.py tests/test_device_rate.py tests/test_device_resolver.py -q
 uv run ruff format . && uv run ruff check . && uv run ty check
-git add vspeech/preflight.py tests/test_preflight_device_rate.py
-git commit -m "feat(preflight): 解決したデバイスレートで開けるかを起動時に検証する (ADR-0071)"
 ```
+
+既存テストが緑のままであること、いずれも終了コード 0 であること。上の受入基準を検証する新規テストを足すこと。
+
+**コミット単位:** preflight.py の変更と新規テストで 1 コミット。
 
 ---
 
@@ -2324,12 +1353,16 @@ git commit -m "docs(adr): ADR-0070/0071 を Accepted へ昇格し、事前充填
 | 阻止域減衰・通過帯平坦性が自動テストで検証される | 1 |
 | ブロック分割と一括変換が一致する | 1 |
 | 追加遅延が 1 ブロック分まるごとにならない | 1 (`test_fixed_hop_cadence_needs_no_priming`), 5 |
-| 範囲外はラップせず飽和する | 2 (`encode_pcm`), 6 |
+| 範囲外はラップせず飽和する | 2 (`encode_pcm`), 6, 7, 8 |
 | 1 発話の末尾が欠けない | 1 (`resample_full`), 8 |
 | ソースのレート変化で再生デバイスが開き直されない | 8 |
 | 録音の無音判定・区間長の時間換算が実時間と一致する | 7 |
 | 下流が受け取るレートが変わらない | 7 (契約不変), 8 |
 | 依存パッケージが追加されない | Global Constraints |
-| consumer ロールが torch 無しで動く | 6 (Step 6) |
+| consumer ロールが torch 無しで動く | 6 |
 
-**未解決事項:** なし。`retry.py` の `open_stream` 戻り値の扱いは Task 5 Step 3 で確定済み（`[T: _Closable]` の束縛と `close_quietly(stream)` の呼び出しがあるためタプルは返せず、`_CaptureState` 保持オブジェクトで渡す。`retry.py` は無改造）。
+**未解決事項:** なし。
+
+**Task 5-9 の書き直しについて:** 当初この 5 task にも実装コードとテストコードを書いていたが、それを撤去して契約・制約・受入基準に絞った。理由は実測である — Task 1-4 は旧形式で実行し、**4 task すべてで plan 内のコードに誤りが見つかった**（Task 1: `resample_full` の長さ契約が Interfaces 欄と矛盾、Task 2: 往復誤差の許容値が解析的に到達不能かつ `numpy` の import 欠落の 2 件、Task 3: テスト fixture が同じ plan 内の実装と矛盾、Task 4: フィールド順序が 2 節間で不一致）。plan 段階のコードは推測でしかないのに、brief 経由で「逐語で使う唯一の要件源」として実装者を拘束し、reviewer はそれへの準拠で判定するため、**plan 時点の推測の質が実装品質の上限になる**。Task 5-9 は最も統合度が高く（既存の非同期ループ、デバイス再接続の契約、ワーカーの状態機械に触る）投機が最も外れやすいので、そこを実装者の判断に委ねる。
+
+実測で得た事実のうちコードでないもの（hop 量子化が起きる条件、`retry.py` の `[T: _Closable]` 束縛、録音のフレーム計数が定数である点）は、実装指示ではなく各 task の「制約」と「受入基準」として残してある。
