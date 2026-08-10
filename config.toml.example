@@ -282,6 +282,18 @@ output_host_api_name = ""
 output_device_name = ""
 output_device_index = 1
 
+# 入出力ストリームがデバイスへ要求する latency (ADR-0070)。既定は両方 "low" で、
+# これは設定化する前にハードコードされていた値と同じ = 書かなければ挙動は変わらない。
+#   "low"  = デバイス既定の低遅延。実際の秒数はホスト API 依存で、WASAPI と MME で桁が違う
+#   "high" = デバイス既定の高遅延。overflow/underflow が止まらないときの逃げ道
+#   数値   = 秒での明示指定 (例 0.02 = 20ms)。low と high の中間を狙うとき
+# 入力(マイク)と出力(再生)は別デバイス、role を分ければ別マシンなので、独立に指定する。
+# PortAudio は要求値を保証しない。実際に得られた値は起動時のログ
+# ("stream_vc input/output stream latency: N.NNNs") に出るので、block_ms を詰める前に
+# まずそれを読むこと。
+input_latency = "low"
+output_latency = "low"
+
 # トランスポート種別: "in_process"(既定, 単一マシン内で完結) | "udp"(M3 の2マシン分離,
 # ADR-0051/0055)。role が local のままなら in_process のまま変えない。role を
 # producer/consumer に上げるときは udp が必須(起動時 preflight が role≠local かつ

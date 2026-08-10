@@ -1,6 +1,6 @@
 # 0070. ストリーミング VC のデバイス latency を入出力別の設定値にする
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-10
 - Related: [spec](../superpowers/specs/2026-08-10-stream-vc-latency-config-design.md), [0053](0053-streaming-vc-fixed-block-crossfade.md), [0054](0054-stream-vc-config-section.md), [0055](0055-stream-vc-producer-consumer-role-split.md), [0068](0068-config-load-errors-through-preflight-report.md)
 
