@@ -104,6 +104,42 @@ def test_write_wav_round_trips_samples(tmp_path):
     np.testing.assert_array_equal(got, samples)
 
 
+def test_load_wav_16k_reads_what_write_wav_produced(tmp_path):
+    """The eval writes wavs and the RTF harness reads them; pin that they agree.
+
+    This broke in practice: torchaudio 2.11 (the terminal release pinned by ADR-0069)
+    routes `load` through torchcodec, which is not a dependency, so the reader raised
+    ImportError on a real run. Reading is stdlib now, and this keeps it that way.
+    """
+    from scripts.stream_vc_rtf import load_wav_16k
+
+    samples = (np.sin(np.linspace(0.0, 40.0 * np.pi, 16000)) * 12000).astype(np.int16)
+    path = tmp_path / "roundtrip.wav"
+    write_wav(path, samples, 16000)
+    got = load_wav_16k(path)
+    assert got.dtype == np.float32
+    assert got.shape == samples.shape
+    np.testing.assert_allclose(got, samples.astype(np.float32) / 32768.0)
+
+
+def test_load_wav_16k_rejects_non_16bit_wav(tmp_path):
+    """An 8-bit wav must fail loudly rather than be misread as int16 garbage."""
+    from scripts.stream_vc_rtf import load_wav_16k
+
+    path = tmp_path / "eight_bit.wav"
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(1)
+        w.setframerate(16000)
+        w.writeframes(bytes(range(256)))
+    try:
+        load_wav_16k(path)
+    except ValueError as e:
+        assert "sampwidth=1" in str(e)
+    else:  # pragma: no cover - the call above must raise
+        raise AssertionError("expected ValueError for an 8-bit wav")
+
+
 def test_warmup_skip_samples_matches_the_context_plus_block_span():
     # 500 + 0 + 160 = 660ms at 16kHz = 10560 samples exactly, no rounding involved.
     assert (
