@@ -4,8 +4,10 @@ import numpy as np
 import pytest
 import torch
 from onnxruntime import InferenceSession
+from scipy import signal
 
 from vspeech.config import F0ExtractorType
+from vspeech.lib.pitch_extract import median_filter_f0
 from vspeech.lib.pitch_extract import pitch_extract
 
 
@@ -182,3 +184,57 @@ def test_pitch_extract_fcpe_requires_session():
             f0_session=None,
             silence_front=0,
         )
+
+
+def test_median_filter_f0_removes_an_isolated_octave_error_in_a_voiced_run():
+    f0 = np.array([220.0, 221.0, 440.0, 219.0, 220.0])
+    out = median_filter_f0(f0, 1)
+    # median(221, 440, 219) == 221: the single-frame outlier is replaced by a neighbour.
+    assert out[2] == pytest.approx(221.0)
+    # Its neighbours are not dragged up by it either.
+    assert out[1] == pytest.approx(221.0)
+    assert out[3] == pytest.approx(220.0)
+
+
+def test_median_filter_f0_leaves_unvoiced_frames_at_zero():
+    f0 = np.array([220.0, 0.0, 0.0, 218.0, 219.0, 220.0])
+    out = median_filter_f0(f0, 1)
+    assert out[1] == 0.0
+    assert out[2] == 0.0
+
+
+def test_median_filter_f0_does_not_pull_voiced_run_edges_toward_unvoiced():
+    # The property that separates this from a naive medfilt over the whole array: a
+    # window spanning the 0 boundary would drag the run's first frame to min().
+    f0 = np.array([0.0, 300.0, 200.0, 210.0, 0.0])
+    out = median_filter_f0(f0, 1)
+    naive = signal.medfilt(f0, 3)
+    assert out[1] == pytest.approx(300.0)
+    assert naive[1] == pytest.approx(200.0)
+
+
+def test_median_filter_f0_last_frame_is_identity_so_no_lookahead_is_needed():
+    # Edge replication makes the final frame a no-op, which is what lets the filter run
+    # with zero added latency in the streaming path.
+    f0 = np.array([200.0, 200.0, 400.0])
+    assert median_filter_f0(f0, 1)[-1] == pytest.approx(400.0)
+    assert median_filter_f0(np.array([200.0, 200.0, 200.0, 400.0]), 2)[-1] == (
+        pytest.approx(400.0)
+    )
+
+
+def test_median_filter_f0_radius_zero_is_identity():
+    f0 = np.array([220.0, 440.0, 219.0, 0.0])
+    np.testing.assert_array_equal(median_filter_f0(f0, 0), f0)
+
+
+def test_median_filter_f0_runs_shorter_than_the_kernel_are_identity():
+    f0 = np.array([0.0, 300.0, 0.0, 400.0, 410.0, 0.0])
+    np.testing.assert_allclose(median_filter_f0(f0, 2), f0)
+
+
+def test_median_filter_f0_preserves_shape_and_dtype():
+    f0 = np.array([220.0, 440.0, 219.0], dtype=np.float32)
+    out = median_filter_f0(f0, 1)
+    assert out.shape == f0.shape
+    assert out.dtype == f0.dtype

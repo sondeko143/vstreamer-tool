@@ -17,6 +17,43 @@ class PitchExtractor:
 RMVPE_THRESHOLD = 0.3
 
 
+def median_filter_f0(
+    f0: NDArray[np.floating[Any]], radius: int
+) -> NDArray[np.floating[Any]]:
+    """Median-filter f0 inside each voiced run (RVC's `filter_radius`, ADR-0070).
+
+    Kills the isolated single-frame octave errors rmvpe/fcpe emit. Extraction is
+    block-wise with no continuity constraint across blocks, so one bad frame otherwise
+    reaches the NSF unopposed and rings as a short artefact.
+
+    Unvoiced frames (0) never enter a window and are returned untouched. A window
+    spanning the 0 boundary would drag the run's first voiced frame toward min(),
+    blunting voiced onsets more audibly than the artefact being removed -- so each
+    maximal run of f0 > 0 is filtered on its own, with run borders padded by edge
+    replication rather than zeros.
+
+    Edge replication also makes the array's final frame an identity (the replicated
+    copies are a strict majority of the window), so this filter needs no lookahead and
+    adds no latency. In the streaming path the emitted region ends about 3 frames before
+    the array end, so every emitted frame still gets a genuine two-sided window at
+    radius <= 3; beyond that the tail degrades to unfiltered rather than wrong.
+    """
+    if radius <= 0:
+        return f0
+    kernel = 2 * radius + 1
+    out = f0.copy()
+    # Run boundaries from the transitions of the voiced mask, bracketed by False so a run
+    # touching either end is closed. np.diff on a bool array is XOR, so the flat indices
+    # come out as alternating (start, stop) pairs.
+    voiced = f0 > 0
+    edges = np.flatnonzero(np.diff(np.concatenate(([False], voiced, [False]))))
+    for start, stop in zip(edges[::2], edges[1::2], strict=True):
+        padded = np.pad(f0[start:stop], radius, mode="edge")
+        windows = np.lib.stride_tricks.sliding_window_view(padded, kernel)
+        out[start:stop] = np.median(windows, axis=1)
+    return out
+
+
 def _pyworld():
     """Import pyworld lazily. It was dropped from the runtime dependencies because it
     has no cp314 wheel, so it is only needed when dio/harvest is selected. The default
