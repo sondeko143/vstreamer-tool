@@ -32,11 +32,13 @@
 - **呼び出しが実行中なら**、close を同じ executor に **queue する**。1 スレッドなので、走っている read/write が返るまで close は始まりようがない。待つのはそのスレッドであり、イベントループでも呼び出し側でもない。
 - **実行中でなければ**（初回の呼び出し前 / 呼び出しが例外で終わった直後 / `aclose()` で抜けた直後 / 発話の切れ目）、**その場で同期的に閉じる**。デバイス障害での再オープン・reload・発話ごとの開き直しはこれまでどおり「戻ってきた時点で閉じ終わっている」ままで、close が投げる例外も従来どおり呼び出し側に届く（`close_quietly` が握りつぶせる）。
 
-「実行中か」は `submit()` が返す `concurrent.futures.Future` の `done()` で判定する。`done()` が True になるのはワーカースレッドが `fn` から戻った後なので、True ならネイティブ呼び出しの外にいることが保証される。判定直後に True へ変わった場合は queue 側に倒れるだけで、どちらに転んでも重ならない。
+「実行中か」は `submit()` が返す `concurrent.futures.Future` の `done()` で判定する。`done()` が True になるのはワーカースレッドが `fn` から戻った後なので、True ならネイティブ呼び出しの外にいることが保証される。判定直後に True へ変わった場合は queue 側に倒れるだけで、どちらに転んでも重ならない。**判定は未完了の呼び出し全部に対して行い、最新の 1 つだけを見ることはしない** — 呼び出し側が 2 つ居ると、後発の呼び出しは queue に積まれたまま await がキャンセルされうる。queue 済み未実行の future の `cancel()` は成功する（`_WorkItem.run` の `set_running_or_notify_cancel` が False を返して `fn` を呼ばない）ので `done()` は True になり、「最新が done なら閉じてよい」だと**先発の呼び出しが PortAudio の中に居るままインライン close する** = 直そうとしている use-after-free そのものになる。現時点では 4 境界とも 1 タスクからしか駆動していないが、それはコード上強制されていないので、判定をその前提に乗せない。
+
+インライン close は例外を投げうる（壊れた/既に閉じたデバイスの close が `DEVICE_ERRORS` を投げるのは、まさに `close_quietly` が存在する理由 = streaming VC の再接続ループの live path）。その例外は従来どおり呼び出し側へ伝播させるが、executor の `shutdown(wait=False)` は `finally` で必ず実行する — でないとワーカースレッドが queue で待ったまま残り、このオブジェクトが GC されるまで畳まれない。決定的な後始末を目的にした仕組みがスレッドの寿命を refcount に委ねるのは筋が通らない。
 
 `close()` はストリームそのものではなく **閉じ方（`Callable[[], None]`）を受け取る**。境界ごとに閉じ方が違う（素の `stream.close()` か、`close_quietly` 越しか）ためで、渡すのはそのデバイスを閉じるだけの呼び出しに限る（実行中の場合それは呼び出し側ではなく所有スレッドで走る）。
 
-**保持のしかたは境界ごとに、ストリームを所有するオブジェクトへ持たせる**: 録音ワーカーはジェネレータのローカルとして直接、streaming VC 入力は新設の `InputTap`（stream + 開いたレート + スレッド）、streaming VC 出力は既存の `OutputSink`、発話系の再生は既存の `OutputStream`。3 つとも `close()` を持つオブジェクトなので、`stream_vc/retry.py`（`run_with_device_retry` / `close_quietly`）は**一切変更していない** — `_Closable` 境界のまま、閉じられる対象が「生のストリーム」から「そのストリームを所有する物」に変わっただけである。`InputTap` は同時に、開いたレートを capture_loop の `nonlocal` closure で読み出し口へ運んでいた仕掛けも不要にした。
+**保持のしかたは境界ごとに、ストリームを所有するオブジェクトへ持たせる**: 録音ワーカーはジェネレータのローカルとして直接、streaming VC 入力は新設の `InputTap`（stream + 開いたレート + スレッド）、streaming VC 出力は既存の `OutputSink`、発話系の再生は既存の `OutputStream`。3 つとも `close()` を持つオブジェクトなので、`stream_vc/retry.py`（`run_with_device_retry` / `close_quietly`）は **docstring 以外は無変更** — `_Closable` 境界のまま、閉じられる対象が「生のストリーム」から「そのストリームを所有する物」に変わっただけで、`run` のシグネチャも呼び出し側も retry のテストも動いていない（`close_quietly` の docstring には、渡されるのが所有オブジェクトであることと、遅延した close の例外はもうここでは捕まらないことを追記した）。`InputTap` は同時に、開いたレートを capture_loop の `nonlocal` closure で読み出し口へ運んでいた仕掛けも不要にした。
 
 プロセス終了時も取りこぼさない: `shutdown(wait=False)` は queue 済みの作業をキャンセルしないし、インタプリタ終了時の `concurrent.futures.thread._python_exit` は各スレッドに番兵 `None` を **queue の末尾に** 積んでから join するので、その手前に積んだ `close` は必ず実行されてからスレッドが終わる。
 

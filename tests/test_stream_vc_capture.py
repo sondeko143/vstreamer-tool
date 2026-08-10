@@ -53,12 +53,16 @@ class _FakeStream:
     def __init__(self, n_blocks: int, overflowed: bool = False) -> None:
         self.remaining = n_blocks
         self.overflowed = overflowed
+        self.closed = False
 
     def read(self, frames: int) -> tuple[bytes, bool]:
         if self.remaining <= 0:
             raise OSError("device gone")
         self.remaining -= 1
         return (b"\x00\x00" * frames, self.overflowed)
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class _PausingStream(_FakeStream):
@@ -85,14 +89,30 @@ class _PausingStream(_FakeStream):
         return super().read(frames)
 
 
+_open_taps: list[InputTap] = []
+
+
 def _tap(stream: Any, device_rate: int = CAPTURE_RATE) -> InputTap:
     """Wrap a fake stream in the real InputTap the read loop now takes.
 
     Deliberately the real class, not another fake: it carries the device rate the loop
     filters with and owns the thread every read is made from (ADR-0077), so going through
-    it is what keeps these tests exercising the path the pipeline uses.
+    it is what keeps these tests exercising the path the pipeline uses. Every tap made
+    here is closed by `close_taps` -- a tap owns a thread, and these tests reach the fault
+    that ends the read loop without the pipeline's own close ever running.
     """
-    return InputTap(stream, device_rate)
+    tap = InputTap(stream, device_rate)
+    _open_taps.append(tap)
+    return tap
+
+
+@pytest.fixture(autouse=True)
+def close_taps():
+    """Retire every tap a test made. Closing twice is a no-op, so taps the code under test
+    already closed are fine to close again here."""
+    yield
+    while _open_taps:
+        _open_taps.pop().close()
 
 
 @pytest.fixture

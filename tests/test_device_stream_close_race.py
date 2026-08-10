@@ -36,6 +36,25 @@ _OUTPUT_DEVICE = DeviceInfo(
 )
 
 
+@pytest.fixture(autouse=True)
+def no_real_device_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make any read of the real PortAudio device table fail, loudly.
+
+    Nothing in this file may depend on what this machine happens to have plugged in: a
+    lookup by name ("Speakers") passes here and errors on a host whose drivers are named
+    in Japanese, or that has no audio hardware at all. Every device this file needs is
+    injected, and this fixture is what proves it -- the tests below pass with the table
+    poisoned (ADR-0076 asks for the same isolation of every device test).
+    """
+    import vspeech.lib.audio as audio
+
+    def _no_table(*args: object, **kwargs: object):
+        raise AssertionError("this test must not read the real device table")
+
+    monkeypatch.setattr(audio.sd, "query_devices", _no_table)
+    monkeypatch.setattr(audio.sd, "query_hostapis", _no_table)
+
+
 class _BlockingStream:
     """A device whose read()/write() sits inside "PortAudio" until it is released.
 
@@ -72,6 +91,17 @@ class _BlockingStream:
         self.closed_during_call = self.inside_call
         self.active = False
         self.closed.set()
+
+
+async def _await_entered(stream: _BlockingStream) -> None:
+    assert await asyncio.to_thread(stream.entered_call.wait, 10)
+
+
+async def _assert_deferred_then_closed(stream: _BlockingStream) -> None:
+    assert not stream.closed.is_set()  # the call is still inside the device
+    stream.release.set()
+    assert await asyncio.to_thread(stream.closed.wait, 10)
+    assert stream.closed_during_call is False
 
 
 # --- DeviceStreamThread --------------------------------------------------------------
@@ -134,6 +164,61 @@ async def test_closing_twice_is_harmless() -> None:
     thread.close(stream.close)
 
 
+async def test_a_raising_inline_close_still_retires_the_thread() -> None:
+    """Closing a device that already faulted raises -- that is why `close_quietly` exists
+    -- and the executor must be shut down anyway.
+
+    Otherwise the worker thread stays parked on its queue until this object is collected,
+    which would leave the lifetime of a thread to the GC in the one place whose entire
+    purpose is deterministic teardown.
+    """
+    thread = DeviceStreamThread("test_dev")
+
+    def _boom() -> None:
+        raise OSError("device already gone")
+
+    with pytest.raises(OSError):
+        thread.close(_boom)
+
+    # Observable proof that shutdown() ran: a shut executor refuses new work.
+    with pytest.raises(RuntimeError):
+        await thread.call(lambda: None)
+
+
+async def test_close_waits_when_an_older_call_is_in_the_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two callers: deciding on the newest call alone would close under the oldest.
+
+    The second call sits queued behind the first, and cancelling its awaiter cancels a
+    future that never started -- which makes it `done()`. A newest-only check would read
+    that as "nothing is in the device" and close inline while the first call is still
+    inside PortAudio. No boundary drives its device from two tasks today, but nothing
+    enforces that, so the decision must not rest on it.
+    """
+    stream = _BlockingStream()
+    thread = DeviceStreamThread("test_dev")
+    first = asyncio.create_task(thread.call(stream.read, 8))
+    await _await_entered(stream)
+    second = asyncio.create_task(thread.call(stream.read, 8))
+    await asyncio.sleep(0)  # let it reach submit and queue behind the first
+    second.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await second
+    for _ in range(10):  # let the cancellation reach the queued concurrent future
+        await asyncio.sleep(0)
+        if thread._calls[-1].done():
+            break
+    # The trap, spelled out: the newest is finished, the oldest is still in the device.
+    assert thread._calls[-1].done()
+    assert not thread._calls[0].done()
+
+    thread.close(stream.close)
+
+    await _assert_deferred_then_closed(stream)
+    await first
+
+
 # --- the four device boundaries ------------------------------------------------------
 #
 # One test per boundary, all making the same statement: with a call still inside the
@@ -142,17 +227,6 @@ async def test_closing_twice_is_harmless() -> None:
 # was seen to crash; the other three are driven through the object that owns the stream,
 # which is where each of their closes lives (retry.py's close_quietly for the two stream_vc
 # ones, sd_playback_worker's finally for the utterance one).
-
-
-async def _await_entered(stream: _BlockingStream) -> None:
-    assert await asyncio.to_thread(stream.entered_call.wait, 10)
-
-
-async def _assert_deferred_then_closed(stream: _BlockingStream) -> None:
-    assert not stream.closed.is_set()  # the call is still inside the device
-    stream.release.set()
-    assert await asyncio.to_thread(stream.closed.wait, 10)
-    assert stream.closed_during_call is False
 
 
 async def test_stream_vc_capture_close_waits_for_the_read_in_flight() -> None:
@@ -189,8 +263,16 @@ async def test_utterance_playback_close_waits_for_the_write_in_flight(
     """The utterance playback device. One utterance is one whole write, so the window
     here is as long as the audio being played."""
     stream = _BlockingStream()
+    # Every device lookup update_stream_if_changed makes is injected: the resolve at
+    # construction, the "is it still the same device" check, and the re-resolve before the
+    # open. Otherwise the last two reach the real device table and the test would pass or
+    # error depending on what this machine calls its speakers.
     monkeypatch.setattr(
         playback_mod, "get_output_device", lambda config: _OUTPUT_DEVICE
+    )
+    monkeypatch.setattr(playback_mod, "get_device_info", lambda index: _OUTPUT_DEVICE)
+    monkeypatch.setattr(
+        playback_mod, "search_device_by_name", lambda **kwargs: _OUTPUT_DEVICE
     )
     monkeypatch.setattr(
         playback_mod, "open_device_stream", lambda **kwargs: (stream, 48000)

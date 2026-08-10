@@ -426,20 +426,28 @@ class DeviceStreamThread:
 
     def __init__(self, name: str) -> None:
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=name)
-        # Any, not object: Future is invariant, so a Future[bytes] does not fit a
-        # Future[object] slot. Only done() is ever read off it.
-        self._pending: Future[Any] | None = None
+        # Every call submitted and not yet known to be finished. Any, not object: Future
+        # is invariant, so a Future[bytes] does not fit a Future[object] slot; only done()
+        # is ever read off them. Touched from the event loop thread only (`call` and
+        # `close` are both called from there), so it needs no lock of its own.
+        self._calls: list[Future[Any]] = []
         self._closed = False
+
+    def _unfinished(self) -> list[Future[Any]]:
+        """The submitted calls that have not finished, pruning the ones that have."""
+        self._calls = [call for call in self._calls if not call.done()]
+        return self._calls
 
     async def call[T](self, fn: Callable[..., T], *args: object) -> T:
         """Run one blocking stream call on the owning thread and await its result.
 
         Submitting rather than `to_thread`-ing is what makes `close()` able to see whether
-        the call is still inside the device: the concurrent future is kept, and awaiting a
-        cancelled wrapper around it does not (cannot) stop the thread.
+        a call is still inside the device: the concurrent futures are kept, and awaiting a
+        cancelled wrapper around one does not (cannot) stop the thread.
         """
+        self._unfinished()
         future = self._executor.submit(fn, *args)
-        self._pending = future
+        self._calls.append(future)
         return await wrap_future(future)
 
     def close(self, close_stream: Callable[[], None]) -> None:
@@ -450,37 +458,55 @@ class DeviceStreamThread:
         replace the WorkerShutdown in flight). It must do nothing but close that device:
         with a call in flight it runs on the owning thread, not the caller's.
 
-        Runs on the caller's thread when nothing is in flight, so the paths that were
+        Runs on the caller's thread when nothing is outstanding, so the paths that were
         always safe (a call that ended by raising, a generator closed at its `yield`, a
         stream that was never read from) keep closing synchronously, with their exceptions
         still reaching the caller -- callers and tests can go on assuming the device is
         shut by the time this returns.
 
-        With a call in flight the close is queued on the owning thread instead, i.e. behind
-        that call. `done()` flips to True only after the worker thread has returned from
-        `fn`, so True proves the thread is out of PortAudio; a flip right after the check
-        merely queues a close that was safe to run inline, which is harmless. Queued work
-        survives `shutdown(wait=False)` and interpreter exit alike -- `_python_exit` puts
-        its stop sentinel at the *end* of the queue and then joins -- so the close cannot be
-        dropped, and the handle cannot leak.
+        With one outstanding the close is queued on the owning thread instead, i.e. behind
+        it. `done()` flips to True only after the worker thread has returned from `fn`, so
+        every future being done proves the thread is out of PortAudio; a flip right after
+        the check merely queues a close that was safe to run inline, which is harmless.
+
+        Every outstanding call is consulted, not just the newest, so that the decision does
+        not rest on there being at most one caller. Two would be enough to break a
+        newest-only check: the second call sits queued behind the first, its awaiter is
+        cancelled, cancelling a queued future succeeds, and "the newest is done" would then
+        close the device inline while the *first* call is still inside it -- the very
+        use-after-free this class exists to prevent. Today all four boundaries drive their
+        device from a single task, but nothing here enforces that, so nothing here relies
+        on it.
+
+        Queued work survives `shutdown(wait=False)` and interpreter exit alike --
+        `_python_exit` puts its stop sentinel at the *end* of the queue and then joins --
+        so the close cannot be dropped, and the handle cannot leak.
         """
         if self._closed:
             return
         self._closed = True
-        pending = self._pending
-        if pending is None or pending.done():
-            close_stream()
-        else:
-            self._executor.submit(self._close_logging_errors, close_stream)
-        self._executor.shutdown(wait=False)
+        try:
+            if self._unfinished():
+                self._executor.submit(self._close_logging_errors, close_stream)
+            else:
+                close_stream()
+        finally:
+            # In the `finally` because the inline close raises on a live path: closing a
+            # device that already faulted is exactly what `close_quietly` (stream_vc's
+            # reconnect loop) exists to swallow. Letting that escape before the shutdown
+            # would leave this executor's thread parked on its queue until the last
+            # reference to this object was collected, which is not something a fix whose
+            # whole point is deterministic teardown gets to leave to the GC.
+            self._executor.shutdown(wait=False)
 
     @staticmethod
     def _close_logging_errors(close_stream: Callable[[], None]) -> None:
-        """The deferred close. Nobody is left to observe the future it returns, so an
-        exception here would vanish silently -- log it instead."""
+        """The deferred close. Nobody is left to observe the future it returns, and
+        concurrent.futures (unlike asyncio) says nothing about an unretrieved exception, so
+        anything raised here would vanish without a trace -- hence the broad catch."""
         try:
             close_stream()
-        except (OSError, sd.PortAudioError) as e:
+        except Exception as e:
             logger.warning("error while closing a device stream: %r", e)
 
 
