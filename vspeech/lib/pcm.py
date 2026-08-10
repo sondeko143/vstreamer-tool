@@ -19,11 +19,18 @@ _INT24_SCALE = float(1 << 23)
 
 
 def decode_pcm(data: bytes, format: SampleFormat, channels: int) -> NDArray[np.float32]:
-    """Decode interleaved PCM bytes into float32 in [-1, 1].
+    """Decode interleaved PCM bytes into float32.
+
+    Integer formats (UINT8/INT8/INT16/INT24) land in [-1, 1]. FLOAT32 input is
+    passed through unbounded -- clamping here would alter the signal before it
+    reaches the resampler; encode_pcm is where the [-1, 1] bound is enforced, on
+    the way back out.
 
     Returns `(frames,)` for mono and `(frames, channels)` otherwise -- the shape
     PolyphaseResampler.process expects.
     """
+    if channels < 1:
+        raise ValueError(f"channels は 1 以上を指定してください: {channels!r}")
     if format == SampleFormat.FLOAT32:
         samples = np.frombuffer(data, dtype=np.float32).astype(np.float32)
     elif format == SampleFormat.UINT8:
@@ -54,8 +61,16 @@ def encode_pcm(x: NDArray[np.float32], format: SampleFormat) -> bytes:
     Always saturates at full scale. Resampling overshoots past the original peak
     (Gibbs), and a wrapping cast turns that overshoot into a sign flip -- an audible
     click. Never replace this with a bare `.astype(np.int16)`.
+
+    NaN input encodes as silence, not as full scale. NaN survives np.clip unchanged,
+    and casting NaN to an integer dtype is undefined -- measured: an unguarded UINT8
+    cast lands the byte on 0x00, which decode_pcm reads back as full-scale -1.0 DC,
+    exactly the failure mode this module exists to avoid.
     """
     flat = np.ascontiguousarray(x, dtype=np.float32).reshape(-1)
+    # Coerce NaN to 0.0 before clipping, for every format including FLOAT32. +-inf
+    # is already handled correctly by np.clip below, so NaN is the only case left.
+    flat = np.nan_to_num(flat, nan=0.0)
     if format == SampleFormat.FLOAT32:
         # float32 output still gets clipped: PortAudio would clip it anyway, and
         # leaving it unbounded makes the boundary behave differently per format.
