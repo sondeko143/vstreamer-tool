@@ -175,13 +175,12 @@ def open_stream_vc_input_stream(
     # accepted. We keep converting at the requested rate (the L/M ratio has to be built
     # from a sane number: 44099 -> 16000 would mean 16000 phases), so a delta shows up
     # only as a slow drift in the audio -- invisible unless it is said out loud here.
-    # getattr because the fakes in the tests are not full streams.
-    reported = getattr(stream, "samplerate", None)
-    if reported is not None and abs(float(reported) - rate) > 0.5:
+    reported = float(stream.samplerate)
+    if abs(reported - rate) > 0.5:
         logger.warning(
             "stream_vc capture device reports %.4fHz for a requested %dHz; "
             "converting at the requested rate",
-            float(reported),
+            reported,
             rate,
         )
     return stream, rate

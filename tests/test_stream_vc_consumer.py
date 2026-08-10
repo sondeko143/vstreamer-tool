@@ -228,6 +228,31 @@ async def test_a_concealed_block_is_converted_like_a_real_one(
     assert [len(w) for w in device.writes] == [len(packets[0].pcm) * 3] * 3
 
 
+async def test_prebuffer_blocks_are_silence_at_the_device_rate(
+    monkeypatch: pytest.MonkeyPatch, enabled_telemetry
+) -> None:
+    """With a jitter buffer configured, the first pops are the buffer's own silence.
+
+    Those blocks come from `_block_bytes`, the same internal size a concealment uses, so
+    they ride the same conversion at `packet.sample_rate`. A prebuffer block has to occupy
+    exactly as much device time as a real one, or playback starts out of step with the
+    sender by however much the prebuffer was worth.
+    """
+    device = _FakeDevice()
+    _patch_open(monkeypatch, device)
+    packets = _audio_packets(4, _SESSION_A)
+    with pytest.raises(_EndOfTest):
+        # 320 / block_ms 160 = 2 blocks deep: the first two pops prebuffer, then the
+        # third arrival primes the buffer and packets 0 and 1 play.
+        await network_playback_loop(
+            StreamVcConfig(jitter_buffer_ms=320.0), _PacedTransport(packets)
+        )
+    assert [len(w) for w in device.writes] == [len(packets[0].pcm) * 3] * 4
+    assert all(sample == 0 for w in device.writes[:2] for sample in _i16(w))
+    assert any(sample != 0 for sample in _i16(device.writes[2]))  # audio, not silence
+    assert "stream_vc_conceal" not in enabled_telemetry.summary()
+
+
 def test_the_conceal_block_follows_the_session_it_is_covering() -> None:
     """The buffer's own block size is re-settled by the session change, so it cannot go
     on emitting the previous session's block length (which a different model rate would

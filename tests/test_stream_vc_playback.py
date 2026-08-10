@@ -68,12 +68,17 @@ class _FakeDevice:
 
     `fail_on_write` makes the n-th write raise, which is how a runtime device fault is
     reproduced (the loop's `(OSError, sd.PortAudioError)` handler).
+
+    Like a real stream it always reports a `samplerate` -- the one it was opened at when
+    it stands in for the opener's product, and the device rate when a test wraps it in an
+    OutputSink directly (nothing reads it there).
     """
 
     def __init__(
         self, underflowed: bool = False, fail_on_write: int | None = None, **kwargs: Any
     ) -> None:
         self.kwargs = kwargs
+        self.samplerate = float(kwargs.get("samplerate", DEVICE_RATE))
         self.writes: list[bytes] = []
         self.started = False
         self.closed = False
@@ -296,12 +301,12 @@ def test_a_device_reporting_another_rate_is_warned_about(
     polyphase ratio up to 48000 phases), so a hardware rate that differs is a slow drift
     in the audio and nothing else. This warning is its only trace."""
 
-    class _DriftingDevice(_FakeDevice):
-        samplerate = 47999.0
+    def _open(**kwargs: Any) -> _FakeDevice:
+        stream = _FakeDevice(**kwargs)
+        stream.samplerate = 47999.0
+        return stream
 
-    monkeypatch.setattr(
-        playback_mod.sd, "RawOutputStream", lambda **kwargs: _DriftingDevice(**kwargs)
-    )
+    monkeypatch.setattr(playback_mod.sd, "RawOutputStream", _open)
     with caplog.at_level(logging.WARNING):
         sink = open_stream_vc_output(StreamVcConfig(output_device_index=0))
     assert sink.device_rate == 48000  # the requested rate, not the reported one

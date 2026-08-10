@@ -245,10 +245,16 @@ _DEVICES = [
 
 
 class _OpenedStream:
-    """Stands in for sd.RawInputStream and records how it was opened."""
+    """Stands in for sd.RawInputStream and records how it was opened.
+
+    `samplerate` is the rate PortAudio reports the device actually runs at. A real stream
+    always has it, and normally it equals the requested rate; `_reporting_stream` builds
+    the variant that disagrees.
+    """
 
     def __init__(self, **kwargs: Any) -> None:
         self.kwargs = kwargs
+        self.samplerate = float(kwargs["samplerate"])
         self.started = False
 
     def start(self) -> None:
@@ -344,12 +350,12 @@ def test_a_device_at_the_capture_rate_is_opened_without_conversion(
 def _reporting_stream(monkeypatch: pytest.MonkeyPatch, reported: float) -> None:
     """Re-patch sd.RawInputStream with one that reports `reported` as its actual rate."""
 
-    class _DriftingStream(_OpenedStream):
-        samplerate = reported
+    def _open(**kwargs: Any) -> _OpenedStream:
+        stream = _OpenedStream(**kwargs)
+        stream.samplerate = reported
+        return stream
 
-    monkeypatch.setattr(
-        capture_mod.sd, "RawInputStream", lambda **kwargs: _DriftingStream(**kwargs)
-    )
+    monkeypatch.setattr(capture_mod.sd, "RawInputStream", _open)
 
 
 def test_a_device_reporting_another_rate_is_warned_about(

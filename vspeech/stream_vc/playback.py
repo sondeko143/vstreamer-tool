@@ -24,7 +24,6 @@ from asyncio import to_thread
 
 import sounddevice as sd
 
-from vspeech.config import SampleFormat
 from vspeech.config import StreamVcConfig
 from vspeech.exceptions import shutdown_worker
 from vspeech.exceptions import worker_startup
@@ -37,15 +36,12 @@ from vspeech.lib.resample import PolyphaseResampler
 from vspeech.lib.resample import make_resampler
 from vspeech.lib.telemetry import telemetry
 from vspeech.logger import logger
+from vspeech.stream_vc.packet import PACKET_CHANNELS
+from vspeech.stream_vc.packet import PACKET_FORMAT
 from vspeech.stream_vc.retry import BACKOFF_START
 from vspeech.stream_vc.retry import close_quietly
 from vspeech.stream_vc.retry import next_backoff
 from vspeech.stream_vc.transport import Transport
-
-# What a StreamPacket carries (ADR-0051). Named once so the decode and the encode of a
-# round trip cannot drift apart.
-PACKET_FORMAT = SampleFormat.INT16
-PACKET_CHANNELS = 1
 
 
 def detect_gap(prev_seq: int | None, seq: int) -> int:
@@ -102,9 +98,14 @@ class OutputSink:
         The resampler is rebuilt whenever `src_rate` changes -- the sender's model rate
         travels with every packet, so keying the rebuild on the rate rather than on the
         session id means the ratio cannot silently disagree with the audio, whatever the
-        session bookkeeping does. It is a rare event (a producer restart with another
-        model); building one costs about 11 ms, which is why it must never happen per
-        packet.
+        session bookkeeping does.
+
+        A rebuild is a rare event (a producer restart with another model) and has to stay
+        one -- not for its cost, which is 0.2-8 ms across every rate pair this boundary
+        can now meet (measured: 16000->48000 0.26 ms, 48000->44100 2.5 ms, 11025->48000
+        7.7 ms; the pathological coprime pairs that used to dominate this number are
+        refused by wire.py now), but because a fresh resampler starts from a zeroed filter
+        tail. Rebuilding per packet would fade in the first taps of every block.
         """
         if src_rate != self._src_rate:
             # Built before either field moves: make_resampler rejects a non-positive
@@ -179,13 +180,12 @@ def open_stream_vc_output(config: StreamVcConfig) -> OutputSink:
     # accepted. We keep converting at the requested rate (the L/M ratio has to be built
     # from a sane number: 44099 -> 48000 would mean 48000 phases), so a delta shows up
     # only as a slow drift in the audio -- invisible unless it is said out loud here.
-    # getattr because the fakes in the tests are not full streams.
-    reported = getattr(stream, "samplerate", None)
-    if reported is not None and abs(float(reported) - rate) > 0.5:
+    reported = float(stream.samplerate)
+    if abs(reported - rate) > 0.5:
         logger.warning(
             "stream_vc playback device reports %.4fHz for a requested %dHz; "
             "converting at the requested rate",
-            float(reported),
+            reported,
             rate,
         )
     return OutputSink(stream, rate)
