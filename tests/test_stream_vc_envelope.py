@@ -159,3 +159,41 @@ def test_a_dropped_carry_does_not_shift_the_shape_of_the_next_block():
     seam = abs(curves[2][0] - curves[1][-1])
     interior = float(np.abs(np.diff(curves[2])).max())
     assert seam <= interior + 1e-4
+
+
+def test_shape_reaches_two_blocks_back_when_the_delay_exceeds_one_emit():
+    """With a delay past one emit length, the head carries the shape from two blocks back.
+
+    With only one block of history the head falls left of the oldest frame centre and
+    clamps to the previous block's first value. Lookahead puts the geometry in exactly
+    that region.
+    """
+    env = _env(strength=1.0, min_gain=0.0, max_gain=1.0)
+    out_len = 6400
+    delay = 9000  # past one emit length (6400)
+    loud = _block(0.2, n=2560)
+    quiet = _block(0.002, n=2560)
+    ones = np.full(out_len, 10000, dtype=np.int16)
+    env.apply(ones.copy(), loud, delay)
+    env.apply(ones.copy(), quiet, delay)
+    got = env.apply(ones.copy(), quiet, delay)
+    g = got.astype(np.float64) / 10000.0
+    # the head is audio from two blocks back (loud), so it is not ducked
+    assert g[0] > 0.5
+    # the tail has come down to the quiet level
+    assert g[-1] < 0.2
+
+
+def test_gain_is_continuous_across_the_seam_with_a_long_delay():
+    """With a delay past one emit length, the gain still does not step at a block boundary
+    (extends ADR-0065's guarantee across the history generalisation)."""
+    env = _env(strength=1.0, min_gain=0.0, max_gain=1.0)
+    out_len, delay = 6400, 9000
+    ones = np.full(out_len, 10000, dtype=np.int16)
+    curve = [
+        env.apply(ones.copy(), _block(level, n=2560), delay).astype(np.float64)
+        / 10000.0
+        for level in (0.02, 0.02, 0.3, 0.3, 0.05, 0.02)
+    ]
+    full = np.concatenate(curve)
+    assert float(np.abs(np.diff(full)).max()) < 0.02

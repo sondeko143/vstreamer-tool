@@ -37,10 +37,10 @@ _INPUT_RATE = 16000
 class StreamingEnvelope:
     """Input envelope following against a rolling-EMA reference (duck, ADR-0057/0065).
 
-    The state is the reference level `_ema_level` (a scalar) plus the previous block's
-    shape (`_prev_shape` / `_prev_len`), which the seam handover needs. `apply()`
-    multiplies the output block by the current input block's relative loudness envelope
-    and updates both for the next block.
+    The state is the reference level `_ema_level` (a scalar) plus the shape history
+    (`_history`), which the seam handover needs. `apply()` multiplies the output block by
+    the current input block's relative loudness envelope and updates both for the next
+    block.
     """
 
     def __init__(
@@ -61,10 +61,11 @@ class StreamingEnvelope:
         self._alpha = 1.0 - math.exp(-block_ms / ema_ms) if ema_ms > 0 else 1.0
         # initialized from the block mean on the first apply
         self._ema_level: float | None = None
-        # The previous block's shape and its emit length, for the seam handover. None =
-        # no handover available (startup or right after a reset).
-        self._prev_shape: NDArray[np.float64] | None = None
-        self._prev_len = 0
+        # The shapes of the most recent blocks, oldest first, as (shape, emit_len) pairs.
+        # One block suffices while the emit delay stays below one emit length; lookahead
+        # (ADR-0070) pushes it past that, and then the head of the emit carries audio
+        # shaped two or more blocks ago. The length is derived per call from the delay.
+        self._history: list[tuple[NDArray[np.float64], int]] = []
 
     def reset(self) -> None:
         """Return the reference level and the seam handover to uninitialized (called by
@@ -72,13 +73,12 @@ class StreamingEnvelope:
 
         So that a stale reference level does not oddly duck the next block after
         real time has jumped, force the next apply to cold start again (initializing from
-        the block mean). The previous block's shape is dropped for the same reason: it
-        describes audio from before the jump, and the head of the next emit is rendered
-        from a zeros context, so handing over from it would shape the wrong audio.
+        the block mean). The shape history is dropped for the same reason: it describes
+        audio from before the jump, and the head of the next emit is rendered from a
+        zeros context, so handing over from it would shape the wrong audio.
         """
         self._ema_level = None
-        self._prev_shape = None
-        self._prev_len = 0
+        self._history = []
 
     def apply(
         self,
@@ -129,46 +129,72 @@ class StreamingEnvelope:
             self._ema_level = block_mean
         ref = self._ema_level
         self._ema_level = self._alpha * block_mean + (1.0 - self._alpha) * ref
-        prev_shape, prev_len = self._prev_shape, self._prev_len
+        # Output samples per input frame, and half a frame -- the margin the seam
+        # continuity needs (see the bounds note below).
+        half_frame = out_len / n_frames / 2.0
+        # How many blocks of history the delay reaches back into. Sized off the length of
+        # the most recently *stored* block, not this call's `out_len`: `out_len` is the
+        # block just decided, not yet in `_history`, and what determines how far back the
+        # already-stored blocks reach is their own recorded length, not the new one's (a
+        # block can be shorter than the norm, e.g. a short buffer in a test, without
+        # shrinking how much real history is required to be read back). Falls back to
+        # `out_len` itself before any block has been stored (right after construction or a
+        # reset). Constant across ticks in practice (the delay is nominal and the block
+        # length does not change tick to tick), and exactly 1 for the geometry that existed
+        # before lookahead -- which is why this is a no-op there.
+        ref_len = self._history[-1][1] if self._history else out_len
+        need = max(1, math.ceil((delay_samples + half_frame) / ref_len))
+        history = self._history[-need:]
+        if len(history) < need:
+            # Startup, or right after a reset. The head of the emit is rendered from a
+            # zeros context or from before a real-time jump, so hand over from **unity** --
+            # the same "the first block is not ducked" cold start as `_ema_level`. Seed a
+            # whole emit's worth of frames (not one): with a single element its centre
+            # would land a whole emit earlier and stretch the ramp over two blocks.
+            seed = np.ones(n_frames, dtype=np.float64)
+            history = [(seed, out_len)] * (need - len(history)) + history
         # effectively digital silence (e.g. pure silence right after init) -> pass through
         if ref < 1e-8:
             # This block went out at unity, so hand unity over: leaving the older shape in
             # place would make the next block step off a value that was never applied.
-            self._prev_shape = np.ones(n_frames, dtype=np.float64)
-            self._prev_len = out_len
+            self._history.append((np.ones(n_frames, dtype=np.float64), out_len))
+            del self._history[:-need]
             return out_i16
         # The relative shape (relative to the reference, not mean~1), linearly
         # interpolated onto the emit's sample grid.
         shape_now = frame_rms / ref
-        self._prev_shape, self._prev_len = shape_now, out_len
-        if prev_shape is None:
-            # Startup, or right after a reset. The head of the emit is rendered from a
-            # zeros context or from before a real-time jump, so hand over from **unity**
-            # -- the same "the first block is not ducked" cold start as `_ema_level`.
-            # Seed a whole emit's worth of frames (not one): with a single element its
-            # centre would land a whole emit earlier and stretch the ramp over two blocks.
-            prev_shape = np.ones(n_frames, dtype=np.float64)
-            prev_len = out_len
-        n_prev = int(prev_shape.shape[0])
-        # Frame centres on the emit's absolute sample grid. The previous block's frames
-        # sit one emit length earlier, which is what makes the gain continuous across the
-        # seam: with the delay correction the seam falls in the interior of the shape,
-        # where both blocks interpolate the *same* two frame centres with the same values
-        # (ADR-0065). `prev_len` is carried per block rather than assumed equal to
-        # `out_len` so a length change cannot silently shift the previous block's origin.
-        centers = np.concatenate(
-            [
-                (np.arange(n_prev, dtype=np.float64) + 0.5) / n_prev * prev_len
-                - prev_len,
-                (np.arange(n_frames, dtype=np.float64) + 0.5) / n_frames * out_len,
-            ]
+        self._history.append((shape_now, out_len))
+        del self._history[:-need]
+        # Frame centres on the emit's absolute sample grid. Each history block sits its
+        # own emit length earlier, accumulated, which is what makes the gain continuous
+        # across the seam: with the delay correction the seam falls in the interior of the
+        # shape, where both blocks interpolate the *same* two frame centres with the same
+        # values (ADR-0065). The emit length is carried per block rather than assumed
+        # equal to `out_len` so a length change cannot silently shift an origin.
+        centers_parts: list[NDArray[np.float64]] = []
+        shape_parts: list[NDArray[np.float64]] = []
+        offset = 0.0
+        for past_shape, past_len in reversed(history):
+            offset -= past_len
+            k = past_shape.shape[0]
+            centers_parts.append(
+                (np.arange(k, dtype=np.float64) + 0.5) / k * past_len + offset
+            )
+            shape_parts.append(past_shape)
+        centers_parts.reverse()
+        shape_parts.reverse()
+        centers_parts.append(
+            (np.arange(n_frames, dtype=np.float64) + 0.5) / n_frames * out_len
         )
+        shape_parts.append(shape_now)
+        centers = np.concatenate(centers_parts)
         # Two bounds on the delay, both of which the validated geometry clears; outside
         # them the handover degrades gradually rather than breaking.
-        # - Too large: `prev_shape` only holds one block, so if `delay_samples` exceeds
-        #   the emit length the head falls left of the first centre and clamps to
-        #   `prev_shape[0]`. Continuous, so it does not click, but that span carries no
-        #   information from two blocks back -- the same bound as the gate's mask.
+        # - Too large: the history now grows with the delay, so the head no longer clamps
+        #   to the oldest frame. What remains bounded is the reference EMA: shaping audio
+        #   from `need` blocks ago against a reference that has since moved on gets less
+        #   apt as the lookahead grows. envelope_ema_ms (2000ms by default) is far longer
+        #   than any usable lookahead, so this stays a second-order effect.
         # - Too small: exact continuity needs the seam to fall in the *interior* of the
         #   shape, i.e. `delay_samples >= half a frame` (out_len / n_frames / 2), where
         #   both blocks interpolate the same two centres. Below that the block's tail
@@ -180,7 +206,7 @@ class StreamingEnvelope:
         shape = np.interp(
             np.arange(out_len, dtype=np.float64) - delay_samples,
             centers,
-            np.concatenate([prev_shape, shape_now]),
+            np.concatenate(shape_parts),
         )
         gain = np.clip(np.power(shape, self.strength), self.min_gain, self.max_gain)
         out_f = out_i16.astype(np.float32)
