@@ -61,40 +61,6 @@ if TYPE_CHECKING:
 WHISPER_SAMPLE_RATE = 16000
 
 
-def _pcm_to_float32_mono(sound: SoundInput) -> np.ndarray:
-    """Decode PCM bytes into a mono float32 signal in [-1, 1] at sound.rate.
-
-    Dispatch is keyed on ``sound.format`` (NOT byte width): UINT8 and INT8
-    share a width but differ in sign/bias, so a width-keyed table would decode
-    unsigned-8 as signed and skip its 128 offset (silence -> full-scale DC).
-    """
-    import numpy as np
-
-    fmt = sound.format
-    if fmt == SampleFormat.FLOAT32:
-        samples = np.frombuffer(sound.data, dtype=np.float32).astype(np.float32)
-    elif fmt == SampleFormat.UINT8:
-        # unsigned 8-bit PCM is biased by 128 (128 == silence).
-        samples = (
-            np.frombuffer(sound.data, dtype=np.uint8).astype(np.float32) - 128.0
-        ) / 128.0
-    elif fmt == SampleFormat.INT8:
-        samples = np.frombuffer(sound.data, dtype=np.int8).astype(np.float32) / 128.0
-    elif fmt == SampleFormat.INT16:
-        samples = np.frombuffer(sound.data, dtype=np.int16).astype(np.float32) / 32768.0
-    elif fmt == SampleFormat.INT24:
-        # 3-byte little-endian signed PCM -> sign-extended int32 -> [-1, 1).
-        b = np.frombuffer(sound.data, dtype=np.uint8).reshape(-1, 3).astype(np.int32)
-        as32 = b[:, 0] | (b[:, 1] << 8) | (b[:, 2] << 16)
-        as32 = (as32 ^ 0x800000) - 0x800000
-        samples = as32.astype(np.float32) / float(1 << 23)
-    else:
-        raise ValueError(f"unsupported PCM format for transcription: {fmt!r}")
-    if sound.channels > 1:
-        samples = samples.reshape(-1, sound.channels).mean(axis=1)
-    return samples.astype(np.float32)
-
-
 def _resample_to_16k(samples: np.ndarray, src_rate: int) -> np.ndarray:
     """Resample a mono float32 signal to 16 kHz with PyAV (libswresample).
 
@@ -132,7 +98,13 @@ def pcm_to_waveform(sound: SoundInput) -> np.ndarray:
     Decodes per sound.format, downmixes to mono, and resamples to 16 kHz when
     sound.rate differs (see _resample_to_16k for why the model needs 16 kHz).
     """
-    samples = _pcm_to_float32_mono(sound)
+    import numpy as np
+
+    from vspeech.lib.pcm import decode_pcm
+
+    samples = decode_pcm(sound.data, sound.format, sound.channels)
+    if samples.ndim > 1:
+        samples = samples.mean(axis=1).astype(np.float32)
     if sound.rate != WHISPER_SAMPLE_RATE:
         samples = _resample_to_16k(samples, sound.rate)
     return samples
