@@ -21,7 +21,7 @@ from vspeech.exceptions import ReplaceFilterParseError
 
 type Anchor = Literal["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"]
 
-# The device latency requested of PortAudio (ADR-0070). "low"/"high" are the device's
+# The device latency requested of PortAudio (ADR-0071). "low"/"high" are the device's
 # own defaults; a float is an explicit suggestedLatency **in seconds** -- sounddevice's
 # own unit, so the value is handed over without conversion.
 type DeviceLatency = Literal["low", "high"] | Annotated[float, Field(gt=0)]
@@ -551,7 +551,7 @@ class StreamVcConfig(BaseModel):
     output_host_api_name: str | None = Field(default=None)
     output_device_name: str | None = Field(default=None)
     output_device_index: int | None = Field(default=None)
-    # Handed to sounddevice untouched (ADR-0070). The default matches the value that
+    # Handed to sounddevice untouched (ADR-0071). The default matches the value that
     # used to be hardcoded, so an existing config opens exactly as before. Input and
     # output are separate fields because they are separate devices -- separate machines
     # once role is producer/consumer (ADR-0055).

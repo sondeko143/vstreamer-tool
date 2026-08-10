@@ -127,7 +127,7 @@ def test_stream_vc_rejects_out_of_range():
 
 def test_stream_vc_latency_defaults_to_low():
     """The default equals the value that used to be hardcoded, so existing configs do
-    not change behaviour (ADR-0070)."""
+    not change behaviour (ADR-0071)."""
     c = StreamVcConfig()
     assert c.input_latency == "low"
     assert c.output_latency == "low"
@@ -143,7 +143,7 @@ def test_stream_vc_latency_accepts_high_and_explicit_seconds():
 
 def test_stream_vc_latency_sides_are_independent():
     """Input and output are different devices (different machines once the role is
-    split), so raising one must not move the other -- the reason ADR-0070 rejected a
+    split), so raising one must not move the other -- the reason ADR-0071 rejected a
     single shared field."""
     c = StreamVcConfig.model_validate({"output_latency": "high"})
     assert c.input_latency == "low"

@@ -60,7 +60,7 @@ def _patch_output_open(monkeypatch) -> None:
 
 
 def test_open_output_stream_requests_configured_latency(monkeypatch):
-    """The configured value reaches sounddevice unconverted (ADR-0070)."""
+    """The configured value reaches sounddevice unconverted (ADR-0071)."""
     from vspeech.stream_vc import playback
 
     _patch_output_open(monkeypatch)

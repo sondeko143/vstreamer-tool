@@ -246,7 +246,7 @@ def _patch_input_open(monkeypatch) -> None:
 
 def test_open_input_stream_requests_configured_latency(monkeypatch):
     """The configured value reaches sounddevice unconverted -- a float is seconds,
-    PortAudio's own unit (ADR-0070)."""
+    PortAudio's own unit (ADR-0071)."""
     from vspeech.stream_vc import capture
 
     _patch_input_open(monkeypatch)

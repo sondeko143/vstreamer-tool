@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-ADR: [0070](../../adr/0070-stream-vc-device-latency-config.md)（Proposed → Task 3 で Accepted へ昇格）
+ADR: [0071](../../adr/0071-stream-vc-device-latency-config.md)（Proposed → Task 3 で Accepted へ昇格）
 
 **Goal:** `[stream_vc]` に `input_latency` / `output_latency` を追加し、いま `"low"` にハードコードされているデバイス latency を入出力別に設定できるようにする。
 
@@ -32,7 +32,7 @@ ADR: [0070](../../adr/0070-stream-vc-device-latency-config.md)（Proposed → Ta
 | `tests/test_stream_vc_capture.py` | capture のテスト | 入力 open の passthrough とログを追加 |
 | `tests/test_stream_vc_playback.py` | playback のテスト | 出力 open の passthrough とログを追加 |
 | `config.toml.example` | 全設定の解説 | `[stream_vc]` に 2 項目を追記 |
-| `docs/adr/0070-*.md` | 決定層 | Status を Accepted へ |
+| `docs/adr/0071-*.md` | 決定層 | Status を Accepted へ |
 
 `consumer.py` は `playback.open_stream_vc_output_stream` を import して使っているので変更不要。この「出力 open は 1 箇所」という性質は本 plan の前提なので、Task 2 で確認ステップを置く。
 
@@ -60,7 +60,7 @@ ADR: [0070](../../adr/0070-stream-vc-device-latency-config.md)（Proposed → Ta
 ```python
 def test_stream_vc_latency_defaults_to_low():
     """The default equals the value that used to be hardcoded, so existing configs do
-    not change behaviour (ADR-0070)."""
+    not change behaviour (ADR-0071)."""
     c = StreamVcConfig()
     assert c.input_latency == "low"
     assert c.output_latency == "low"
@@ -76,7 +76,7 @@ def test_stream_vc_latency_accepts_high_and_explicit_seconds():
 
 def test_stream_vc_latency_sides_are_independent():
     """Input and output are different devices (different machines once the role is
-    split), so raising one must not move the other -- the reason ADR-0070 rejected a
+    split), so raising one must not move the other -- the reason ADR-0071 rejected a
     single shared field."""
     c = StreamVcConfig.model_validate({"output_latency": "high"})
     assert c.input_latency == "low"
@@ -140,7 +140,7 @@ from typing import Annotated
 `type Anchor = ...`（21 行目）の直後に型エイリアスを足す。
 
 ```python
-# The device latency requested of PortAudio (ADR-0070). "low"/"high" are the device's
+# The device latency requested of PortAudio (ADR-0071). "low"/"high" are the device's
 # own defaults; a float is an explicit suggestedLatency **in seconds** -- sounddevice's
 # own unit, so the value is handed over without conversion.
 type DeviceLatency = Literal["low", "high"] | Annotated[float, Field(gt=0)]
@@ -151,7 +151,7 @@ type DeviceLatency = Literal["low", "high"] | Annotated[float, Field(gt=0)]
 `vspeech/config.py` の `output_device_index: int | None = Field(default=None)` の直後、`transport_type` の直前に挿入する。
 
 ```python
-    # Handed to sounddevice untouched (ADR-0070). The default matches the value that
+    # Handed to sounddevice untouched (ADR-0071). The default matches the value that
     # used to be hardcoded, so an existing config opens exactly as before. Input and
     # output are separate fields because they are separate devices -- separate machines
     # once role is producer/consumer (ADR-0055).
@@ -226,7 +226,7 @@ Expected: 本タスクの変更に起因する新規の指摘なし（`uv audit`
 
 ```bash
 git add vspeech/config.py tests/test_stream_vc_config.py tests/test_main.py
-git commit -m "feat(stream-vc): add input_latency / output_latency to [stream_vc] (ADR-0070)"
+git commit -m "feat(stream-vc): add input_latency / output_latency to [stream_vc] (ADR-0071)"
 ```
 
 ---
@@ -306,7 +306,7 @@ def _patch_input_open(monkeypatch) -> None:
 
 def test_open_input_stream_requests_configured_latency(monkeypatch):
     """The configured value reaches sounddevice unconverted -- a float is seconds,
-    PortAudio's own unit (ADR-0070)."""
+    PortAudio's own unit (ADR-0071)."""
     from vspeech.stream_vc import capture
 
     _patch_input_open(monkeypatch)
@@ -400,7 +400,7 @@ def _patch_output_open(monkeypatch) -> None:
 
 
 def test_open_output_stream_requests_configured_latency(monkeypatch):
-    """The configured value reaches sounddevice unconverted (ADR-0070)."""
+    """The configured value reaches sounddevice unconverted (ADR-0071)."""
     from vspeech.stream_vc import playback
 
     _patch_output_open(monkeypatch)
@@ -557,11 +557,11 @@ git commit -m "feat(stream-vc): request the configured device latency and log wh
 
 ---
 
-### Task 3: config.toml.example に記載し、ADR-0070 を Accepted へ昇格する
+### Task 3: config.toml.example に記載し、ADR-0071 を Accepted へ昇格する
 
 **Files:**
 - Modify: `config.toml.example:283` 付近（`output_device_index = 1` の直後）
-- Modify: `docs/adr/0070-stream-vc-device-latency-config.md:3`（Status 行）
+- Modify: `docs/adr/0071-stream-vc-device-latency-config.md:3`（Status 行）
 - Modify: `docs/adr/README.md`（索引の Status 列）
 
 **Interfaces:**
@@ -574,7 +574,7 @@ git commit -m "feat(stream-vc): request the configured device latency and log wh
 
 ```toml
 
-# 入出力ストリームがデバイスへ要求する latency (ADR-0070)。既定は両方 "low" で、
+# 入出力ストリームがデバイスへ要求する latency (ADR-0071)。既定は両方 "low" で、
 # これは設定化する前にハードコードされていた値と同じ = 書かなければ挙動は変わらない。
 #   "low"  = デバイス既定の低遅延。実際の秒数はホスト API 依存で、WASAPI と MME で桁が違う
 #   "high" = デバイス既定の高遅延。overflow/underflow が止まらないときの逃げ道
@@ -595,18 +595,18 @@ uv run python -c "import toml; d = toml.load('config.toml.example'); print(d['st
 
 Expected: `low low` と出力される（TOML として壊れておらず、キー名が実装と一致している）。
 
-- [ ] **Step 3: ADR-0070 を Accepted へ昇格する**
+- [ ] **Step 3: ADR-0071 を Accepted へ昇格する**
 
-`docs/adr/0070-stream-vc-device-latency-config.md` の 3 行目を 1 行だけ書き換える。本文は変更しない（ADR は不変層）。
+`docs/adr/0071-stream-vc-device-latency-config.md` の 3 行目を 1 行だけ書き換える。本文は変更しない（ADR は不変層）。
 
 ```markdown
 - Status: Accepted
 ```
 
-`docs/adr/README.md` の索引の 0070 の行も Status 列を `Proposed` → `Accepted` にする。
+`docs/adr/README.md` の索引の 0071 の行も Status 列を `Proposed` → `Accepted` にする。
 
 ```markdown
-| [0070](0070-stream-vc-device-latency-config.md) | ストリーミング VC のデバイス latency を入出力別の設定値にする | Accepted | 2026-08-10 |
+| [0071](0071-stream-vc-device-latency-config.md) | ストリーミング VC のデバイス latency を入出力別の設定値にする | Accepted | 2026-08-10 |
 ```
 
 - [ ] **Step 4: 全ゲートを回す**
@@ -619,7 +619,7 @@ Expected: `fmt-check` / `lint` / `ty` / `pytest` が緑。`uv audit` の torch �
 
 - [ ] **Step 5: ADR ↔ 実装の突合**
 
-`docs/adr/0070-*.md` の Decision を読み直し、実装と食い違いがないか確認する。確認する点は 4 つ:
+`docs/adr/0071-*.md` の Decision を読み直し、実装と食い違いがないか確認する。確認する点は 4 つ:
 
 1. フィールド名が `input_latency` / `output_latency` である
 2. 型が `Literal["low", "high"] | float(gt=0)` で、既定が両方 `"low"` である
@@ -631,8 +631,8 @@ Expected: `fmt-check` / `lint` / `ty` / `pytest` が緑。`uv audit` の torch �
 - [ ] **Step 6: コミット**
 
 ```bash
-git add config.toml.example docs/adr/0070-stream-vc-device-latency-config.md docs/adr/README.md
-git commit -m "docs(stream-vc): document input_latency / output_latency and accept ADR-0070"
+git add config.toml.example docs/adr/0071-stream-vc-device-latency-config.md docs/adr/README.md
+git commit -m "docs(stream-vc): document input_latency / output_latency and accept ADR-0071"
 ```
 
 ---
