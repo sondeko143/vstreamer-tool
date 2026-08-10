@@ -88,4 +88,4 @@
 | [0069](0069-torch-213-and-terminal-torchaudio.md) | torch を 2.13.0 へ上げ、道連れで torchaudio を終端版 2.11.0 に固定する | Accepted | 2026-08-09 |
 | [0070](0070-device-boundary-inhouse-polyphase-resampler.md) | デバイス境界のサンプルレート変換を OS から自前 numpy ポリフェーズへ移す（0036 を refine） | Proposed | 2026-08-10 |
 | [0071](0071-device-native-rate-resolution.md) | デバイスのネイティブレートを WASAPI カウンターパートから自動解決し、設定で上書きできるようにする | Proposed | 2026-08-10 |
-| [0075](0075-wire-sample-rate-validation.md) | ワイヤ形式の sample_rate を範囲 + 25Hz 格子で検証し、外れた datagram を drop する | Proposed | 2026-08-11 |
+| [0075](0075-wire-sample-rate-validation.md) | ワイヤ形式の sample_rate を範囲 + 25Hz 格子で検証し、リサンプラ側にも比の上限を置く | Proposed | 2026-08-11 |

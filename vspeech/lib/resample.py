@@ -18,6 +18,30 @@ from math import pi
 import numpy as np
 from numpy.typing import NDArray
 
+# The largest prototype filter this module will build, in taps. Everything the
+# constructor allocates is O(taps), so this one number bounds both the build time and the
+# peak memory of a resampler, whatever ratio it was asked for (ADR-0075).
+#
+# The cost of a ratio is set by `dst // gcd(src, dst)`, not by the size of the rates: a
+# rate coprime with the device's is as expensive at 44101 Hz as at 4 GHz. Measured on this
+# machine, the tap counts either side of this line are:
+#
+#   192000 <-> 11025   261k taps    84ms     30MB   <- the most expensive pair the four
+#                                                      device boundaries can legitimately
+#                                                      meet (every standard rate pair)
+#     8575 -> 192000   770k taps   258ms     89MB   <- the worst ADR-0075's 25Hz wire grid
+#                                                      can still admit; the cap has to sit
+#                                                      above it or the two layers disagree
+#  ------------------- 1M taps = the cap ---------------------------------------------
+#    44100 -> 44101    4.50M taps                   <- the cheapest coprime pair
+#    44101 -> 48000    4.85M taps   1.46s    563MB
+#   191999 -> 48000    19.6M taps    6.5s    2.3GB
+#   2**32-1 -> 48000   2.9e10 taps            233GB
+#
+# There is a factor of 4.5 between the last thing that passes and the first that does not,
+# so the exact value is not delicate; it is rounded to 1e6 for that reason.
+MAX_PROTOTYPE_TAPS = 1_000_000
+
 
 def _kaiser_beta(stopband_db: float) -> float:
     """Kaiser's empirical beta for a target stopband attenuation."""
@@ -75,6 +99,15 @@ class PolyphaseResampler:
         self._half_len = ceil(((n_taps - 1) // 2) / self.down) * self.down
         self.delay_samples = self._half_len // self.down
         n_taps = 2 * self._half_len + 1
+        # Refuse a pathological ratio BEFORE allocating anything (ADR-0075): every array
+        # below is O(n_taps), so noticing after the fact would mean noticing 563MB late.
+        if n_taps > MAX_PROTOTYPE_TAPS:
+            raise ValueError(
+                f"変換比が病的です: {self.src_rate}Hz -> {self.dst_rate}Hz は"
+                f"位相数 {self.up} / タップ数 {n_taps} のフィルタになります"
+                f"(上限 {MAX_PROTOTYPE_TAPS})。2 つのレートの最大公約数が小さすぎます。"
+                "デバイスと音声側のサンプルレートを確認してください"
+            )
         index = np.arange(-self._half_len, self._half_len + 1, dtype=np.float64)
         normalised_cutoff = 2.0 * cutoff / interpolated
         taps = (
@@ -184,6 +217,13 @@ def make_resampler(src_rate: int, dst_rate: int) -> PolyphaseResampler | None:
     None means "pass the bytes through untouched" -- the callers rely on that to stay
     bit-identical to the pre-ADR-0070 behaviour when the device already runs at the
     pipeline's rate.
+
+    Raises ValueError for a ratio whose filter would exceed MAX_PROTOTYPE_TAPS. Deliberately
+    a ValueError and not a device error: that keeps each boundary's existing failure
+    classification, because none of them treats it as a device fault. The utterance
+    playback worker warns and moves on to the next utterance (as it did when the same value
+    reached PortAudio and came back as an error), while the two capture boundaries and the
+    streaming sink let it out and end the subsystem.
     """
     if src_rate == dst_rate:
         return None

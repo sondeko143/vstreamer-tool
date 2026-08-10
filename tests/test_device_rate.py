@@ -336,7 +336,9 @@ def test_the_attempted_rate_is_logged_before_the_open(
                 subject="playback",
                 open_stream=_explode,
             )
-    lines = [r.getMessage() for r in caplog.records if "use output device" in r.message]
+    lines = [
+        r.getMessage() for r in caplog.records if "use output device" in r.getMessage()
+    ]
     assert len(lines) == 1
     # The WASAPI counterpart's rate, not the 44100 the MME row claims.
     assert "48000Hz" in lines[0]

@@ -182,8 +182,13 @@ def _speech(sound: SoundInput, volume: int | None = None, origin_ts: float = 0.0
     )
 
 
-def _opened(opened_streams: list[_FakeDevice]) -> OutputStream:
-    """An OutputStream with its device already open (INT16 mono)."""
+def _opened() -> OutputStream:
+    """An OutputStream with its device already open (INT16 mono).
+
+    Callers must be inside the `opened_streams` fixture (it is what stubs the device table
+    and sd.RawOutputStream), so they take it as a parameter even where they only assert on
+    the OutputStream.
+    """
     output = OutputStream(PlaybackConfig(output_device_index=0))
     output.update_stream_if_changed(format=SampleFormat.INT16, channels=1)
     return output
@@ -207,7 +212,7 @@ def test_output_device_is_opened_at_the_resolved_native_rate(
     utterance happens to carry. Asking for the source's rate would hand the conversion to
     the OS, and WASAPI shared mode would refuse the open outright (ADR-0070)."""
     with caplog.at_level(logging.INFO):
-        output = _opened(opened_streams)
+        output = _opened()
         output.convert(_sine(TTS_RATE, 240), TTS_RATE, SampleFormat.INT16, 1)
     assert output.device_rate == DEVICE_RATE
     assert output.stream is opened_streams[0]
@@ -271,7 +276,7 @@ def test_a_source_rate_change_does_not_reopen_the_device(
 ) -> None:
     """The headline of ADR-0070 for this boundary: 24000Hz TTS and 40000Hz VC utterances
     alternating used to close and reopen the device on every single one."""
-    output = _opened(opened_streams)
+    output = _opened()
     for rate in (TTS_RATE, VC_RATE, TTS_RATE, VC_RATE):
         output.update_stream_if_changed(format=SampleFormat.INT16, channels=1)
         output.convert(_sine(rate, rate // 10), rate, SampleFormat.INT16, 1)
@@ -284,7 +289,7 @@ def test_a_format_or_channel_change_still_reopens_the_device(
 ) -> None:
     """Only the rate stopped being a reason to reopen. The format and the channel count
     are part of how the stream itself is opened, so they still are."""
-    output = _opened(opened_streams)
+    output = _opened()
     output.update_stream_if_changed(format=SampleFormat.INT16, channels=2)
     assert len(opened_streams) == 2
     assert opened_streams[0].closed
@@ -299,7 +304,7 @@ def test_a_reopen_drops_the_cached_resamplers(
 ) -> None:
     """A reopen may land on another device, and therefore another device rate: a resampler
     built for the old rate would then convert to the wrong one, silently."""
-    output = _opened(opened_streams)
+    output = _opened()
     output.convert(_sine(TTS_RATE, 2400), TTS_RATE, SampleFormat.INT16, 1)
     assert list(output.resamplers) == [TTS_RATE]
     output.update_stream_if_changed(format=SampleFormat.INT16, channels=2)
@@ -317,7 +322,7 @@ def test_a_source_at_the_device_rate_is_written_untouched(
     Identity, not equality -- this path must stay bit-identical to the pre-ADR-0070 code,
     which wrote the source bytes straight to the stream.
     """
-    output = _opened(opened_streams)
+    output = _opened()
     pcm = _sine(DEVICE_RATE, 4800)
     assert output.convert(pcm, DEVICE_RATE, SampleFormat.INT16, 1) is pcm
     assert output.resamplers == {DEVICE_RATE: None}
@@ -327,7 +332,7 @@ def test_an_utterance_is_converted_to_the_device_rate(
     opened_streams: list[_FakeDevice],
 ) -> None:
     """24 kHz in, 48 kHz out: twice the samples, same 440 Hz tone."""
-    output = _opened(opened_streams)
+    output = _opened()
     pcm = _sine(TTS_RATE, 2400)
     out = output.convert(pcm, TTS_RATE, SampleFormat.INT16, 1)
     assert _i16(out).size == 2400 * DEVICE_RATE // TTS_RATE
@@ -343,7 +348,7 @@ def test_the_converted_utterance_has_its_nominal_length(
 ) -> None:
     """One utterance is one buffer: its converted length is the nominal one, with no
     samples held back inside the filter."""
-    output = _opened(opened_streams)
+    output = _opened()
     samples = rate // 10  # 100 ms
     out = output.convert(_sine(rate, samples), rate, SampleFormat.INT16, 1)
     assert _i16(out).size == round(samples * DEVICE_RATE / rate)
@@ -365,7 +370,7 @@ def test_the_utterance_is_not_shifted_in_time_and_keeps_its_tail(
       output stops 100 samples earlier in the signal and the last sample is still full
       scale (measured 20000) -- i.e. the last 100 samples of the utterance never played.
     """
-    output = _opened(opened_streams)
+    output = _opened()
     step = np.zeros(2400, dtype=np.int16)
     step[1200:] = 20000
     out = _i16(output.convert(step.tobytes(), TTS_RATE, SampleFormat.INT16, 1))
@@ -384,7 +389,7 @@ def test_the_same_utterance_twice_gives_the_same_bytes(
     """Utterances are independent buffers, not a continuous stream: no filter tail may
     survive from one to the next, or the same input would play differently the second
     time (and every utterance would open with a ring from the previous one)."""
-    output = _opened(opened_streams)
+    output = _opened()
     pcm = _sine(TTS_RATE, 2400)
     first = output.convert(pcm, TTS_RATE, SampleFormat.INT16, 1)
     second = output.convert(pcm, TTS_RATE, SampleFormat.INT16, 1)
@@ -402,7 +407,7 @@ def test_the_conversion_saturates_instead_of_wrapping(
 ) -> None:
     """Resampling a full-scale square wave overshoots past +1.0 (Gibbs). A wrapping cast
     would sign-flip those samples into a loud click."""
-    output = _opened(opened_streams)
+    output = _opened()
     square = (np.tile([1, 1, 1, 1, -1, -1, -1, -1], 300) * 32767).astype(np.int16)
     reference = PolyphaseResampler(TTS_RATE, DEVICE_RATE).resample_full(
         square.astype(np.float32) / 32768.0
@@ -438,17 +443,46 @@ def test_an_empty_utterance_converts_to_nothing(
 ) -> None:
     """A TTS/VC step that produced no audio still reaches this worker. It must come out
     as an empty write, not as an exception out of the resampler."""
-    output = _opened(opened_streams)
+    output = _opened()
     assert output.convert(b"", TTS_RATE, SampleFormat.INT16, 1) == b""
 
 
 def test_the_resampler_cache_is_bounded(opened_streams: list[_FakeDevice]) -> None:
     """The key arrives with the audio and may come from another machine, so the table
     cannot be allowed to grow without limit."""
-    output = _opened(opened_streams)
-    for rate in range(8000, 8000 + (MAX_CACHED_RESAMPLERS + 3) * 1000, 1000):
+    output = _opened()
+    rates = [8000 + i * 1000 for i in range(MAX_CACHED_RESAMPLERS + 3)]
+    for rate in rates:
         output.convert(_sine(rate, 800), rate, SampleFormat.INT16, 1)
-    assert len(output.resamplers) <= MAX_CACHED_RESAMPLERS
+    assert len(output.resamplers) == MAX_CACHED_RESAMPLERS
+    # Overflow evicts the least recently used one at a time; it does not drop the table
+    # and make the next few utterances pay for a rebuild each.
+    assert list(output.resamplers) == rates[-MAX_CACHED_RESAMPLERS:]
+
+
+def test_the_cache_keeps_the_rates_that_are_actually_in_use(
+    opened_streams: list[_FakeDevice], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Recency, not insertion order: a rate that keeps being used must survive a stream of
+    one-off rates far longer than the table is wide. A TTS voice alternating with anything
+    else for hours is exactly this shape, and it is the case the cache exists for.
+
+    Counted in builds (the info line), not in table contents: a table that evicted the
+    live rate and rebuilt it would still *contain* it at the end.
+    """
+    output = _opened()
+    with caplog.at_level(logging.INFO):
+        for i in range(MAX_CACHED_RESAMPLERS * 2):
+            output.convert(_sine(TTS_RATE, 800), TTS_RATE, SampleFormat.INT16, 1)
+            one_off = 9000 + i * 1000
+            output.convert(_sine(one_off, 800), one_off, SampleFormat.INT16, 1)
+    builds = [
+        r.getMessage()
+        for r in caplog.records
+        if r.getMessage().startswith(f"playback {TTS_RATE}Hz")
+    ]
+    assert len(builds) == 1, builds
+    assert len(output.resamplers) == MAX_CACHED_RESAMPLERS
 
 
 def test_an_unusable_source_rate_is_not_remembered_as_needing_no_conversion(
@@ -458,10 +492,23 @@ def test_an_unusable_source_rate_is_not_remembered_as_needing_no_conversion(
     land in the table: the next utterance at that rate would take the "rates already
     match" branch and play unconverted -- silently at the wrong speed, instead of
     failing."""
-    output = _opened(opened_streams)
+    output = _opened()
     for _ in range(2):
         with pytest.raises(ValueError):
             output.convert(b"\x00\x00", 0, SampleFormat.INT16, 1)
+    assert output.resamplers == {}
+
+
+def test_a_pathological_source_rate_is_refused_before_it_costs_anything(
+    opened_streams: list[_FakeDevice],
+) -> None:
+    """`WorkerInput.sound.rate` crosses gRPC from another machine unvalidated, and a value
+    well inside any plausible range (44101 against a 48000 device) demands a 4.85M-tap
+    filter: 563MB and 1.5s, measured. The cap in resample.py refuses it, and nothing about
+    it is remembered (ADR-0075)."""
+    output = _opened()
+    with pytest.raises(ValueError, match="病的"):
+        output.convert(_sine(44101, 800), 44101, SampleFormat.INT16, 1)
     assert output.resamplers == {}
 
 
@@ -475,7 +522,7 @@ async def test_the_volume_is_applied_exactly_as_before(
     pre-ADR-0070 code wrote: audioop.mul over the source bytes, nothing else."""
     import audioop
 
-    output = _opened(opened_streams)
+    output = _opened()
     pcm = _sine(DEVICE_RATE, 4800)
     await output.playback(volume=50, sound=_sound(pcm, DEVICE_RATE))
     assert opened_streams[0].writes == [audioop.mul(pcm, 2, 0.5)]
@@ -484,7 +531,7 @@ async def test_the_volume_is_applied_exactly_as_before(
 async def test_volume_100_writes_the_source_bytes_untouched(
     opened_streams: list[_FakeDevice],
 ) -> None:
-    output = _opened(opened_streams)
+    output = _opened()
     pcm = _sine(DEVICE_RATE, 4800)
     await output.playback(volume=100, sound=_sound(pcm, DEVICE_RATE))
     assert opened_streams[0].writes == [pcm]
@@ -495,7 +542,7 @@ async def test_the_volume_is_applied_to_the_converted_audio_too(
 ) -> None:
     """Attenuation and resampling are both linear, so the order between them does not
     change the audio; what matters is that a converted utterance is still attenuated."""
-    output = _opened(opened_streams)
+    output = _opened()
     pcm = _sine(TTS_RATE, 2400)
     await output.playback(volume=50, sound=_sound(pcm, TTS_RATE))
     quiet = _i16(opened_streams[0].writes[0])
@@ -583,6 +630,34 @@ async def test_a_device_fault_during_the_write_is_warned_about_and_the_loop_goes
     assert len(device.writes) == 1  # only the second utterance got through
     warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
     assert "output sink gone" in warnings[0]
+
+
+async def test_a_pathological_utterance_rate_warns_and_the_next_utterance_plays(
+    opened_streams: list[_FakeDevice], caplog: pytest.LogCaptureFixture
+) -> None:
+    """The failure classification of a refused ratio, end to end.
+
+    Before ADR-0070 the same value reached `sd.RawOutputStream(samplerate=...)`, came back
+    as a PortAudioError, was warned about, and the next utterance played. That is exactly
+    what must still happen now that the value reaches the filter design instead -- the
+    worker must not die on one bad utterance from a remote peer, and must not spend 1.5s
+    and 563MB on it either.
+    """
+    queue: Queue[WorkerInput] = Queue()
+    queue.put_nowait(_speech(_sound(_sine(44101, 4410), 44101)))
+    queue.put_nowait(_speech(_sound(_sine(TTS_RATE, 2400), TTS_RATE)))
+
+    with caplog.at_level(logging.WARNING):
+        outputs = await _play(queue, 1)
+
+    assert len(outputs) == 1
+    assert outputs[0].sound.rate == TTS_RATE  # the good one, not the refused one
+    assert len(opened_streams) == 1
+    assert [_i16(w).size for w in opened_streams[0].writes] == [4800]
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1
+    assert "病的" in warnings[0]
+    assert "44101" in warnings[0]
 
 
 async def test_an_unresolvable_device_rate_fails_loud(

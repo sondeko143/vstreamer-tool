@@ -1,8 +1,11 @@
 """Numeric contract of the polyphase resampler (ADR-0070)."""
 
+import tracemalloc
+
 import numpy as np
 import pytest
 
+from vspeech.lib.resample import MAX_PROTOTYPE_TAPS
 from vspeech.lib.resample import PolyphaseResampler
 from vspeech.lib.resample import make_resampler
 
@@ -240,3 +243,81 @@ def test_invalid_stopband_db_raises() -> None:
         PolyphaseResampler(48000, 16000, stopband_db=0.0)
     with pytest.raises(ValueError):
         PolyphaseResampler(48000, 16000, stopband_db=-5.0)
+
+
+# --- the pathological-ratio cap (ADR-0075) --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("src", "dst"),
+    [
+        (44101, 48000),  # in range, coprime with the device: 4.85M taps / 563MB / 1.5s
+        (44100, 44101),  # the cheapest coprime pair of two plausible rates: 4.50M taps
+        (191999, 48000),  # 19.6M taps / 2.3GB / 6.5s
+        (2**32 - 1, 48000),  # what an unvalidated uint32 off the wire can carry
+    ],
+)
+def test_a_pathological_ratio_is_refused(src: int, dst: int) -> None:
+    """A ratio whose filter would be absurd must raise instead of being built.
+
+    The cost of a pair is `dst // gcd(src, dst)`, not the size of the rates, so a value
+    well inside any plausible range can still demand a multi-million-tap filter. These
+    reach the constructor from the utterance path (`WorkerInput.sound.rate` crosses gRPC
+    unvalidated) and, before ADR-0075's grid, from the UDP wire.
+    """
+    with pytest.raises(ValueError, match="病的"):
+        PolyphaseResampler(src, dst)
+
+
+def test_the_refusal_happens_before_anything_is_allocated() -> None:
+    """Allocating 563MB and *then* noticing would defeat the point. Nothing bigger than a
+    few Python ints may be created on the way to the refusal."""
+    tracemalloc.start()
+    try:
+        before = tracemalloc.get_traced_memory()[0]
+        with pytest.raises(ValueError, match="病的"):
+            PolyphaseResampler(2**32 - 1, 48000)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    # A single one of that filter's arrays would be 233GB; 64 KB of headroom over the
+    # baseline is generous for "the message string and a few ints".
+    assert peak - before < 64 * 1024
+
+
+@pytest.mark.parametrize(
+    ("src", "dst"),
+    [
+        (192000, 11025),  # 261k taps: the worst pair the four boundaries can meet
+        (11025, 192000),
+        (8575, 192000),  # 770k taps: the worst ADR-0075's 25Hz wire grid still admits
+        (11025, 48000),  # up=640, the pair ADR-0070's measurements call out
+        (44100, 48000),
+        (48000, 44100),
+        (40000, 44100),
+        (22050, 48000),
+    ],
+)
+def test_every_ratio_the_pipeline_can_meet_is_still_built(src: int, dst: int) -> None:
+    """The cap must not cost the project a legitimate rate pair. If it ever does, the
+    boundary that meets that pair stops working entirely, which is worse than the cost the
+    cap exists to avoid."""
+    r = PolyphaseResampler(src, dst)
+    assert 2 * r._half_len + 1 <= MAX_PROTOTYPE_TAPS
+    # Still a working filter, not just a constructed object.
+    assert len(r.resample_full(np.zeros(src // 10, dtype=np.float32))) == round(
+        (src // 10) * dst / src
+    )
+
+
+def test_every_standard_rate_pair_is_under_the_cap() -> None:
+    """The whole matrix at once, so a future change to the filter design (taps, transition
+    width, stopband) that pushes a standard pair over the cap is caught here rather than on
+    somebody's hardware."""
+    rates = [11025, 16000, 22050, 24000, 32000, 40000, 44100, 48000, 96000, 192000]
+    for src in rates:
+        for dst in rates:
+            if src == dst:
+                continue
+            r = PolyphaseResampler(src, dst)
+            assert 2 * r._half_len + 1 <= MAX_PROTOTYPE_TAPS, (src, dst)

@@ -42,9 +42,13 @@ from vspeech.shared_context import WorkerOutput
 # between sources (TTS 24000Hz, VC 40000Hz, recording 16000Hz, whatever a remote sends),
 # and a build costs 0.3-5.7 ms measured across those pairs against a 48000/44100 device,
 # so keeping them beats rebuilding on every alternation. There is a cap because the key
-# arrives with the audio (`WorkerInput.sound.rate`, possibly from another machine over
-# gRPC): the table stays bounded, and on overflow it is dropped whole and refilled rather
-# than grown. Each entry is 1-180 KB of taps for the rate pairs this boundary meets.
+# arrives with the audio (`WorkerInput.sound.rate` crosses gRPC from another machine with
+# no validation on the way), and past it the least recently used entry is evicted.
+#
+# What a *bounded* table costs is bounded by resample.MAX_PROTOTYPE_TAPS, not by this
+# number: that cap is what stops one entry from being a 563MB filter (ADR-0075). Under it,
+# an entry is 1-180 KB of taps for the pairs these boundaries actually meet, and about
+# 4 MB (one float32 per tap) for the very largest ratio the cap admits at all.
 MAX_CACHED_RESAMPLERS = 8
 
 
@@ -168,23 +172,30 @@ class OutputStream:
         path alternates between sources, so rebuilding whenever the rate changes would pay
         the build cost on nearly every utterance. Keeping them carries nothing between
         utterances -- `resample_full` resets the filter on both sides of the call.
+
+        The table is a plain dict used as an LRU (insertion order is the recency order).
+        Evicting one entry rather than clearing the table keeps a source rotating through
+        more rates than fit at one rebuild per miss instead of a whole table's worth.
         """
-        if rate not in self.resamplers:
-            if len(self.resamplers) >= MAX_CACHED_RESAMPLERS:
-                self.resamplers.clear()
-            # Built before the key is recorded: make_resampler rejects a non-positive
-            # rate, and recording it first would leave an entry claiming "no conversion
-            # needed" for a rate that never resolved, playing the next such utterance
-            # unconverted (i.e. silently at the wrong speed) instead of failing.
-            resampler = make_resampler(rate, self.device_rate)
-            self.resamplers[rate] = resampler
-            logger.info(
-                "playback %dHz -> %dHz (%s)",
-                rate,
-                self.device_rate,
-                "変換なし" if resampler is None else "プロセス内で変換",
-            )
-        return self.resamplers[rate]
+        if rate in self.resamplers:
+            # Re-insert to move it to the most-recently-used end.
+            self.resamplers[rate] = self.resamplers.pop(rate)
+            return self.resamplers[rate]
+        if len(self.resamplers) >= MAX_CACHED_RESAMPLERS:
+            del self.resamplers[next(iter(self.resamplers))]
+        # Built before the key is recorded: make_resampler rejects a rate it cannot
+        # serve, and recording it first would leave an entry claiming "no conversion
+        # needed" for a rate that never resolved, playing the next such utterance
+        # unconverted (i.e. silently at the wrong speed) instead of failing.
+        resampler = make_resampler(rate, self.device_rate)
+        self.resamplers[rate] = resampler
+        logger.info(
+            "playback %dHz -> %dHz (%s)",
+            rate,
+            self.device_rate,
+            "変換なし" if resampler is None else "プロセス内で変換",
+        )
+        return resampler
 
     def convert(
         self, data: bytes, rate: int, format: SampleFormat, channels: int
