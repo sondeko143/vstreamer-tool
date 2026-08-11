@@ -9,6 +9,16 @@ Whether the CUDA EP is requested comes from onnxruntime's own provider list, nev
 another framework's view of the GPU (ADR-0078). A torch-shaped answer would be about a
 different library's build, not about what this session can actually run on.
 
+One inherited invariant is worth writing down, because ADR-0078 removed the `import
+torch` that used to make it automatic: `onnxruntime-gpu` pulls in no `nvidia-*-cu13`
+wheels, so the CUDA EP's cuBLAS/cuDNN come from torch's `torch/lib` (torch's import adds
+that directory to the DLL search path). Every caller that opens a CUDA session today
+reaches `vspeech.lib.rvc` first, which imports torch at module level, so the ordering
+holds -- but it now holds by accident rather than by construction. A future CUDA session
+opened from a path that never touches `rvc` (moving the transcription VAD off
+`CPUExecutionProvider`, say) would silently fall back to CPU with no torch to supply the
+libraries. Load torch first from that path, or add an explicit nvidia-cu13 dependency.
+
 `log_severity` is ORT's log threshold (0=VERBOSE / 1=INFO / 2=WARNING / 3=ERROR /
 4=FATAL). The default of `SessionOptions().log_severity_level` is **-1 = inherit the
 Env level** (usually WARNING); leaving this argument at its default None preserves that

@@ -139,6 +139,29 @@ def test_a_gpu_id_outside_the_visible_range_fails_loudly(two_gpus):
     assert "NVIDIA GeForce RTX 5060 Ti" in str(excinfo.value)
 
 
+def test_require_cuda_ordinal_returns_the_ordinal_for_a_cuda_device():
+    assert cuda_util.require_cuda_ordinal(cuda_util.Device("cuda", 1), "音声認識") == 1
+
+
+def test_require_cuda_ordinal_maps_a_bare_cuda_device_to_zero():
+    assert cuda_util.require_cuda_ordinal(cuda_util.Device("cuda"), "音声認識") == 0
+
+
+def test_require_cuda_ordinal_rejects_a_cpu_device():
+    """A worker that only runs on CUDA must not silently accept a CPU resolution.
+
+    The whisper worker hardcodes `device="cuda"` and passes this ordinal alongside it.
+    Returning 0 for a CPU device would run on GPU 0 while the startup log said `cpu` --
+    a log/reality mismatch. The settings that would fix it are named in the message.
+    """
+    with pytest.raises(GpuNotFoundError) as excinfo:
+        cuda_util.require_cuda_ordinal(cuda_util.Device("cpu"), "音声認識")
+
+    message = str(excinfo.value)
+    assert "音声認識" in message
+    assert "gpu_id" in message and "gpu_name" in message
+
+
 def test_settings_asking_for_a_gpu_fall_back_to_cpu_when_none_is_visible(no_gpus):
     """A CPU-only host must still start. ADR-0078: enumeration failure looks like CPU."""
     by_id, _ = cuda_util.get_device(0, "")

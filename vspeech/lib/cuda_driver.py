@@ -119,9 +119,13 @@ def _load_cuda_driver() -> CudaDriver | None:
     resolves a device calls in, so an uncached version would repeat the same failure
     warning at each startup path.
     """
+    # AttributeError as well as OSError: `ctypes.WinDLL` is absent off win32, and a
+    # stub/shim nvcuda.dll that loads but lacks an export makes ctypes' symbol lookup
+    # raise AttributeError. Neither may escape -- the whole design rests on enumeration
+    # failure looking like "no devices" so `get_device` can fall back to CPU.
     try:
         lib = _open_nvcuda()
-    except OSError as e:
+    except (OSError, AttributeError) as e:
         logger.warning(
             "CUDA ドライバ (nvcuda.dll) を読み込めません。CPU で動作します: %s", e
         )
@@ -129,7 +133,7 @@ def _load_cuda_driver() -> CudaDriver | None:
     driver = _CtypesCudaDriver(lib)
     try:
         driver.initialize()
-    except OSError as e:
+    except (OSError, AttributeError) as e:
         logger.warning(
             "CUDA ドライバ (nvcuda.dll) を初期化できません。CPU で動作します: %s", e
         )
@@ -147,7 +151,7 @@ def list_cuda_devices() -> list[CudaDevice]:
         return []
     try:
         count = driver.device_count()
-    except OSError as e:
+    except (OSError, AttributeError) as e:
         logger.warning("CUDA デバイス数を取得できません: %s", e)
         return []
     devices: list[CudaDevice] = []

@@ -49,6 +49,21 @@ def half_precision_available(device: Device) -> bool:
     return False
 
 
+def require_cuda_ordinal(device: Device, purpose: str) -> int:
+    """The CUDA ordinal of `device`, for callers that only run on CUDA.
+
+    Some backends (whisper via ctranslate2) hardcode a CUDA device and take the ordinal
+    separately. Handing them 0 for a CPU-resolved device would run on GPU 0 while the
+    startup log said `cpu`. Fail instead, naming the settings that decide this.
+    """
+    if device.type != "cuda":
+        raise GpuNotFoundError(
+            f"{purpose} は GPU が必要ですが、デバイスが {device} に解決されました。"
+            " gpu_id か gpu_name を設定してください。"
+        )
+    return device.index if device.index is not None else 0
+
+
 def get_device(gpu_id: int | None, gpu_name: str) -> tuple[Device, str]:
     """Resolve the configured GPU, or CPU.
 

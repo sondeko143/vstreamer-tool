@@ -129,6 +129,25 @@ def test_missing_driver_is_reported_once(monkeypatch, caplog, uncached_loader):
     assert "CUDA ドライバ" in records[0].getMessage()
 
 
+def test_a_driver_missing_an_export_yields_no_devices(monkeypatch, uncached_loader):
+    """A loadable but incomplete nvcuda.dll is still "no devices", not a crash.
+
+    ctypes raises AttributeError -- not OSError -- when a symbol is absent, and
+    `ctypes.WinDLL` itself is an AttributeError off win32. Either escaping would kill
+    the CPU fallback the whole design rests on. Stub/shim drivers shipped by remote
+    desktop and virtualisation layers are the realistic trigger.
+    """
+
+    class LibMissingCuInit:
+        def __getattr__(self, name):
+            raise AttributeError(f"function '{name}' not found")
+
+    monkeypatch.setattr(cuda_driver, "_open_nvcuda", lambda: LibMissingCuInit())
+
+    assert cuda_driver._load_cuda_driver() is None
+    assert cuda_driver.list_cuda_devices() == []
+
+
 def test_real_driver_reports_self_consistent_devices(uncached_loader):
     """On a host that has a driver, the real ctypes path agrees with itself.
 

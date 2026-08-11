@@ -310,18 +310,20 @@ async def transcript_worker_whisper(
     from faster_whisper import WhisperModel
 
     from vspeech.lib.cuda_util import get_device
+    from vspeech.lib.cuda_util import require_cuda_ordinal
 
     with worker_startup("transcription"):
         device, device_name = get_device(whisper_config.gpu_id, whisper_config.gpu_name)
         logger.info("transcript worker device: %s, %s", device, device_name)
 
+        # This backend is CUDA-only (`device="cuda"` below), so a CPU resolution has to
+        # stop here rather than silently become ordinal 0 -- the log above would then
+        # say `cpu` while the model ran on GPU 0 (ADR-0078).
         model = WhisperModel(
             whisper_config.model,
             device="cuda",
             compute_type="float16",
-            # `Device("cpu")` has an index of None; ctranslate2 wants a real ordinal.
-            # Same guard as create_session's device_id (ADR-0078).
-            device_index=device.index if device.index is not None else 0,
+            device_index=require_cuda_ordinal(device, "音声認識 (whisper)"),
         )
         logger.info("transcript worker [whisper] started")
         # Create before warmup (as GCP/AMI do) so a missing VAD model fails loud
