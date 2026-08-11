@@ -1,6 +1,6 @@
 # 0078. デバイス解決と ONNX プロバイダ判定を torch から切り離す（0024 を refine）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-11
 - 効力: 既定
 - Related: refines [ADR-0024](0024-onnx-session-single-factory.md); spec [2026-08-11-torch-free-device-layer-design.md](../superpowers/specs/2026-08-11-torch-free-device-layer-design.md); [ADR-0028](0028-migrate-to-cuda-13.md), [ADR-0039](0039-whisper-hosts-need-cuda12-toolkit.md)（ドライバ要件）; [ADR-0079](0079-fp16-by-compute-capability.md)（同じ列挙経路に乗る判定）

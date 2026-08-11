@@ -1,6 +1,6 @@
 # 0079. fp16 の可否を GPU の製品名ではなく compute capability で判定する
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-11
 - 効力: 既定
 - Related: [ADR-0078](0078-torch-free-device-resolution.md)（compute capability を取得する列挙経路）; spec [2026-08-11-torch-free-device-layer-design.md](../superpowers/specs/2026-08-11-torch-free-device-layer-design.md)
