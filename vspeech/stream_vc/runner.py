@@ -155,14 +155,14 @@ def build_stream_vc_runtime(sv_config: StreamVcConfig) -> dict[str, Any]:
 
     from vspeech.config import F0ExtractorType
     from vspeech.lib.cuda_util import get_device
+    from vspeech.lib.cuda_util import half_precision_available
     from vspeech.lib.onnx_session import create_session
-    from vspeech.lib.rvc import half_precision_available
     from vspeech.lib.rvc import load_hubert_model
 
     rvc = sv_config.rvc
     device, device_name = get_device(rvc.gpu_id, rvc.gpu_name)
     logger.info("stream_vc device: %s, %s", device, device_name)
-    half_available = half_precision_available(id=device.index)
+    half_available = half_precision_available(device)
     hubert_model = load_hubert_model(
         file_name=rvc.hubert_model_file, device=device, is_half=half_available
     )

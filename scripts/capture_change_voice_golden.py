@@ -62,8 +62,8 @@ def build_rvc_runtime(config_path: Path) -> dict[str, Any]:
     from vspeech.config import Config
     from vspeech.config import F0ExtractorType
     from vspeech.lib.cuda_util import get_device
+    from vspeech.lib.cuda_util import half_precision_available
     from vspeech.lib.onnx_session import create_session
-    from vspeech.lib.rvc import half_precision_available
     from vspeech.lib.rvc import load_hubert_model
 
     with open(config_path, "rb") as f:
@@ -71,7 +71,7 @@ def build_rvc_runtime(config_path: Path) -> dict[str, Any]:
     rvc_config = config.rvc
 
     device, _ = get_device(rvc_config.gpu_id, rvc_config.gpu_name)
-    half_available = half_precision_available(id=device.index)
+    half_available = half_precision_available(device)
     hubert_model = load_hubert_model(
         file_name=rvc_config.hubert_model_file, device=device, is_half=half_available
     )

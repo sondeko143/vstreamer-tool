@@ -17,6 +17,8 @@ from typing import cast
 import numpy as np
 import pytest
 
+from vspeech.lib.cuda_util import Device
+
 _ASSET = os.environ.get("VSPEECH_FCPE_ONNX")
 
 
@@ -40,7 +42,7 @@ def test_fcpe_onnx_matches_torch():
     ref = ref_t.squeeze(-1).squeeze(0).cpu().numpy()
 
     assert _ASSET is not None
-    sess = create_session(Path(_ASSET), torch.device("cpu"))
+    sess = create_session(Path(_ASSET), Device("cpu"))
     got_raw = cast(np.ndarray, sess.run(None, {"waveform": wav[None, :]})[0])
     got = got_raw.squeeze(-1).squeeze(0)
 
@@ -68,7 +70,7 @@ def test_fcpe_onnx_generalizes_over_length_and_zeros_unvoiced():
     assert _ASSET is not None
     sr = 16000
     bundled = torchfcpe.spawn_bundled_infer_model(torch.device("cpu")).eval()
-    sess = create_session(Path(_ASSET), torch.device("cpu"))
+    sess = create_session(Path(_ASSET), Device("cpu"))
 
     # Check the voiced tone matches at several lengths (including a non-multiple of the
     # hop and one near the minimum length)

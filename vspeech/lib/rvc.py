@@ -14,6 +14,7 @@ from onnxruntime import InferenceSession
 from torch.nn import functional
 
 from vspeech.config import RvcConfig
+from vspeech.lib.cuda_util import Device
 from vspeech.lib.onnx_session import create_session
 from vspeech.lib.pitch_extract import pitch_extract
 from vspeech.logger import logger
@@ -103,21 +104,17 @@ class HubertSession:
     is_half: bool
 
 
-def half_precision_available(id: int):
-    try:
-        gpuName = torch.cuda.get_device_name(id).upper()
-        if (
-            ("16" in gpuName and "V100" not in gpuName)
-            or "P40" in gpuName.upper()
-            or "1070" in gpuName
-            or "1080" in gpuName
-        ):
-            return False
-    except Exception as e:
-        logger.warning("%s", e)
-        return False
+def _torch_device(device: Device) -> torch.device:
+    """The one place the torch-free `Device` becomes a `torch.device` (ADR-0078).
 
-    return True
+    torch lives inside the conversion path only; everything upstream of here -- device
+    resolution, session creation, the whisper worker -- speaks `Device` and never
+    imports torch. `Device("cuda")` has an index of None, which torch would keep as an
+    unindexed device; pin it to 0 so the io_binding path always has a real ordinal.
+    """
+    if device.type == "cuda":
+        return torch.device("cuda", device.index if device.index is not None else 0)
+    return torch.device("cpu")
 
 
 @lru_cache(maxsize=4)
@@ -286,7 +283,7 @@ def infer(
 
 
 def _select_onnx_file(
-    asset_dir: Path, device: torch.device, is_half: bool
+    asset_dir: Path, device: Device, is_half: bool
 ) -> tuple[Path, bool]:
     """Return the ONNX file to use and whether it is fp16.
 
@@ -306,9 +303,7 @@ def _select_onnx_file(
     return fp32, False
 
 
-def load_hubert_model(
-    file_name: Path, device: torch.device, is_half: bool
-) -> HubertSession:
+def load_hubert_model(file_name: Path, device: Device, is_half: bool) -> HubertSession:
     """Load the ONNX-ified ContentVec asset directory (the output of
     scripts/export_hubert_onnx.py)."""
     asset_dir = file_name.expanduser()
@@ -436,7 +431,7 @@ def change_voice(
     rvc_config: RvcConfig,
     voice_sample_rate: int,
     target_sample_rate: int,
-    device: torch.device,
+    device: Device,
     emb_output_layer: int,
     use_final_proj: bool,
     hubert_model: HubertSession,
@@ -445,19 +440,20 @@ def change_voice(
     f0_session: InferenceSession | None,
 ) -> NDArray[np.int16]:
     vc_start_time = time.time()
+    torch_dev = _torch_device(device)
     audio_np = _pad_input_to_block(voice_frames)
-    audio = torch.from_numpy(audio_np).to(device=device, dtype=torch.float32)
+    audio = torch.from_numpy(audio_np).to(device=torch_dev, dtype=torch.float32)
 
-    resampler = get_resampler(voice_sample_rate, HUBERT_SAMPLE_RATE, device)
+    resampler = get_resampler(voice_sample_rate, HUBERT_SAMPLE_RATE, torch_dev)
     audio = resampler(audio).unsqueeze(0)
 
     audio_pad, t_pad_tgt = _quality_padding(audio, rvc_config, target_sample_rate)
-    sid = torch.tensor(0, device=device).unsqueeze(0).long()
+    sid = torch.tensor(0, device=torch_dev).unsqueeze(0).long()
 
     feats = _extract_hubert_feats(
         hubert_model=hubert_model,
         audio_pad=audio_pad,
-        device=device,
+        device=torch_dev,
         emb_output_layer=emb_output_layer,
         use_final_proj=use_final_proj,
     )
@@ -470,7 +466,7 @@ def change_voice(
         rvc_config=rvc_config,
         f0_enabled=f0_enabled,
         p_len=p_len,
-        device=device,
+        device=torch_dev,
         f0_session=f0_session,
     )
 
@@ -482,7 +478,7 @@ def change_voice(
     is_model_half = _is_model_half(session)
     feats_len = feats.shape[1]
     pitch, pitchf = _align_pitch_to_feats(pitch, pitchf, feats_len)
-    p_len_tensor = torch.tensor([feats_len], device=device).long()
+    p_len_tensor = torch.tensor([feats_len], device=torch_dev).long()
 
     with torch.inference_mode():
         audio1 = _to_int16(

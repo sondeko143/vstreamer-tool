@@ -1,27 +1,87 @@
-from typing import Any
+"""Which device to run on, and whether fp16 is usable there (ADR-0078 / ADR-0079).
 
-import torch
+torch-free on purpose. `Device` mirrors `torch.device`'s `type` / `index` attributes and
+its `str()`, so the conversion paths that still use torch (RVC) can build a real
+`torch.device` at their boundary, and the startup log line is unchanged.
+"""
+
+from dataclasses import dataclass
+from typing import Literal
+
+from vspeech.exceptions import GpuNotFoundError
+from vspeech.lib.cuda_driver import list_cuda_devices
+
+# Compute capability at or above which fp16 runs at least as fast as fp32 (Volta
+# onwards, where the tensor cores are). See ADR-0079 for why this replaced a product
+# name blacklist.
+_TENSOR_CORE_CC = (7, 0)
+# GP100 is the one pre-Volta part with 2:1 fp16. Every other Pascal (6.1 / 6.2) runs it
+# at 1/64 and is unusable.
+_GP100_CC = (6, 0)
 
 
-def get_device(gpu_id: int | None, gpu_name: str) -> tuple[torch.device, str]:
-    # `gpu_id is not None`, not `gpu_id`. 0 is a valid device number; "unset" is None
-    # (`gpu_id: int | None = None` in config.py). When both are set, gpu_id wins over
-    # gpu_name (it is checked first). That is deliberate but untested -- in practice
-    # only one of the two is ever set, so it does no harm.
-    if gpu_id is not None and torch.cuda.is_available():
-        prop = torch.cuda.get_device_properties(gpu_id)
-        dev = torch.device("cuda", gpu_id)
-        return dev, prop.name
-    if gpu_name and torch.cuda.is_available():
-        index, prop = get_device_index_by_name(gpu_name)
-        return torch.device("cuda", index), prop.name
-    return torch.device("cpu"), "cpu"
+@dataclass(frozen=True)
+class Device:
+    """A compute device, in the shape `torch.device` presented."""
+
+    type: Literal["cuda", "cpu"]
+    index: int | None = None
+
+    def __str__(self) -> str:
+        if self.type == "cuda" and self.index is not None:
+            return f"cuda:{self.index}"
+        return self.type
 
 
-def get_device_index_by_name(name_query: str) -> tuple[int, Any]:
-    count = torch.cuda.device_count()
-    for i in range(count):
-        device = torch.cuda.get_device_properties(i)
-        if name_query in device.name:
-            return i, device
-    return 0, None
+def supports_fp16(cc_major: int, cc_minor: int) -> bool:
+    """Whether a device of this compute capability runs fp16 at a usable rate."""
+    return (cc_major, cc_minor) >= _TENSOR_CORE_CC or (cc_major, cc_minor) == _GP100_CC
+
+
+def half_precision_available(device: Device) -> bool:
+    """Whether fp16 should be used on `device`."""
+    if device.type != "cuda":
+        return False
+    ordinal = device.index if device.index is not None else 0
+    for cuda_device in list_cuda_devices():
+        if cuda_device.ordinal == ordinal:
+            return supports_fp16(cuda_device.cc_major, cuda_device.cc_minor)
+    return False
+
+
+def get_device(gpu_id: int | None, gpu_name: str) -> tuple[Device, str]:
+    """Resolve the configured GPU, or CPU.
+
+    `gpu_id is not None`, not `gpu_id`. 0 is a valid device number; "unset" is None
+    (`gpu_id: int | None = None` in config.py). When both are set, gpu_id wins over
+    gpu_name (it is checked first). That is deliberate but untested -- in practice
+    only one of the two is ever set, so it does no harm.
+
+    No CUDA device visible means CPU, whatever the config asked for: a host without a
+    driver has to start. A `gpu_name` that matches none of the devices that *are*
+    visible is a different matter and raises (ADR-0078).
+    """
+    devices = list_cuda_devices()
+    if not devices:
+        return Device("cpu"), "cpu"
+    if gpu_id is not None:
+        for device in devices:
+            if device.ordinal == gpu_id:
+                return Device("cuda", gpu_id), device.name
+        raise GpuNotFoundError(
+            f"gpu_id {gpu_id} のデバイスがありません。"
+            f"見えている GPU: {_describe(devices)}"
+        )
+    if gpu_name:
+        for device in devices:
+            if gpu_name in device.name:
+                return Device("cuda", device.ordinal), device.name
+        raise GpuNotFoundError(
+            f"gpu_name '{gpu_name}' に一致する GPU がありません。"
+            f"見えている GPU: {_describe(devices)}"
+        )
+    return Device("cpu"), "cpu"
+
+
+def _describe(devices: list) -> str:
+    return ", ".join(f"{d.ordinal}={d.name}" for d in devices)

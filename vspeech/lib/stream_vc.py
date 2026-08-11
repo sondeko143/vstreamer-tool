@@ -24,11 +24,11 @@ if TYPE_CHECKING:
     # than module-level) still lets this module import on a CPU machine
     # without torch/onnxruntime/the rvc extra.
     import numpy as np
-    import torch
     from numpy.typing import NDArray
     from onnxruntime import InferenceSession
 
     from vspeech.config import RvcConfig
+    from vspeech.lib.cuda_util import Device
     from vspeech.lib.rvc import HubertSession
 
 
@@ -176,7 +176,7 @@ class StreamingVc:
     def __init__(
         self,
         rvc_config: RvcConfig,
-        device: torch.device,
+        device: Device,
         hubert_model: HubertSession,
         session: InferenceSession,
         f0_session: InferenceSession | None,
@@ -193,9 +193,12 @@ class StreamingVc:
         import torch
 
         from vspeech.lib.rvc import _is_model_half
+        from vspeech.lib.rvc import _torch_device
 
         self.rvc_config = rvc_config
-        self.device = device
+        # Converted once, here: everything below this line is torch, everything above it
+        # (device resolution, session creation) is torch-free (ADR-0078).
+        self.device = _torch_device(device)
         self.hubert_model = hubert_model
         self.session = session
         self.f0_session = f0_session
@@ -206,8 +209,10 @@ class StreamingVc:
         self.block_len = block_len
         self.context_len = context_len
         self._is_half = _is_model_half(session)
-        self._sid = torch.tensor(0, device=device).unsqueeze(0).long()
-        self._context = torch.zeros(context_len, device=device, dtype=torch.float32)
+        self._sid = torch.tensor(0, device=self.device).unsqueeze(0).long()
+        self._context = torch.zeros(
+            context_len, device=self.device, dtype=torch.float32
+        )
 
         self.crossfade_len = crossfade_len
         # SOLA search half-width (in 16kHz input samples). 0 disables SOLA = the previous

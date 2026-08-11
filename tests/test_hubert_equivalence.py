@@ -31,6 +31,7 @@ from scripts.hubert_metrics import MAX_ABS_MAX
 from scripts.hubert_metrics import MAX_ABS_MAX_FP16
 from scripts.hubert_metrics import feature_cosine
 from scripts.hubert_metrics import feature_max_abs_diff
+from vspeech.lib.cuda_util import Device
 
 _ASSET_ENV = "VSPEECH_HUBERT_ASSET_DIR"
 _GOLDEN_ENV = "VSPEECH_HUBERT_GOLDEN_DIR"
@@ -55,9 +56,10 @@ pytestmark = pytest.mark.skipif(
 CASES = [(9, True, "l9_proj"), (12, False, "l12_raw")]
 
 
-def _compare(device: torch.device, is_half: bool, case) -> tuple[float, float]:
+def _compare(device: Device, is_half: bool, case) -> tuple[float, float]:
     """`is_half` also selects the reference npz used for the check. The fp16 reference is
     torch fp16."""
+    from vspeech.lib.rvc import _torch_device
     from vspeech.lib.rvc import extract_features
     from vspeech.lib.rvc import load_hubert_model
 
@@ -75,7 +77,7 @@ def _compare(device: torch.device, is_half: bool, case) -> tuple[float, float]:
     out = extract_features(
         model,
         torch.from_numpy(wav).unsqueeze(0),
-        device,
+        _torch_device(device),
         emb_output_layer=emb_output_layer,
         use_final_proj=use_final_proj,
     )
@@ -91,7 +93,7 @@ def test_fp32_features_match_fairseq_golden(
     emb_output_layer, use_final_proj, golden_key
 ):
     cosine, max_abs = _compare(
-        torch.device("cpu"), False, (emb_output_layer, use_final_proj, golden_key)
+        Device("cpu"), False, (emb_output_layer, use_final_proj, golden_key)
     )
     assert cosine >= COSINE_MIN, f"cosine {cosine:.8f} < {COSINE_MIN}"
     assert max_abs <= MAX_ABS_MAX, f"max-abs {max_abs:.3e} > {MAX_ABS_MAX:.1e}"
@@ -110,7 +112,7 @@ def test_fp16_features_match_the_torch_fp16_reference(
     """Going to ONNX did not change the fp16 behaviour. Never compared against the fp32
     golden."""
     cosine, max_abs = _compare(
-        torch.device("cuda", 0), True, (emb_output_layer, use_final_proj, golden_key)
+        Device("cuda", 0), True, (emb_output_layer, use_final_proj, golden_key)
     )
     assert cosine >= COSINE_MIN_FP16, f"cosine {cosine:.8f} < {COSINE_MIN_FP16}"
     assert max_abs <= MAX_ABS_MAX_FP16, (

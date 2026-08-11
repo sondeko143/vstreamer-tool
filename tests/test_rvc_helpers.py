@@ -187,35 +187,35 @@ def test_ort_output_to_torch_falls_back_to_numpy():
     assert out[0, 1, 2].item() == 5.0
 
 
-def test_get_device_treats_gpu_id_zero_as_a_real_device(monkeypatch):
-    """`gpu_id = 0` means cuda:0, not "unset".
+# Device resolution moved to tests/test_cuda_util.py along with the code (ADR-0078).
+# Both behaviours these tests pinned -- `gpu_id = 0` is a real device, and no GPU
+# setting means CPU -- are covered there, without torch.
 
-    "Unset" is `None` (`gpu_id: int | None = None`). Writing `if gpu_id and ...` would
-    reject 0 as falsy and drop the `gpu_id = 0` configuration shown in
-    `config.toml.example` down to a CPU device -- which then makes `check_cuda_provider`
-    fail at vc worker startup.
+
+def test_the_torch_boundary_converts_the_device_value():
+    """RVC is where the torch-free `Device` becomes a real `torch.device` (ADR-0078).
+
+    This is the only conversion point, so a mistake here would silently move every
+    tensor to the wrong GPU.
     """
     import torch
 
-    import vspeech.lib.cuda_util as cuda_util
+    from vspeech.lib.cuda_util import Device
+    from vspeech.lib.rvc import _torch_device
 
-    class _Prop:
-        name = "FakeGPU"
-
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda i: _Prop())
-
-    device, name = cuda_util.get_device(0, "")
-    assert device == torch.device("cuda", 0)
-    assert name == "FakeGPU"
+    assert _torch_device(Device("cpu")) == torch.device("cpu")
+    assert _torch_device(Device("cuda", 1)) == torch.device("cuda", 1)
 
 
-def test_get_device_falls_back_to_cpu_when_gpu_id_is_none(monkeypatch):
+def test_the_torch_boundary_maps_a_bare_cuda_device_to_index_zero():
+    """`Device("cuda")` has index None; torch tensors need a concrete ordinal.
+
+    Leaving it as None would give `torch.device("cuda")`, whose index is None, and the
+    io_binding path would then pass None where ORT wants a device id.
+    """
     import torch
 
-    import vspeech.lib.cuda_util as cuda_util
+    from vspeech.lib.cuda_util import Device
+    from vspeech.lib.rvc import _torch_device
 
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    device, name = cuda_util.get_device(None, "")
-    assert device == torch.device("cpu")
-    assert name == "cpu"
+    assert _torch_device(Device("cuda")) == torch.device("cuda", 0)

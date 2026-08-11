@@ -65,6 +65,14 @@ class DeviceNotFoundError(Exception):
     pass
 
 
+class GpuNotFoundError(Exception):
+    """`gpu_name` names no visible CUDA device (ADR-0078).
+
+    Deliberately fatal rather than a fall back to CPU: whisper and RVC on CPU are slow
+    enough that a silent downgrade reads as a hang, not as a misconfiguration.
+    """
+
+
 class DeviceRateUnresolvedError(DeviceNotFoundError):
     """The device's true sample rate could not be determined (ADR-0074).
 

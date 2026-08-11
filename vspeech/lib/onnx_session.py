@@ -5,6 +5,10 @@ construct one anywhere else: a duplicate means the execution-provider choice onl
 gets fixed in one of them. `tests/test_onnx_session.py` enforces this. The CPU-pinned
 Silero VAD (`vad.py`) is the only exception.
 
+Whether the CUDA EP is requested comes from onnxruntime's own provider list, never from
+another framework's view of the GPU (ADR-0078). A torch-shaped answer would be about a
+different library's build, not about what this session can actually run on.
+
 `log_severity` is ORT's log threshold (0=VERBOSE / 1=INFO / 2=WARNING / 3=ERROR /
 4=FATAL). The default of `SessionOptions().log_severity_level` is **-1 = inherit the
 Env level** (usually WARNING); leaving this argument at its default None preserves that
@@ -18,18 +22,20 @@ lose programmatically instead).
 from pathlib import Path
 from typing import Any
 
-import torch
 from onnxruntime import GraphOptimizationLevel
 from onnxruntime import InferenceSession
 from onnxruntime import SessionOptions
+from onnxruntime import get_available_providers
+
+from vspeech.lib.cuda_util import Device
 
 
 def create_session(
-    model_file: Path, device: torch.device, log_severity: int | None = None
+    model_file: Path, device: Device, log_severity: int | None = None
 ) -> InferenceSession:
     """Open a session honouring `device`.
 
-    `torch.device("cuda")` has an `index` of `None`. Pass 0 to ORT in that case.
+    `Device("cuda")` has an `index` of `None`. Pass 0 to ORT in that case.
     """
     sess_options = SessionOptions()
     sess_options.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
@@ -37,7 +43,7 @@ def create_session(
         sess_options.log_severity_level = log_severity
     providers = ["CPUExecutionProvider"]
     providers_options: list[dict[str, Any]] = [{}]
-    if device.type == "cuda" and torch.cuda.is_available():
+    if device.type == "cuda" and "CUDAExecutionProvider" in get_available_providers():
         providers.insert(0, "CUDAExecutionProvider")
         providers_options.insert(
             0,

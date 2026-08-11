@@ -319,7 +319,9 @@ async def transcript_worker_whisper(
             whisper_config.model,
             device="cuda",
             compute_type="float16",
-            device_index=device.index,
+            # `Device("cpu")` has an index of None; ctranslate2 wants a real ordinal.
+            # Same guard as create_session's device_id (ADR-0078).
+            device_index=device.index if device.index is not None else 0,
         )
         logger.info("transcript worker [whisper] started")
         # Create before warmup (as GCP/AMI do) so a missing VAD model fails loud

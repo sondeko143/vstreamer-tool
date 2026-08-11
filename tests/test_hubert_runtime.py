@@ -14,6 +14,8 @@ import torch
 from onnx import TensorProto
 from onnx import helper
 
+from vspeech.lib.cuda_util import Device
+
 L9_DIM = 2
 L12_DIM = 3
 
@@ -75,7 +77,7 @@ def _wav() -> torch.Tensor:
 def test_load_hubert_model_opens_the_fp32_graph(asset_dir):
     from vspeech.lib.rvc import load_hubert_model
 
-    model = load_hubert_model(asset_dir, torch.device("cpu"), is_half=False)
+    model = load_hubert_model(asset_dir, Device("cpu"), is_half=False)
     assert model.is_half is False
     assert model.output_names == {
         (9, True): "feats_l9_proj",
@@ -87,7 +89,7 @@ def test_select_onnx_file_prefers_fp16_on_cuda(tmp_path):
     from vspeech.lib.rvc import _select_onnx_file
 
     asset = _write_asset(tmp_path, fp16=True)
-    path, is_half = _select_onnx_file(asset, torch.device("cuda", 0), is_half=True)
+    path, is_half = _select_onnx_file(asset, Device("cuda", 0), is_half=True)
     assert path.name == "hubert_fp16.onnx"
     assert is_half is True
 
@@ -98,7 +100,7 @@ def test_select_onnx_file_uses_fp32_on_cpu_even_when_half_requested(tmp_path):
     from vspeech.lib.rvc import _select_onnx_file
 
     asset = _write_asset(tmp_path, fp16=True)
-    path, is_half = _select_onnx_file(asset, torch.device("cpu"), is_half=True)
+    path, is_half = _select_onnx_file(asset, Device("cpu"), is_half=True)
     assert path.name == "hubert_fp32.onnx"
     assert is_half is False
 
@@ -107,7 +109,7 @@ def test_select_onnx_file_falls_back_to_fp32_when_fp16_absent(tmp_path):
     from vspeech.lib.rvc import _select_onnx_file
 
     asset = _write_asset(tmp_path, fp16=False)
-    path, is_half = _select_onnx_file(asset, torch.device("cuda", 0), is_half=True)
+    path, is_half = _select_onnx_file(asset, Device("cuda", 0), is_half=True)
     assert path.name == "hubert_fp32.onnx"
     assert is_half is False
 
@@ -116,14 +118,14 @@ def test_select_onnx_file_raises_when_asset_missing(tmp_path):
     from vspeech.lib.rvc import _select_onnx_file
 
     with pytest.raises(FileNotFoundError, match="hubert_fp32.onnx"):
-        _select_onnx_file(tmp_path, torch.device("cpu"), is_half=False)
+        _select_onnx_file(tmp_path, Device("cpu"), is_half=False)
 
 
 def test_extract_features_picks_the_projected_output(asset_dir):
     from vspeech.lib.rvc import extract_features
     from vspeech.lib.rvc import load_hubert_model
 
-    model = load_hubert_model(asset_dir, torch.device("cpu"), is_half=False)
+    model = load_hubert_model(asset_dir, Device("cpu"), is_half=False)
     out = extract_features(
         model, _wav(), torch.device("cpu"), emb_output_layer=9, use_final_proj=True
     )
@@ -135,7 +137,7 @@ def test_extract_features_picks_the_raw_output(asset_dir):
     from vspeech.lib.rvc import extract_features
     from vspeech.lib.rvc import load_hubert_model
 
-    model = load_hubert_model(asset_dir, torch.device("cpu"), is_half=False)
+    model = load_hubert_model(asset_dir, Device("cpu"), is_half=False)
     out = extract_features(
         model, _wav(), torch.device("cpu"), emb_output_layer=12, use_final_proj=False
     )
@@ -147,7 +149,7 @@ def test_extract_features_returns_the_graph_values(asset_dir):
     from vspeech.lib.rvc import extract_features
     from vspeech.lib.rvc import load_hubert_model
 
-    model = load_hubert_model(asset_dir, torch.device("cpu"), is_half=False)
+    model = load_hubert_model(asset_dir, Device("cpu"), is_half=False)
     wav = _wav()
     out = extract_features(
         model, wav, torch.device("cpu"), emb_output_layer=9, use_final_proj=True
@@ -162,7 +164,7 @@ def test_extract_features_rejects_an_unsupported_combination(asset_dir):
     from vspeech.lib.rvc import extract_features
     from vspeech.lib.rvc import load_hubert_model
 
-    model = load_hubert_model(asset_dir, torch.device("cpu"), is_half=False)
+    model = load_hubert_model(asset_dir, Device("cpu"), is_half=False)
     with pytest.raises(RuntimeError) as excinfo:
         extract_features(
             model, _wav(), torch.device("cpu"), emb_output_layer=9, use_final_proj=False

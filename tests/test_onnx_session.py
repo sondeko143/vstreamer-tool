@@ -7,13 +7,16 @@ protects all three.
 import ast
 from pathlib import Path
 
-import torch
-
 import vspeech.lib.onnx_session as onnx_session
+from vspeech.lib.cuda_util import Device
 
 
 def _capture(monkeypatch, cuda_available: bool):
-    """Replace InferenceSession and capture the providers / provider_options passed in."""
+    """Replace InferenceSession and capture the providers / provider_options passed in.
+
+    `cuda_available` drives onnxruntime's own provider list, which is what decides the
+    EP since ADR-0078 -- not torch.
+    """
     captured: dict = {}
 
     def fake_session(path, sess_options, providers, provider_options):
@@ -22,8 +25,11 @@ def _capture(monkeypatch, cuda_available: bool):
         captured["provider_options"] = provider_options
         return object()
 
+    available = ["CPUExecutionProvider"]
+    if cuda_available:
+        available.insert(0, "CUDAExecutionProvider")
     monkeypatch.setattr(onnx_session, "InferenceSession", fake_session)
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: cuda_available)
+    monkeypatch.setattr(onnx_session, "get_available_providers", lambda: available)
     return captured
 
 
@@ -36,7 +42,7 @@ def test_cpu_device_never_gets_the_cuda_ep(tmp_path, monkeypatch):
     """
     captured = _capture(monkeypatch, cuda_available=True)
 
-    onnx_session.create_session(tmp_path / "m.onnx", torch.device("cpu"))
+    onnx_session.create_session(tmp_path / "m.onnx", Device("cpu"))
 
     assert captured["providers"] == ["CPUExecutionProvider"]
     assert captured["provider_options"] == [{}]
@@ -45,31 +51,36 @@ def test_cpu_device_never_gets_the_cuda_ep(tmp_path, monkeypatch):
 def test_cuda_device_gets_the_cuda_ep_first(tmp_path, monkeypatch):
     captured = _capture(monkeypatch, cuda_available=True)
 
-    onnx_session.create_session(tmp_path / "m.onnx", torch.device("cuda", 3))
+    onnx_session.create_session(tmp_path / "m.onnx", Device("cuda", 3))
 
     assert captured["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
     assert captured["provider_options"][0]["device_id"] == 3
 
 
 def test_a_bare_cuda_device_yields_device_id_zero(tmp_path, monkeypatch):
-    """`torch.device("cuda")` has index None. None must never be passed to ORT.
+    """`Device("cuda")` has index None. None must never be passed to ORT.
 
     This test is the only thing pinning the `device.index if ... else 0` guard against a
     leaking None.
     """
     captured = _capture(monkeypatch, cuda_available=True)
 
-    onnx_session.create_session(tmp_path / "m.onnx", torch.device("cuda"))
+    onnx_session.create_session(tmp_path / "m.onnx", Device("cuda"))
 
     assert captured["provider_options"][0]["device_id"] == 0
     assert captured["provider_options"][0]["device_id"] is not None
 
 
 def test_cpu_only_box_never_gets_the_cuda_ep(tmp_path, monkeypatch):
-    """With no CUDA available, even a requested cuda device gets the CPU EP only."""
+    """onnxruntime without a CUDA EP gets the CPU EP only, even for a cuda device.
+
+    Asking ORT what it can actually provide is the point of ADR-0078: a build without
+    the CUDA EP would previously still have been asked for it whenever torch happened
+    to see a GPU.
+    """
     captured = _capture(monkeypatch, cuda_available=False)
 
-    onnx_session.create_session(tmp_path / "m.onnx", torch.device("cuda", 0))
+    onnx_session.create_session(tmp_path / "m.onnx", Device("cuda", 0))
 
     assert captured["providers"] == ["CPUExecutionProvider"]
     assert captured["provider_options"] == [{}]

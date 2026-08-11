@@ -33,10 +33,10 @@ if TYPE_CHECKING:
     from pathlib import Path
     from typing import Any
 
-    import torch
     from onnxruntime import InferenceSession
 
     from vspeech.config import RvcConfig
+    from vspeech.lib.cuda_util import Device
 
 
 def make_voiced_signal(
@@ -157,8 +157,8 @@ def load_shared_runtime(
 
     from vspeech.config import Config
     from vspeech.lib.cuda_util import get_device
+    from vspeech.lib.cuda_util import half_precision_available
     from vspeech.lib.onnx_session import create_session
-    from vspeech.lib.rvc import half_precision_available
     from vspeech.lib.rvc import load_hubert_model
 
     with open(config_path, "rb") as f:
@@ -168,7 +168,7 @@ def load_shared_runtime(
 
     device, device_name = get_device(gpu_id, rvc_config.gpu_name)
     print(f"device: {device} ({device_name})")
-    half_available = half_precision_available(id=device.index)
+    half_available = half_precision_available(device)
     hubert_model = load_hubert_model(
         file_name=rvc_config.hubert_model_file, device=device, is_half=half_available
     )
@@ -188,7 +188,7 @@ def load_shared_runtime(
 
 
 def make_f0_session(
-    rvc_config: RvcConfig, f0: str, device: torch.device
+    rvc_config: RvcConfig, f0: str, device: Device
 ) -> InferenceSession | None:
     """Build the f0 session for "rmvpe"/"fcpe". None when the file is unset or missing."""
     from pathlib import Path

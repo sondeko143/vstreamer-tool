@@ -168,15 +168,15 @@ async def rvc_worker(
     in_queue: Queue[WorkerInput],
 ):
     from vspeech.lib.cuda_util import get_device
+    from vspeech.lib.cuda_util import half_precision_available
     from vspeech.lib.onnx_session import create_session
     from vspeech.lib.rvc import change_voice
-    from vspeech.lib.rvc import half_precision_available
     from vspeech.lib.rvc import load_hubert_model
 
     with worker_startup("vc"):
         device, device_name = get_device(rvc_config.gpu_id, rvc_config.gpu_name)
         logger.info("vc worker device: %s, %s", device, device_name)
-        half_available = half_precision_available(id=device.index)
+        half_available = half_precision_available(device)
         hubert_model = load_hubert_model(
             file_name=rvc_config.hubert_model_file,
             device=device,
