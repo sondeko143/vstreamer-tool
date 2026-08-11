@@ -94,3 +94,5 @@
 | [0075](0075-wire-sample-rate-validation.md) | ワイヤ形式の sample_rate を範囲 + 25Hz 格子で検証し、リサンプラ側にも比の上限を置く | Accepted | 2026-08-11 |
 | [0076](0076-preflight-device-rate-open-probe.md) | preflight はデバイスレートを実際に開いて検証し、比が分からない境界は標準レート族に対して確認する | Accepted | 2026-08-11 |
 | [0077](0077-device-stream-calls-on-one-thread.md) | デバイスストリームの blocking 呼び出しと close を 1 本のスレッドに直列化する | Accepted | 2026-08-11 |
+| [0078](0078-torch-free-device-resolution.md) | デバイス解決と ONNX プロバイダ判定を torch から切り離す（0024 を refine） | Proposed (refines 0024) | 2026-08-11 |
+| [0079](0079-fp16-by-compute-capability.md) | fp16 の可否を GPU の製品名ではなく compute capability で判定する | Proposed | 2026-08-11 |
