@@ -28,6 +28,7 @@ ADR-0078 で whisper 経路のコードからは torch を外したが、`rvc` e
 - [ ] 全 extra を同期した venv に `torch` / `torchaudio` / `faiss-cpu` が含まれない。
 - [ ] VC を有効にした設定で pipeline が起動し、プロセス内で torch がロードされない。
 - [ ] Stream VC・発話単位 VC・VAD ゲート・f0 抽出（rmvpe / fcpe）が、変更前と同じ設定ファイルのまま動作する。設定スキーマの破壊的変更がない。
+- [ ] GPU 推論が CUDAExecutionProvider で動作し続ける。CPU 実行への暗黙のフォールバックが起きない。
 - [ ] Stream VC の 1 ブロック変換出力が、同一入力・同一 seed で変更前実装と int16 bit 一致する。
 - [ ] 発話単位 VC の出力が既存の numeric golden の判定（相関・SNR）を満たす。満たさない場合は、実測値を記録した上で golden を再取得し、実機での聴感確認を経ている。
 - [ ] Stream VC の 1 推論あたりレイテンシの p50 が、変更前の測定値の +5% を超えて悪化しない。同一機材・同一設定・N≥200 tick で測定した p50 / p95 が両版について記録されている。

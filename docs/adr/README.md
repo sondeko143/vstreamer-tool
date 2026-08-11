@@ -99,3 +99,4 @@
 | [0080](0080-torch-free-rvc-runtime.md) | 変換経路も含めてランタイム全体を torch から切り離し、rvc extra から torch/torchaudio/faiss-cpu を外す（0078 の続き） | Proposed | 2026-08-12 |
 | [0081](0081-ort-native-value-binding.md) | ONNX セッション間の受け渡しを onnxruntime ネイティブの OrtValue に統一する（torch の dlpack ゼロコピーを捨てる） | Proposed | 2026-08-12 |
 | [0082](0082-rvc-resample-on-inhouse-polyphase.md) | RVC 経路のサンプルレート変換を自前ポリフェーズ実装に一本化する（torchaudio を廃止、0073 を変換経路へ拡張） | Proposed | 2026-08-12 |
+| [0083](0083-cuda-runtime-from-nvidia-wheels.md) | CUDA ランタイム（cuBLAS / cuDNN）の供給元を torch から nvidia wheel へ移す | Proposed | 2026-08-12 |

@@ -5,7 +5,12 @@
 
 ADR: [0080](../../adr/0080-torch-free-rvc-runtime.md) (Proposed / 既定)、
 [0081](../../adr/0081-ort-native-value-binding.md) (Proposed / 既定)、
-[0082](../../adr/0082-rvc-resample-on-inhouse-polyphase.md) (Proposed / 既定)
+[0082](../../adr/0082-rvc-resample-on-inhouse-polyphase.md) (Proposed / 既定)、
+[0083](../../adr/0083-cuda-runtime-from-nvidia-wheels.md) (Proposed / 既定)
+
+**実行順: 1 → 7 → 2 → 3 → 4 → 5 → 6。** Task 7 は Task 1 の実測（torch を外すと CUDA EP が
+ロードできない）を受けて後から足したもので、plan 全体の前提を左右するため早い段階で潰す。
+番号は既存 task を振り直さないために末尾のままにしてある。
 
 Spec: [2026-08-12-rvc-torch-free-runtime-design.md](../specs/2026-08-12-rvc-torch-free-runtime-design.md)
 
@@ -214,6 +219,7 @@ plan の記述より良い方法を見つけたら、良い方を採る。plan �
 
 **契約**
 - Consumes: Task 3 / Task 4 の完了（コードとテストが torch-free であること）。
+- Consumes: Task 7 の完了（CUDA ランタイムの供給元が torch 以外に確立していること）。
 - Produces: `rvc` extra が `torch` / `torchaudio` / `faiss-cpu` を宣言しない。
 - Produces: `poe export-hubert-onnx` と `poe export-fcpe-onnx` が、プロジェクト環境に torch が
   無い状態でも実行できる（`uv run --with` のオーバーレイから torch を供給する）。
@@ -251,8 +257,8 @@ plan の記述より良い方法を見つけたら、良い方を採る。plan �
 **範囲:** `docs/adr/`、`docs/adr/README.md`。
 
 **契約**
-- Consumes: Task 1〜5 の記録（比較結果・レイテンシ・golden・依存状態）。
-- Produces: ADR-0080 / 0081 / 0082 の Status が、実装の結果に応じて `Accepted` へ昇格するか、
+- Consumes: Task 1〜5 および Task 7 の記録（比較結果・レイテンシ・golden・依存状態）。
+- Produces: ADR-0080 / 0081 / 0082 / 0083 の Status が、実装の結果に応じて `Accepted` へ昇格するか、
   覆った場合は supersede される。
 
 **受入基準**
@@ -272,3 +278,45 @@ plan の記述より良い方法を見つけたら、良い方を採る。plan �
 - 記録した実測値と ADR の記述を突き合わせ、乖離がないことを確認する。
 
 **コミット単位:** ADR の Status 昇格と索引更新で 1 コミット。
+
+---
+
+### Task 7: CUDA ランタイムの供給元を torch から nvidia wheel へ移す（ADR-0083）
+
+**目的:** torch を外しても onnxruntime の CUDA 実行プロバイダが立つ状態を、依存を削る前に成立させる。
+
+**実行順:** Task 1 の直後（Task 2 より前）。この task が成立しなければ plan 全体の前提が崩れるため、
+先に潰す。番号だけが末尾にある。
+
+**範囲:** `pyproject.toml`、`uv.lock`、`vspeech/lib/onnx_session.py`、対応するテスト。
+
+**契約**
+- Consumes: `vspeech/lib/onnx_session.py` の `create_session`（既存の単一ファクトリ。
+  [ADR-0024](../../adr/0024-onnx-session-single-factory.md) の「ファクトリを二重化しない」を維持する）。
+- Consumes: `vspeech/worker/vc.py` と `vspeech/stream_vc/runner.py` が既に呼んでいる
+  `check_cuda_provider`（既存、fail loud の担い手。変更しない）。
+- Produces: `rvc` extra が CUDA ランタイム（cuBLAS / cuDNN ほか onnxruntime の CUDA EP が要求するもの）を
+  供給する nvidia wheel を宣言する。
+- Produces: GPU 対応セッションを開く経路が CUDA ライブラリのロードを保証する。保証する場所は 1 箇所だけ。
+
+**受入基準**
+- [ ] torch を import 不能にした状態で、実機の RVC デコーダ / HuBERT / f0 の各 ONNX 資産に対して
+      GPU セッションが開き、プロバイダ一覧に `CUDAExecutionProvider` が含まれる。
+- [ ] torch が存在する環境でも同じ経路が `CUDAExecutionProvider` を返し、CUDA DLL の二重ロードが
+      起きない。
+- [ ] CUDA ライブラリが供給されない状態では起動時に fail loud する。CPU 実行へ黙って落ちない。
+- [ ] `uv lock --check` の終了コードが 0。
+- [ ] `uv audit` の結果が変更前より悪化していない。
+- [ ] nvidia wheel 追加による venv のディスク増加量と、パイプラインの常駐メモリの変化が
+      実測で記録されている（Task 1 と同じ `vc-footprint` 手順を使う）。
+
+**検証**
+- torch を import 不能にした子プロセスで GPU セッションを開き、プロバイダ一覧を確認する
+  （成否は終了コードで判定する）。
+- `uv run --all-extras pytest` の終了コードが 0。
+- `uv lock --check` の終了コードが 0。
+- `uv run ruff format .` / `uv run ruff check .` / `uv run ty check` の終了コードが 0。
+- `uv run poe vc-footprint --config ~/.config/vstreamer/config_vc.toml --runs 3 --settle 10` を
+  Task 1 と同じ手順で実行し、常駐メモリを記録する。
+
+**コミット単位:** nvidia wheel の追加と、CUDA ライブラリ読み込みの保証で 1 コミット。
