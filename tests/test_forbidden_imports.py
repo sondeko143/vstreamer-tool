@@ -114,6 +114,34 @@ def test_consumer_path_is_torch_free():
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
 
+def test_device_layer_is_torch_free():
+    """Resolving a device and opening an ONNX session pull in no torch (ADR-0078).
+
+    This is the invariant the whisper pipeline's memory and startup time rest on: the
+    transcription worker infers with ctranslate2 and needs torch for nothing, but it
+    resolves a GPU through this layer. While that layer spoke `torch.device`, whisper
+    paid 477MB of RSS and 3.2s of startup for one integer.
+
+    The check targets the device layer rather than `vspeech.worker.transcription`
+    because that worker defers both `faster_whisper` and `get_device` into the function
+    body -- importing the module proves nothing.
+    """
+    code = (
+        "import sys\n"
+        "import vspeech.lib.cuda_driver\n"
+        "import vspeech.lib.cuda_util\n"
+        "import vspeech.lib.onnx_session\n"
+        "assert 'torch' not in sys.modules, sorted(sys.modules)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+
+
 def test_the_entry_point_never_loads_pydantic_settings():
     """Nothing on the startup path drags the env-config machinery back in (ADR-0066).
 

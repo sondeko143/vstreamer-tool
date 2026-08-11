@@ -36,7 +36,9 @@ dependencies = [
 voicevox = ["voicevox-core"]
 whisper = [
     "faster-whisper==1.2.1",
-    "torch==2.13.0 ; sys_platform == 'win32'",
+    # torch は入れない。推論は ctranslate2 が行い、GPU の選択は CUDA driver API 経由に
+    # なった (ADR-0078)。以前はデバイス番号ひとつを得るためだけに torch を積んでおり、
+    # 常駐 +476.7MB / 起動 +3.17s を払っていた。
     # >=1.27: CUDA 13 (nvidia-*-cu13) を採用し torch +cu130 と揃える (roadmap フェーズ2)。
     "onnxruntime-gpu>=1.27,<2",
     "numpy>=2,<3",

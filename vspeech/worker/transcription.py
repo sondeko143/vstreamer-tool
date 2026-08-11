@@ -67,8 +67,8 @@ def _resample_to_16k(samples: np.ndarray, src_rate: int) -> np.ndarray:
     faster-whisper resamples file/bytes input but never a raw ndarray, so a
     non-16 kHz recording would otherwise reach the model at the wrong speed
     and be transcribed as garbage. PyAV ships with faster-whisper, so this
-    needs no extra dependency (torchaudio/scipy are not in the `whisper`
-    extra, and the extra's `torch` is win32-only).
+    needs no extra dependency -- the `whisper` extra carries neither
+    torchaudio nor scipy, and since ADR-0078 no torch either.
     """
     import av
     import numpy as np

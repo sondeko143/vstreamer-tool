@@ -1079,7 +1079,6 @@ whisper = [
     { name = "faster-whisper", marker = "sys_platform == 'win32'" },
     { name = "numpy", marker = "sys_platform == 'win32'" },
     { name = "onnxruntime-gpu", marker = "sys_platform == 'win32'" },
-    { name = "torch", marker = "sys_platform == 'win32'" },
 ]
 
 [package.dev-dependencies]
@@ -1122,7 +1121,6 @@ requires-dist = [
     { name = "sounddevice", marker = "extra == 'audio'", specifier = ">=0.5,<0.6" },
     { name = "toml", specifier = ">=0.10.2,<0.11" },
     { name = "torch", marker = "sys_platform == 'win32' and extra == 'rvc'", specifier = "==2.13.0", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "torch", marker = "sys_platform == 'win32' and extra == 'whisper'", specifier = "==2.13.0", index = "https://download.pytorch.org/whl/cu130" },
     { name = "torchaudio", marker = "sys_platform == 'win32' and extra == 'rvc'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cu130" },
     { name = "voicevox-core", marker = "extra == 'voicevox'", url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl" },
     { name = "vstreamer-protos", url = "https://github.com/sondeko143/vstreamer-protos/releases/download/v0.1.1/vstreamer_protos-0.1.1-py3-none-any.whl" },
