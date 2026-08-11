@@ -18,6 +18,21 @@
 
 常駐パイプラインが複数あるため、この重複は台数分だけ効く。
 
+ただし torch を引いているのはデバイス解決だけではない。**`ctranslate2` 自身が
+`try: import torch / except ImportError` の形で torch を任意依存として掴む**
+(`ctranslate2/specs/model_spec.py` の `torch_is_available`)。したがってデバイス層を
+torch-free にしても、**torch が環境に導入されている限り音声認識プロセスは torch を読み込む**。
+削減が実現するのは torch を導入しないホストに限られる。実測 (torch を遮断して
+`import faster_whisper` + デバイス層):
+
+| 環境 | torch | 起動 | 常駐 |
+|---|---|---|---|
+| 全 extra を入れた単一 venv | ロードされる | 3.66s | 527.1MB |
+| torch 非導入 | されない | 0.82s | 63.0MB |
+
+変更前は `whisper` extra が torch を宣言していたため、`uv sync --extra whisper` は必ず
+torch を導入した。**torch 非導入の音声認識ホストは、この決定によって初めて成立する。**
+
 ## Decision
 
 デバイスを表す値を `torch.device` から、`type` と `index` だけを持つ自前の値型に置き換える。属性名は torch に合わせ、変換経路（RVC）は境界で `torch.device` に変換する。これにより torch の import を変換経路の内側に閉じる。
@@ -37,9 +52,9 @@ GPU の列挙（デバイス数・名前・compute capability）は CUDA Driver 
 
 ## Consequences
 
-音声認識パイプラインから torch が消え、常駐メモリと起動時間が減り、cuBLAS の二重ロードが解消する。
+音声認識だけを導入したホストで torch が消え、常駐メモリと起動時間が減り、cuBLAS の二重ロードが解消する（実測 464MB / 2.84 秒）。
 
-変換経路（RVC）は torch を使い続けるため、torch は依存宣言から消えない。全 extra を単一環境に導入する構成では引き続き導入される。削減されるのは「導入量」ではなく「読み込み量」である。
+**逆に、全 extra を単一環境に導入する構成では何も減らない。** 変換経路（RVC）が torch を必要とする以上 torch は導入され、`ctranslate2` がそれを掴むためである。この構成で削減を得るには、音声認識を別環境で動かす運用（役割ごとに extra を絞る）が要る。本 ADR はその前提条件を作るだけで、運用の変更までは含まない。
 
 CUDA EP の可否判定が ORT 自身の申告になることで、CLAUDE.md が戒める「`torch.cuda.is_available()` だけで EP を決める」形が構造的に取れなくなる。
 
