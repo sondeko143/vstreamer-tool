@@ -50,6 +50,19 @@ export-fcpe-onnx = { cmd = "uv run --extra rvc --with torchfcpe --with onnx --wi
 # 掃引軸は --block-ms / --context-ms / --f0 / --iters / --margin で上書き可。
 stream-vc-rtf = { cmd = "python scripts/stream_vc_rtf.py", help = "Measure per-block latency/RTF of streaming VC across block/context/f0" }
 
+# Stream VC の数値ベースライン採取と A/B 判定 (ADR-0080/0081)。--all-extras で sync 済みの
+# プロジェクト環境で走らせる。設定は $VSPEECH_STREAM_VC_BASELINE_CONFIG か --config で渡す
+# ([stream_vc] を読む。RTF ハーネスと違い [rvc] へ写す必要は無い)。
+#   uv run poe stream-vc-baseline capture    # ベースライン npz + レイテンシ系列を書く
+#   uv run poe stream-vc-baseline compare    # 現行実装を同じ入力・同じ seed で突き合わせる
+# 成果物 (tests/assets/rvc_golden/stream_vc_baseline.npz) は gitignore 済。
+stream-vc-baseline = { cmd = "python -m scripts.stream_vc_baseline", help = "Capture/compare the Stream VC numeric baseline (A/B gate for the torch removal)" }
+
+# VC パイプラインの起動時間と常駐メモリを実測する (ADR-0080)。torch 導入前後で同じ手順を
+# 再実行して差を取るためのもの。
+#   uv run poe vc-footprint --config ~/.config/vstreamer/config_vc.toml --runs 3
+vc-footprint = { cmd = "python -m scripts.vc_pipeline_footprint", help = "Measure a vspeech pipeline's startup time and resident memory (exact PID)" }
+
 # lookahead(右文脈)ごとの変換品質をバッチ経路と比較する (ADR-0072)。--all-extras で
 # sync 済みのプロジェクト環境で走らせる。RTF ハーネスと違い **[stream_vc.rvc] をそのまま
 # 読む**ので、[rvc] へ写す必要は無い。
