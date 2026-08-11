@@ -367,6 +367,29 @@ def test_open_output_stream_logs_requested_and_granted_latency(
     assert "0.048" in messages  # granted
 
 
+def test_open_output_stream_logs_the_requested_latency_before_the_open(
+    opened_streams: list[_FakeDevice],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failing open must still say which latency was attempted (see the input-side
+    twin in tests/test_stream_vc_capture.py for why it is logged before the open)."""
+
+    def _explode(**kwargs: Any) -> _FakeDevice:
+        raise OSError("Invalid device latency")
+
+    monkeypatch.setattr(playback_mod.sd, "RawOutputStream", _explode)
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(OSError):
+            open_stream_vc_output(
+                StreamVcConfig(output_device_index=0, output_latency=0.05)
+            )
+    messages = [r.getMessage() for r in caplog.records]
+    assert [m for m in messages if "0.05 requested" in m]
+    # Nothing was granted: the line that would have carried the request never ran.
+    assert [m for m in messages if "granted" in m] == []
+
+
 # --- playback_loop ------------------------------------------------------------------
 
 

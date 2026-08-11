@@ -478,6 +478,36 @@ def test_open_input_stream_logs_requested_and_granted_latency(
     assert "0.032" in messages  # granted
 
 
+def test_open_input_stream_logs_the_requested_latency_before_the_open(
+    opened_streams: list[_OpenedStream],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failing open must still say which latency was attempted.
+
+    The granted line cannot carry it -- the open raised, so there is no stream to read
+    it off -- which is why the request is logged before the open, the way lib/audio.py
+    logs the device and the rate it is about to attempt. A device that refuses an
+    explicit latency is the one shape preflight cannot pre-empt: its probe opens at the
+    default latency (ADR-0076).
+    """
+
+    def _explode(**kwargs: Any) -> _OpenedStream:
+        raise OSError("Invalid device latency")
+
+    monkeypatch.setattr(capture_mod.sd, "RawInputStream", _explode)
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(OSError):
+            open_stream_vc_input_stream(
+                StreamVcConfig(input_device_index=0, input_latency=0.05),
+                ms_to_samples(160.0),
+            )
+    messages = [r.getMessage() for r in caplog.records]
+    assert [m for m in messages if "0.05 requested" in m]
+    # Nothing was granted: the line that would have carried the request never ran.
+    assert [m for m in messages if "granted" in m] == []
+
+
 def test_no_resampler_is_built_when_the_device_runs_at_the_capture_rate() -> None:
     """The pass-through path must stay bit-identical to the pre-ADR-0073 code: the read
     is handed on as-is, not even copied."""

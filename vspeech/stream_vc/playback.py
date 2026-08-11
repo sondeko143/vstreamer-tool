@@ -199,6 +199,12 @@ def open_stream_vc_output(config: StreamVcConfig) -> OutputSink:
         )
         return stream
 
+    # The request goes out before the open for the same reason open_device_stream logs
+    # the device and the rate there: a device that refuses this latency raises inside
+    # the open, and the granted line above never runs (there is no stream to read it
+    # off). That is the one shape preflight cannot pre-empt -- its probe opens at the
+    # default latency (ADR-0076) -- so this line is the only record of what was asked.
+    logger.info("stream_vc output stream latency: %s requested", config.output_latency)
     stream, rate = open_device_stream(
         device=device,
         override=config.output_device_rate,
