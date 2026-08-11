@@ -96,3 +96,6 @@
 | [0077](0077-device-stream-calls-on-one-thread.md) | デバイスストリームの blocking 呼び出しと close を 1 本のスレッドに直列化する | Accepted | 2026-08-11 |
 | [0078](0078-torch-free-device-resolution.md) | デバイス解決と ONNX プロバイダ判定を torch から切り離す（0024 を refine） | Accepted (refines 0024) | 2026-08-11 |
 | [0079](0079-fp16-by-compute-capability.md) | fp16 の可否を GPU の製品名ではなく compute capability で判定する | Accepted | 2026-08-11 |
+| [0080](0080-torch-free-rvc-runtime.md) | 変換経路も含めてランタイム全体を torch から切り離し、rvc extra から torch/torchaudio/faiss-cpu を外す（0078 の続き） | Proposed | 2026-08-12 |
+| [0081](0081-ort-native-value-binding.md) | ONNX セッション間の受け渡しを onnxruntime ネイティブの OrtValue に統一する（torch の dlpack ゼロコピーを捨てる） | Proposed | 2026-08-12 |
+| [0082](0082-rvc-resample-on-inhouse-polyphase.md) | RVC 経路のサンプルレート変換を自前ポリフェーズ実装に一本化する（torchaudio を廃止、0073 を変換経路へ拡張） | Proposed | 2026-08-12 |
