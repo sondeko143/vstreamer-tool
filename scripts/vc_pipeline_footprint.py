@@ -32,12 +32,17 @@ import ctypes
 import os
 import subprocess  # nosec B404 - launching the pipeline under test is the whole point
 import sys
+from collections import deque
 from ctypes import wintypes
 from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 from statistics import median
+from threading import Event
+from threading import Thread
 from time import perf_counter
 from time import sleep
+from typing import IO
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -129,6 +134,42 @@ def kill_tree(pid: int) -> None:
     )
 
 
+@dataclass
+class _ChildOutput:
+    """What the reader thread learns from the child's stdout."""
+
+    t0: float
+    tail: deque[str] = field(default_factory=lambda: deque(maxlen=40))
+    child_pid: int = 0
+    startup_s: float = 0.0
+
+    def report(self) -> str:
+        return "\n".join(self.tail)
+
+
+def drain_stdout(stream: IO[str], ready_marker: str, seen: _ChildOutput, ready: Event):
+    """Consume the child's stdout for the whole run, flagging the readiness marker.
+
+    A thread rather than a loop in the caller, for two reasons. The pipe has to keep
+    being drained *after* the marker: a full pipe blocks the writer, so a process we
+    believed was settling would in fact be frozen on a write, and the memory sampled
+    afterwards would be of a stalled pipeline. And a blocking `readline` has no
+    deadline, so a child that goes quiet before the marker would hang the caller instead
+    of tripping its timeout -- the caller can only enforce one if the reading happens
+    somewhere else.
+    """
+    for line in stream:
+        seen.tail.append(line.rstrip())
+        if line.startswith(PID_MARKER):
+            seen.child_pid = int(line.split()[1])
+        elif not ready.is_set() and ready_marker in line:
+            seen.startup_s = perf_counter() - seen.t0
+            ready.set()
+    # EOF: the child exited. Wake the waiter now rather than let it burn the timeout;
+    # `startup_s` still being 0 is what tells it apart from a real readiness signal.
+    ready.set()
+
+
 def measure_once(
     config: Path, ready_marker: str, settle_s: float, timeout_s: float
 ) -> RunResult:
@@ -157,44 +198,45 @@ def measure_once(
         cwd=str(REPO_ROOT),
     )
     assert proc.stdout is not None  # nosec B101 - stdout=PIPE guarantees it
-    child_pid = 0
-    startup_s = 0.0
-    tail: list[str] = []
+    seen = _ChildOutput(t0=t0)
+    ready = Event()
+    reader = Thread(
+        target=drain_stdout,
+        args=(proc.stdout, ready_marker, seen, ready),
+        daemon=True,
+    )
+    reader.start()
     try:
-        for line in proc.stdout:
-            tail.append(line.rstrip())
-            del tail[:-40]
-            if line.startswith(PID_MARKER):
-                child_pid = int(line.split()[1])
-            elif ready_marker in line:
-                startup_s = perf_counter() - t0
-                break
-            if perf_counter() - t0 > timeout_s:
-                raise SystemExit(
-                    f"{timeout_s}s 以内に readiness marker "
-                    f"{ready_marker!r} が現れませんでした:\n" + "\n".join(tail)
-                )
-        if not startup_s:
+        if not ready.wait(timeout_s):
             raise SystemExit(
-                "プロセスが readiness marker の前に終了しました:\n" + "\n".join(tail)
+                f"{timeout_s}s 以内に readiness marker "
+                f"{ready_marker!r} が現れませんでした:\n" + seen.report()
             )
-        if not child_pid:
+        if not seen.startup_s:
+            raise SystemExit(
+                "プロセスが readiness marker の前に終了しました:\n" + seen.report()
+            )
+        if not seen.child_pid:
             raise SystemExit("子プロセスの PID を取得できませんでした")
         launcher = read_memory(proc.pid)
         # Sample after the marker and let it settle: the worker has warmed up by then,
-        # so what is left is arena growth, not model loading.
+        # so what is left is arena growth, not model loading. The reader thread keeps
+        # draining stdout throughout, so the process really is idling rather than
+        # blocked on a full pipe.
         sleep(settle_s)
-        steady = read_memory(child_pid)
+        steady = read_memory(seen.child_pid)
         if steady is None:
-            raise SystemExit(f"PID {child_pid} が測定前に消えました")
+            raise SystemExit(f"PID {seen.child_pid} が測定前に消えました")
         return RunResult(
-            startup_s=startup_s,
-            child_pid=child_pid,
+            startup_s=seen.startup_s,
+            child_pid=seen.child_pid,
             steady=steady,
             launcher_working_set_mb=launcher.working_set_mb if launcher else 0.0,
         )
     finally:
         kill_tree(proc.pid)
+        # Let the reader see EOF before the stream is closed under it.
+        reader.join(timeout=10)
         proc.stdout.close()
         proc.wait(timeout=30)
 

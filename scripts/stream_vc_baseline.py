@@ -10,6 +10,17 @@ Two subcommands over one runtime:
     uv run poe stream-vc-baseline capture   # writes the baseline npz + a latency series
     uv run poe stream-vc-baseline compare   # re-runs the same input and judges the diff
 
+`compare` is the gate, and it has **three** exit codes, because it has three answers:
+
+    0  bit-exact           -- the contract, and measured to be achievable
+    2  within tolerance    -- close but not identical: 要判断, NOT a pass
+    1  fail                -- outside the tolerance, or the shapes disagree
+
+Anything judging this command by `$?` must therefore test for 0, not for "not 1".
+It also refuses to run at all when the baseline's geometry, models or model parameters
+differ from the current config, since a difference that came from config drift would
+otherwise be read as a difference caused by the code under test.
+
 The config path is supplied out-of-band through `$VSPEECH_STREAM_VC_BASELINE_CONFIG`
 (`--config` overrides it), the same way tests/test_change_voice_golden.py takes its
 config, so no machine-specific path lives in the repo. The npz lands under
@@ -41,6 +52,7 @@ runnable, unchanged, against the numpy implementation.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -134,6 +146,51 @@ def geometry(sv_config: StreamVcConfig) -> dict[str, float]:
     }
 
 
+# Fields of [stream_vc.rvc] that select *which GPU* rather than *what is computed*.
+# Excluded from the provenance fingerprint so the same baseline can be re-checked on
+# another card, which is the whole point of recording a device-independent bit-exact
+# result.
+_DEVICE_SELECTION_FIELDS = frozenset({"gpu_id", "gpu_name"})
+
+
+def provenance(sv_config: StreamVcConfig, target_sample_rate: int) -> dict[str, Any]:
+    """Everything besides the geometry that decides what the emitted samples are.
+
+    The geometry guard exists so a baseline captured under one window is never compared
+    against another; the same argument applies to the models and their parameters. A
+    different RVC checkpoint, a different f0 extractor or a different f0_up_key produces
+    a different waveform, and without this the resulting mismatch would be blamed on the
+    code change under test -- the exact confusion the guard is for.
+
+    `target_sample_rate` comes from the RVC model's own metadata, so it doubles as a
+    check that the recorded model file really is the one that was loaded.
+    """
+    # set(...) rather than the frozenset itself: pydantic's IncEx type is invariant on
+    # the mutable set.
+    rvc = sv_config.rvc.model_dump(mode="json", exclude=set(_DEVICE_SELECTION_FIELDS))
+    return {"rvc": rvc, "target_sample_rate": int(target_sample_rate)}
+
+
+def provenance_mismatches(
+    baseline: dict[str, Any], current: dict[str, Any]
+) -> list[str]:
+    """Human-readable lines describing every field that differs. Empty means identical."""
+    lines: list[str] = []
+    if baseline.get("target_sample_rate") != current.get("target_sample_rate"):
+        lines.append(
+            f"target_sample_rate: baseline={baseline.get('target_sample_rate')} "
+            f"current={current.get('target_sample_rate')}"
+        )
+    base_rvc = baseline.get("rvc", {})
+    cur_rvc = current.get("rvc", {})
+    for key in sorted(set(base_rvc) | set(cur_rvc)):
+        if base_rvc.get(key) != cur_rvc.get(key):
+            lines.append(
+                f"rvc.{key}: baseline={base_rvc.get(key)!r} current={cur_rvc.get(key)!r}"
+            )
+    return lines
+
+
 def build_runtime(config_path: Path) -> tuple[StreamVcConfig, dict[str, Any]]:
     """Load [stream_vc] and build the same device/models the producer builds."""
     from vspeech.config import Config
@@ -204,10 +261,15 @@ def one_lsb_snr_db(reference: NDArray[np.int16]) -> float:
 
     A yardstick, not a gate. Bit equality is reproducible here, so a seeded run's own
     noise gives no basis for any non-zero tolerance; this does, and it is derived from
-    the captured waveform rather than picked. A difference scoring at or above this SNR
-    is at or below the quantization step of the format the audio is carried in, so it
-    cannot be audible. Below it, the difference is larger than rounding and wants an
-    explanation.
+    the captured waveform rather than picked.
+
+    Read it only together with `max_abs_diff`. SNR bounds *total* error energy, so
+    scoring at or above this line does not by itself mean "every sample is within a
+    quantization step": one sample off by sqrt(n) (about 1240 LSB at n = 1.5M samples)
+    scores exactly the same as n samples off by 1. The pair
+    `max|diff| <= 1 and snr_db >= one_lsb_snr_db` is what actually says "at or below the
+    quantization step of the format"; the SNR alone says "as much total error as
+    rounding would produce, distributed somehow".
     """
     ref = np.asarray(reference, dtype=np.float64).ravel()
     signal = float((ref**2).sum())
@@ -234,25 +296,46 @@ class Verdict:
     snr_min_db: float
 
     @property
-    def passed(self) -> bool:
-        """Bit equality, or the tolerance pair, is enough.
+    def within_tolerance(self) -> bool:
+        """The thresholds hold both over the whole stream and on the worst single block.
 
-        The tolerance gate is evaluated over the concatenated stream, matching
-        tests/test_change_voice_golden.py. A single wrecked block out of N still fails
-        it: its noise energy is 1/N of the signal, so SNR drops to about 10*log10(N) dB
-        (about 23 dB at N=200) and correlation to about 1-1/N.
+        The whole-stream pair matches tests/test_change_voice_golden.py, but on its own
+        it is too coarse here: at N=200 the gate would still admit one block sitting at
+        about -12 dB SNR, because that block's noise is only 1/200 of the total energy.
+        A per-block floor at the same thresholds closes that, and costs nothing on a
+        genuinely equivalent run (an identical block scores corr 1.0 / SNR inf).
         """
-        return self.bit_exact or (
-            self.correlation >= self.corr_min and self.snr_db >= self.snr_min_db
+        return (
+            self.correlation >= self.corr_min
+            and self.snr_db >= self.snr_min_db
+            and self.worst_block_correlation >= self.corr_min
+            and self.worst_block_snr_db >= self.snr_min_db
         )
 
-    def report(self) -> str:
+    @property
+    def outcome(self) -> str:
+        """BIT_EXACT / TOLERANCE / FAIL. TOLERANCE is "要判断", not a pass."""
         if self.bit_exact:
-            head = "verdict: BIT-EXACT"
-        elif self.passed:
-            head = "verdict: PASS (tolerance)"
-        else:
-            head = "verdict: FAIL"
+            return "BIT_EXACT"
+        return "TOLERANCE" if self.within_tolerance else "FAIL"
+
+    @property
+    def exit_code(self) -> int:
+        """0 = bit-exact, 2 = within tolerance but not bit-exact, 1 = fail.
+
+        Three states need three codes. Bit equality is the contract and is measured to
+        be achievable, so folding "close enough" into 0 would make the documented
+        "要判断" state indistinguishable from a pass to anything judging by exit code --
+        which is exactly how this project is required to judge commands.
+        """
+        return {"BIT_EXACT": 0, "TOLERANCE": 2, "FAIL": 1}[self.outcome]
+
+    def report(self) -> str:
+        head = {
+            "BIT_EXACT": "verdict: BIT-EXACT (exit 0)",
+            "TOLERANCE": "verdict: WITHIN TOLERANCE, NOT BIT-EXACT (exit 2) -- 要判断",
+            "FAIL": "verdict: FAIL (exit 1)",
+        }[self.outcome]
         return "\n".join(
             [
                 head,
@@ -262,10 +345,13 @@ class Verdict:
                 f"  correlation         : {self.correlation:.9f} (min {self.corr_min})",
                 f"  waveform SNR        : {self.snr_db:.2f} dB "
                 f"(min {self.snr_min_db} dB)",
-                f"  worst block corr    : {self.worst_block_correlation:.9f}",
-                f"  worst block SNR     : {self.worst_block_snr_db:.2f} dB",
+                f"  worst block corr    : {self.worst_block_correlation:.9f} "
+                f"(min {self.corr_min})",
+                f"  worst block SNR     : {self.worst_block_snr_db:.2f} dB "
+                f"(min {self.snr_min_db} dB)",
                 f"  1 LSB yardstick SNR : {self.one_lsb_snr_db:.2f} dB "
-                "(at/above this, the diff is below int16 quantization)",
+                "(only WITH max|diff| <= 1 does this mean 'below int16 quantization'; "
+                "SNR alone bounds total error energy, not the worst sample)",
             ]
         )
 
@@ -278,9 +364,10 @@ def judge(
 ) -> Verdict:
     """Compare two (n_blocks, emit_len) int16 arrays.
 
-    Whole-stream correlation and SNR decide; the per-block worst case is carried along
-    for diagnosis (it says *where* a difference sits, which the whole-stream pair
-    cannot).
+    Bit equality is the verdict; the correlation/SNR thresholds only separate "close but
+    not identical" (which needs a human) from "broken". They are applied both over the
+    concatenated stream and to the worst single block, so a local defect cannot be
+    diluted by the other N-1 blocks.
     """
     if reference.shape != test.shape:
         raise ValueError(f"shape mismatch: {reference.shape} vs {test.shape}")
@@ -359,8 +446,13 @@ def capture(args: argparse.Namespace) -> int:
         seed_mode=np.str_(args.seed_mode),
         input_seed=np.int64(args.input_seed),
         warmup=np.int64(args.warmup),
-        target_sample_rate=np.int64(rt["target_sample_rate"]),
-        f0_extractor_type=np.str_(sv_config.rvc.f0_extractor_type.value),
+        provenance_json=np.str_(
+            json.dumps(
+                provenance(sv_config, rt["target_sample_rate"]),
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+        ),
         config_path=np.str_(str(config_path)),
         self_noise_max_abs_diff=np.int64(self_noise.max_abs_diff),
         self_noise_correlation=np.float64(self_noise.correlation),
@@ -400,6 +492,15 @@ def compare(args: argparse.Namespace) -> int:
         raise SystemExit(
             f"geometry が baseline と一致しません: baseline={base_geo} config={geo}"
         )
+    mismatches = provenance_mismatches(
+        json.loads(str(data["provenance_json"])),
+        provenance(sv_config, rt["target_sample_rate"]),
+    )
+    if mismatches:
+        raise SystemExit(
+            "baseline と設定/モデルが一致しません (差分を実装の変更と取り違えるため中止):\n  "
+            + "\n  ".join(mismatches)
+        )
 
     print(f"baseline: {args.baseline}")
     print(f"config: {config_path}")
@@ -416,7 +517,7 @@ def compare(args: argparse.Namespace) -> int:
     seed_runtime(seed, seed_mode)
     test, latencies = run_blocks(sv, blocks)
 
-    verdict = judge(reference, test, args.corr_min, args.snr_min_db)
+    verdict = judge(reference, test)
     print()
     print(verdict.report())
     print()
@@ -424,7 +525,7 @@ def compare(args: argparse.Namespace) -> int:
         latency_stats(data["latencies_s"].astype(np.float64)).line("latency baseline")
     )
     print(latency_stats(latencies).line("latency this run"))
-    return 0 if verdict.passed else 1
+    return verdict.exit_code
 
 
 def main() -> int:
@@ -450,10 +551,10 @@ def main() -> int:
     p_capture.add_argument("--seed-mode", choices=SEED_MODES, default="both")
     p_capture.set_defaults(func=capture)
 
+    # No threshold overrides on purpose: this subcommand *is* the gate, and a gate whose
+    # thresholds the operator can move at the call site is not one.
     p_compare = sub.add_parser("compare", parents=[common])
     p_compare.add_argument("--baseline", type=Path, default=DEFAULT_NPZ)
-    p_compare.add_argument("--corr-min", type=float, default=CORR_MIN)
-    p_compare.add_argument("--snr-min-db", type=float, default=SNR_MIN_DB)
     p_compare.set_defaults(func=compare)
 
     args = parser.parse_args()
