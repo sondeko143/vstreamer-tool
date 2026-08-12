@@ -65,19 +65,27 @@ def test_to_hubert_rate_uses_the_shared_polyphase_resampler():
     assert out.shape[0] == 16000
 
 
-def test_to_hubert_rate_accepts_the_float64_of_a_padded_block():
+def test_to_hubert_rate_normalises_the_float64_of_a_padded_block():
     """_pad_input_to_block returns float64 whenever it prepends zeros.
 
-    The resampler is a float32 pipeline, so the cast has to happen here; passing
-    float64 straight in would raise inside the strided matvec.
+    Both branches must still hand back float32. The resampling branch would get there
+    on its own (`PolyphaseResampler.process` coerces), but the passthrough branch
+    returns the array it was given, so without the cast a 16kHz float64 utterance
+    would escape as float64.
     """
     from vspeech.lib.rvc import _pad_input_to_block
     from vspeech.lib.rvc import _to_hubert_rate
 
     padded = _pad_input_to_block(np.ones(200, dtype=np.int16).tobytes())
-    out = _to_hubert_rate(padded, 48000)
-    assert out.dtype == np.float32
-    assert out.shape[0] == round(256 * 16000 / 48000)
+    assert padded.dtype == np.float64  # the premise of this test, not an assumption
+
+    resampled = _to_hubert_rate(padded, 48000)
+    assert resampled.dtype == np.float32
+    assert resampled.shape[0] == round(256 * 16000 / 48000)
+
+    passthrough = _to_hubert_rate(padded, 16000)
+    assert passthrough.dtype == np.float32
+    assert passthrough.shape[0] == 256
 
 
 def test_quality_padding_zero_is_noop():

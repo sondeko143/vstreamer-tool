@@ -334,8 +334,11 @@ def _to_hubert_rate(audio: NDArray[np.floating], src_rate: int) -> NDArray[np.fl
     few milliseconds inside the filter. `make_resampler` returns None when the rates
     already match, and the buffer then passes through untouched, as it did before.
 
-    Takes any float width because `_pad_input_to_block` returns float64 whenever it
-    prepends zeros; the resampler is a float32 pipeline, so the cast happens here.
+    Any float width is accepted because `_pad_input_to_block` returns float64 whenever
+    it prepends zeros. The cast is here rather than left to the resampler because the
+    passthrough branch never reaches one: `process` coerces to float32 itself, so only
+    a rate that already matches 16kHz would otherwise escape with the caller's dtype
+    and break the float32 return type.
     """
     audio32 = np.ascontiguousarray(audio, dtype=np.float32)
     resampler = make_resampler(src_rate, HUBERT_SAMPLE_RATE)
