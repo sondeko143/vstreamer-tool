@@ -76,7 +76,7 @@ pin したのは `nvidia-cublas` / `nvidia-cudnn-cu13` / `nvidia-cufft` / `nvidi
 計測は本ブランチの Task 3（ADR-0081 の実装）で、同一プロセス・同一入力・同一 seed。torch を import すると `preload_dlls` が何もせず torch の `lib` が供給元になるので、その有無で 2 条件を作った。
 
 - **1 tick（Stream VC、context 500ms + block 160ms）:** HuBERT 特徴量 corr 0.999998 / SNR 53.02dB、デコーダ出力 corr 0.999977 / SNR 43.43dB / lag 0 / 振幅スペクトル corr 0.999997。fcpe の pitchf も SNR 94.81dB でわずかに動く（f0_coarse は整数なので完全一致）。**ADR-0081 が予想した「fp16 の丸め」のクラスそのもの**（`scripts/hubert_metrics.py` が記録している 39.52dB と同種）。
-- **発話単位（3 秒、`config_vc.toml`、rmvpe）:** 既存 golden に対し corr 0.999756 / SNR 33.12dB / max\|diff\| 750。RMS 8285.7 → 8283.5、ピーク 22976 で不変、振幅スペクトル corr 0.99996、最良ラグ 0。**区間 SNR は先頭 53dB から末尾 28dB へ単調に低下する** — NSF の位相アキュムレータ（f0 の cumsum）に丸め差が蓄積する形で、時間とともに位相がずれていくことを示す。内容は同じで位相だけが動く。
+- **発話単位（1 秒、`config_vc.toml`、rmvpe）:** 既存 golden に対し corr 0.999756 / SNR 33.12dB / max\|diff\| 750。RMS 8285.7 → 8283.5、ピーク 22976 で不変、振幅スペクトル corr 0.99996、最良ラグ 0。**区間 SNR は先頭 53dB から末尾 28dB へ単調に低下する** — NSF の位相アキュムレータ（f0 の cumsum）に丸め差が蓄積する形で、時間とともに位相がずれていくことを示す。内容は同じで位相だけが動く。
 - **200 ブロックの Stream VC:** 通しの corr 0.72 / SNR 2.53dB まで悪化するが、これは SOLA が拡大している。ブロックごとに ±5ms（＝ `sola_search_ms` そのもの）のラグを許して測り直すと corr の中央値 0.9999、0.99 を下回るのは 200 中 5 ブロックのみ。最良ラグは 150 ブロックで非ゼロ、範囲は -5.00〜+3.02ms で探索窓に収まる。ブロックごとの RMS 比は中央値 0.99999（0.987〜1.011）。**`sola_offset` の argmax が別の（等価な）整列を選んだ結果であって、劣化ではない。**
 - 供給元を固定すれば**プロセスを跨いでも bit 一致する**（nvidia wheel 供給で N=200 × 独立 4 回、いずれも max\|diff\| = 0）。非決定になったわけではない。
 
