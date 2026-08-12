@@ -65,7 +65,7 @@ pin した nvidia wheel のバージョン追随がこちらの持ち物にな�
 
 ### 供給元を移すと同じ ONNX グラフの推論結果が bit 一致しなくなる
 
-cuBLAS / cuDNN のビルドが違えばカーネル選択が違い、fp16 の丸めが変わるためで、欠陥ではない。ただし [ADR-0080](0080-torch-free-rvc-runtime.md) が定めた「変更前と bit 一致」の判定にはそのまま影響するので、実測値を残す。
+cuBLAS / cuDNN のビルドが違えばカーネル選択が違い、fp16 の丸めが変わるためで、欠陥ではない。ただし spec [2026-08-12-rvc-torch-free-runtime-design.md](../superpowers/specs/2026-08-12-rvc-torch-free-runtime-design.md) の受入基準「Stream VC の 1 ブロック変換出力が、同一入力・同一 seed で変更前実装と int16 bit 一致する」の判定にはそのまま影響するので、実測値を残す。
 
 計測は [ADR-0081](0081-ort-native-value-binding.md) の実装時に、同一プロセス・同一入力・同一 seed で行った。torch を import すると `preload_dlls` が何もせず torch の `lib` が供給元になるので、その有無で 2 条件を作った。
 
