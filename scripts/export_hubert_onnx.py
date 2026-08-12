@@ -25,7 +25,8 @@ The gates' references:
 
 final_proj is baked into the graph, so the runtime needs neither safetensors nor
 torch.nn.Linear. This script asserts the correctness of the export itself; if the
-assertions fail, no assets are written.
+assertions fail, no assets are written **and the process exits non-zero** -- including
+under `--measure-only`, whose job is to suppress the writes, not the verdict.
 """
 
 import argparse
@@ -245,6 +246,23 @@ def check(
     return ok
 
 
+def should_write_assets(ok: bool, measure_only: bool) -> bool:
+    """Judge the run, then decide whether the assets get written. Never the reverse.
+
+    `--measure-only` decides *what is written*; it must not decide *what the exit code
+    means*. Honouring it first -- which is what this used to do -- made a failing
+    equivalence gate exit 0, so a `--measure-only` run reported success while printing
+    FAIL lines nobody was required to read. The gate is judged for both modes here, and
+    the caller writes nothing unless this returns True.
+    """
+    if not ok:
+        raise SystemExit("等価ゲートに落ちました。資産は書き出しません。")
+    if measure_only:
+        print("--measure-only: 資産は更新していません")
+        return False
+    return True
+
+
 def main() -> None:
     # torch.onnx's progress display contains ✅. On the default Windows stdout (cp1252)
     # that raises UnicodeEncodeError, which export_graph's except misreads as "dynamo
@@ -276,7 +294,8 @@ def main() -> None:
     parser.add_argument(
         "--measure-only",
         action="store_true",
-        help="一時ディレクトリへ export して誤差を印字するだけ。資産は更新しない",
+        help="一時ディレクトリへ export して誤差を印字するだけ。資産は更新しない "
+        "(等価ゲートに落ちれば、このモードでも非ゼロで終了する)",
     )
     args = parser.parse_args()
 
@@ -333,11 +352,8 @@ def main() -> None:
             and ok
         )
 
-        if args.measure_only:
-            print("--measure-only: 資産は更新していません")
+        if not should_write_assets(ok, args.measure_only):
             return
-        if not ok:
-            raise SystemExit("等価ゲートに落ちました。資産は書き出しません。")
 
         # Deferred: the two moves are not atomic. With fp32 succeeding and fp16 failing, a
         # new fp32 could coexist with an old fp16 and an old mapping.json (unlikely, since

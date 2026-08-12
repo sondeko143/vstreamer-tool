@@ -1,9 +1,13 @@
-"""Pin the layer-index arithmetic of the export wrapper.
+"""Pin the layer-index arithmetic of the export wrapper, and its exit-code contract.
 
 The real assets have layer_offset 0, so a regression that drops `+ layer_offset` from
 `L9 + layer_offset` is not caught even by the export's own self-verification (the golden
 comparison), because both sides then agree. This is the only place that pins the
 off-by-one.
+
+The second concern is `should_write_assets`: whether the run is judged before
+`--measure-only` is honoured. Nothing else would catch that inversion, because it only
+shows up on a *failing* export, which no green run produces.
 
 scripts/export_hubert_onnx.py imports transformers / safetensors lazily inside its
 functions, so this module imports even when they are not installed. The checks are done by
@@ -74,3 +78,25 @@ def test_wrapper_applies_final_proj_only_to_the_l9_output():
     out9, out12 = wrapper(torch.zeros(1, 8))
     assert out9[0, 0, 0].item() == 18.0  # final_proj(hidden_states[9]) = 9 * 2
     assert out12[0, 0, 0].item() == 12.0  # raw, unchanged
+
+
+def test_a_failed_gate_exits_non_zero_in_both_modes():
+    """The exit code is the verdict, `--measure-only` included.
+
+    The previous order honoured --measure-only first and returned, so an export whose
+    equivalence gate had just printed FAIL still exited 0 -- and CLAUDE.md points people
+    at exactly that mode.
+    """
+    from scripts.export_hubert_onnx import should_write_assets
+
+    for measure_only in (True, False):
+        with pytest.raises(SystemExit) as exc:
+            should_write_assets(False, measure_only=measure_only)
+        assert exc.value.code != 0
+
+
+def test_a_passing_gate_writes_only_when_not_measure_only():
+    from scripts.export_hubert_onnx import should_write_assets
+
+    assert should_write_assets(True, measure_only=False) is True
+    assert should_write_assets(True, measure_only=True) is False
