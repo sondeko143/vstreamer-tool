@@ -252,6 +252,18 @@ async def rvc_worker(
                         vc_config.vad_min_gain,
                     )
                 except Exception as e:
+                    # [Open, deferred 2026-08-12 -- outside ADR-0080's scope] Not
+                    # everything caught here is a VAD failure. `_input_as_float32_16k`
+                    # builds the resampler, and `make_resampler` raises ValueError for a
+                    # pathological rate ratio (vspeech/lib/resample.py, ADR-0075). That is
+                    # a configuration fault which recurs on every single chunk, and the
+                    # first line anyone reads about it says "vad gate failed" -- sending
+                    # them to the VAD model and its thresholds instead of to the two
+                    # sample rates the exception text actually names. Deferred rather than
+                    # fixed because separating the two means deciding whether a
+                    # pathological ratio should be fatal (it is a startup-time config
+                    # problem, so arguably preflight's business -- ADR-0038) instead of
+                    # degrading to ungated audio, and that is a decision, not a fix.
                     logger.warning("vad gate failed; passing chunk ungated: %s", e)
                     vad_gains = None
             vc_start_time = time.perf_counter()

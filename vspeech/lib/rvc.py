@@ -126,6 +126,15 @@ def _run_on_device(
     list is nothing next to a use-after-free on device memory. Do not "simplify" it into
     a temporary inside the `bind_ortvalue_input` call.
 
+    [Open, deferred 2026-08-12 -- outside ADR-0080's scope] That last sentence is stated
+    more strongly than the evidence supports. What is established is only that the
+    ownership is undocumented; "a use-after-free on device memory" is the consequence that
+    *would* follow if the binding held no reference, not something anyone observed, and
+    the C++ IOBinding is likely to hold one. The list stays either way (it costs nothing
+    and is correct under both readings), but the hazard should not be repeated elsewhere
+    as an established fact until someone has read onnxruntime's C++ side. Deferred because
+    settling it changes no code here.
+
     Everything that is not CUDA takes the plain numpy `session.run` the CPU path always
     took.
     """

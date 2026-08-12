@@ -1,8 +1,12 @@
 """Audio regression test for change_voice.
 
-HuBERT consumes no RNG at all under eval + inference_mode, so after seed_all() the RNG
-stream is determined solely by the RVC synthesizer's infer. Any difference from the golden
-therefore comes only from differences in the feature values.
+The whole path is onnxruntime inference now (ADR-0081), and only the RVC synthesizer's
+VITS-style `infer` draws random numbers -- HuBERT and the f0 graph draw none. So after
+seed_all(), which is `ort.set_seed` alone, the RNG stream is fully determined and any
+difference from the golden comes only from differences in the feature values. (This used
+to be argued in torch's terms -- eval + inference_mode, plus torch seeding. Neither
+applies: no framework tensor is on the path, and torch seeding was measured to contribute
+nothing before it was dropped.)
 
 The output is not bit-exact against the golden, so the verdict uses tolerances
 (correlation + segmental SNR).

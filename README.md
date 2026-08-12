@@ -33,6 +33,13 @@ uv sync --extra audio --extra whisper
 `uv sync --extra rvc` と単独で叩くと、それ以外の extras (`voicevox`, `whisper`,
 `audio` …) は**アンインストールされます**。機能を「足す」つもりで実行すると壊れます。
 
+**`rvc` extra は NVIDIA の CUDA ランタイム wheel を 6 個取ってきます。ダウンロード
+合計 1,027MB (約 1.0GiB)、展開後の `site-packages/nvidia/` は 1,481MB です**
+(前者は `uv.lock` に記録された wheel サイズの合計、後者は実測)。`--all-extras` はこれを
+含みます。`onnxruntime-gpu` の wheel は CUDA を同梱しないので、これが唯一の供給元です
+([ADR-0083](docs/adr/0083-cuda-runtime-from-nvidia-wheels.md))。従量課金や低速な回線では
+先に把握しておいてください。RVC を使わないなら `rvc` を外した extra 指定で回避できます。
+
 | extra | 内容 |
 | --- | --- |
 | (なし) | 文字起こし / 翻訳 / 字幕 |

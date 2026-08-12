@@ -1,4 +1,4 @@
-"""Metrics used to judge the equivalence of the HuBERT replacement (pure functions).
+"""Metrics used to judge the equivalence of the HuBERT replacement, and the verdict.
 
 The decision logic and the thresholds live here alone, so that the conversion tool
 (scripts/convert_hubert.py) and the equivalence tests (tests/test_hubert_equivalence.py,
@@ -6,6 +6,14 @@ tests/test_change_voice_golden.py) reach a verdict from the same formulas and th
 thresholds. Always import the values; never copy them.
 
 Design rule: no metric may ever return a "perfect score" for broken input (fail-closed).
+
+The metrics are pure; `should_write_assets` is not (it is the exit-code contract of
+scripts/export_hubert_onnx.py). It lives here rather than next to its caller because this
+module imports no torch, and the export script does -- at module level, for the wrapper's
+base class. With torch gone from the dependency table (ADR-0080) an environment that can
+run the test suite cannot import the export script at all, so keeping the verdict there
+left the two tests that pin it uncollectable, and the exit-code inversion they guard had
+already shipped once.
 """
 
 import math
@@ -45,6 +53,23 @@ SNR_MIN_DB = 35.0
 #   l12_raw  cosine=0.99997235 max_abs=1.074e-02
 COSINE_MIN_FP16 = 0.9999
 MAX_ABS_MAX_FP16 = 5e-2
+
+
+def should_write_assets(ok: bool, measure_only: bool) -> bool:
+    """Judge the run, then decide whether the assets get written. Never the reverse.
+
+    `--measure-only` decides *what is written*; it must not decide *what the exit code
+    means*. Honouring it first -- which is what this used to do -- made a failing
+    equivalence gate exit 0, so a `--measure-only` run reported success while printing
+    FAIL lines nobody was required to read. The gate is judged for both modes here, and
+    the caller writes nothing unless this returns True.
+    """
+    if not ok:
+        raise SystemExit("等価ゲートに落ちました。資産は書き出しません。")
+    if measure_only:
+        print("--measure-only: 資産は更新していません")
+        return False
+    return True
 
 
 def _as_2d(x: NDArray) -> NDArray[np.float64]:

@@ -5,6 +5,7 @@ what is pinned here is the judgement, because that is what decides whether the t
 removal is allowed to land.
 """
 
+import ast
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,9 @@ import numpy as np
 import pytest
 
 from scripts.stream_vc_baseline import CONFIG_ENV
+from scripts.stream_vc_baseline import _redact_home
+from scripts.stream_vc_baseline import check_cuda_libraries_are_identified
+from scripts.stream_vc_baseline import check_self_noise
 from scripts.stream_vc_baseline import classify_cuda_library
 from scripts.stream_vc_baseline import cuda_library_suppliers
 from scripts.stream_vc_baseline import geometry
@@ -29,6 +33,52 @@ from scripts.stream_vc_baseline import seed_runtime
 def _reference(n_blocks: int = 8, block_len: int = 64) -> np.ndarray:
     rng = np.random.default_rng(0)
     return rng.integers(-8000, 8000, size=(n_blocks, block_len), dtype=np.int16)
+
+
+def _call_lines(function_name: str, call_name: str) -> list[int]:
+    """Source lines where `function_name`'s body calls `call_name`.
+
+    `capture` and `compare` need a GPU and real RVC assets, so no test in this file can
+    execute them; the guards below are therefore verified as functions, and their
+    *wiring* is verified here from the source. Crude, but it is the wiring that failed
+    before -- the self-noise verdict was computed, printed and then not acted on -- and an
+    unwired guard passes every one of its own unit tests.
+    """
+    import scripts.stream_vc_baseline as module
+
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == function_name
+    )
+    return sorted(
+        node.lineno
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id == call_name)
+            or (isinstance(node.func, ast.Attribute) and node.func.attr == call_name)
+        )
+    )
+
+
+def test_capture_runs_both_guards_before_it_writes_anything():
+    """An artifact that fails either guard must never reach the disk.
+
+    Once written it is indistinguishable from a good one, and the next `compare` trusts
+    it without asking.
+    """
+    write = _call_lines("capture", "savez")
+    assert write, "capture no longer writes an npz; this test needs rewriting"
+    for guard in ("check_self_noise", "check_cuda_libraries_are_identified"):
+        called = _call_lines("capture", guard)
+        assert called, f"capture no longer calls {guard}"
+        assert called[0] < write[0], f"{guard} runs after the artifact is written"
+
+
+def test_compare_refuses_to_judge_against_an_unidentified_supplier():
+    assert _call_lines("compare", "check_cuda_libraries_are_identified")
 
 
 def test_make_input_blocks_shape_and_determinism():
@@ -131,6 +181,102 @@ def test_latency_stats():
     assert stats.p50_ms == pytest.approx(25.0)
     assert stats.max_ms == pytest.approx(40.0)
     assert "N=4" in stats.line("latency")
+
+
+def test_capture_refuses_to_write_a_reference_that_is_not_reproducible():
+    """The self-noise number is a verdict, not a printout.
+
+    `capture` used to compute it, print it, store it and return 0 regardless, so a
+    non-reproducible run would have become the reference every later `compare` trusts.
+    """
+    ref = _reference()
+    test = ref.copy()
+    test[2, 5] += 1
+    with pytest.raises(SystemExit) as exc:
+        check_self_noise(judge(ref, test), "ort")
+    assert "bit 一致しません" in str(exc.value)
+
+
+def test_a_reproducible_capture_passes_the_self_noise_gate():
+    """The positive control: a gate that fires on everything is not a gate."""
+    ref = _reference()
+    check_self_noise(judge(ref, ref.copy()), "ort")
+
+
+def test_seed_mode_none_cannot_produce_a_baseline():
+    """It measures the unseeded spread; by construction that is not a reference.
+
+    The message has to say so, because "not bit-exact" is the expected outcome there and
+    would otherwise read as a defect.
+    """
+    ref = _reference()
+    test = ref.copy()
+    test[0, 0] += 7
+    with pytest.raises(SystemExit) as exc:
+        check_self_noise(judge(ref, test), "none")
+    assert "--seed-mode ort" in str(exc.value)
+
+
+def test_a_provenance_that_identified_no_cuda_supplier_is_refused():
+    """Two empty supplier maps compare equal, i.e. "matches" having compared nothing.
+
+    That is the defect the supplier record exists to prevent, reappearing one level down,
+    so both the capture and the compare paths refuse an empty map instead of recording it.
+    """
+    with pytest.raises(SystemExit) as exc:
+        check_cuda_libraries_are_identified(
+            {"cuda_libraries": {"suppliers": {}, "versions": {}}}, "この採取"
+        )
+    assert "この採取" in str(exc.value)
+
+
+def test_a_provenance_missing_the_section_entirely_is_refused():
+    """An artifact predating the record is exactly the one whose supplier is unknown."""
+    with pytest.raises(SystemExit):
+        check_cuda_libraries_are_identified({"rvc": {}}, "この実行")
+
+
+def test_a_provenance_that_named_a_supplier_passes():
+    check_cuda_libraries_are_identified(
+        {"cuda_libraries": {"suppliers": _NVIDIA_LIBS, "versions": _NVIDIA_VERSIONS}},
+        "この実行",
+    )
+
+
+def test_a_home_relative_config_path_is_recorded_unchanged():
+    """`~/...` is what this project's configs use, so existing baselines stay comparable."""
+    assert _redact_home("~/.config/vstreamer/rvc/model.onnx") == (
+        "~/.config/vstreamer/rvc/model.onnx"
+    )
+    assert _redact_home("./models/model.onnx") == "./models/model.onnx"
+
+
+def test_an_absolute_path_under_home_is_collapsed_to_a_tilde():
+    """`C:\\Users\\<name>\\...` is the environment PII the scanning gate keeps out."""
+    absolute = str(Path.home() / ".config" / "vstreamer" / "model.onnx")
+    redacted = _redact_home(absolute)
+    assert redacted == "~/.config/vstreamer/model.onnx"
+    assert str(Path.home()) not in redacted
+
+
+def test_an_absolute_path_outside_home_becomes_a_digest():
+    """A UNC share names a host; a digest discriminates without naming anything."""
+    a = _redact_home(r"\\nas-host\share\rvc\model.onnx")
+    b = _redact_home(r"\\nas-host\share\rvc\other.onnx")
+    assert a.startswith("sha256:")
+    assert "nas-host" not in a
+    # Still a discriminator: two different paths must not collapse to one record.
+    assert a != b
+
+
+def test_provenance_records_no_absolute_config_path():
+    """The end-to-end statement: nothing under the user's home reaches the artifact."""
+    home = Path.home()
+    prov = provenance(
+        _config(model_file=home / "rvc" / "model.onnx"), target_sample_rate=48000
+    )
+    assert str(home) not in json.dumps(prov)
+    assert prov["rvc"]["model_file"] == "~/rvc/model.onnx"
 
 
 def test_geometry_reports_the_window_defining_fields():
@@ -316,12 +462,16 @@ def test_provenance_mismatch_rejects_a_baseline_that_predates_the_supplier_recor
 
 
 def test_an_unrecorded_cuda_section_is_not_the_same_as_an_empty_one():
-    """A CPU-only capture records an empty section; an old npz records none at all.
+    """A section recorded as empty and a section never recorded are different things.
 
     Collapsing the two would let the pre-provenance artifact be judged against, so
-    `_flatten` keeps an empty dict as a leaf. Pinned synthetically because the live
-    reading is only empty when nothing has loaded CUDA yet -- inside the full suite it
-    is not, and this guard would then never be exercised.
+    `_flatten` keeps an empty dict as a leaf. This stays pinned even though
+    `check_cuda_libraries_are_identified` now refuses both at the capture and compare
+    boundaries: `_flatten`'s behaviour is what makes the mismatch *message* name the
+    section, and the two guards fail differently (one names the changed field, the other
+    refuses to judge at all). Pinned synthetically because the live reading is only empty
+    when nothing has loaded CUDA yet -- inside the full suite it is not, and this guard
+    would then never be exercised.
     """
     empty = _prov_with_cuda({}, {})
     old = {k: v for k, v in empty.items() if k != "cuda_libraries"}

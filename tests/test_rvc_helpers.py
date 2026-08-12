@@ -228,6 +228,16 @@ def test_ort_device_id_defaults_a_bare_cuda_device_to_zero():
     Passing None through would bind the inputs and the output on a device id ORT cannot
     resolve; 0 is the same default `create_session` picks, so the values land on the card
     the session runs on.
+
+    [Open, deferred 2026-08-12 -- outside ADR-0080's scope] The last assertion pins a call
+    site that does not exist. `_run_on_device` returns through `session.run` whenever
+    `device.type != "cuda"`, so `_ort_device_id` is never reached with a CPU device and no
+    production behaviour depends on what it answers there. Keeping it freezes an
+    implementation detail (that the helper is total rather than rejecting a non-CUDA
+    device) for nothing, which is the kind of assertion that later blocks a refactor it
+    was never protecting. Deferred rather than deleted because "pin less" and "pin that
+    the helper does not raise" are both defensible, and choosing is a judgement about how
+    this helper should behave -- not a fix.
     """
     from vspeech.lib.cuda_util import Device
     from vspeech.lib.rvc import _ort_device_id

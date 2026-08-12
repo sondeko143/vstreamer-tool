@@ -12,9 +12,19 @@ MIT License（同梱の [`LICENSE`](LICENSE)）で配布します。
 
 含まないもの:
 
-- 宣言済みの pip 依存（onnxruntime-gpu・faster-whisper・`nvidia-*` など、各 wheel 同梱のライセンスに従う）
+- 宣言済みの pip 依存のうち OSS ライセンスのもの（onnxruntime-gpu・faster-whisper など、
+  各 wheel 同梱のライセンスに従う）
 - オフラインの ONNX 生成タスクが `uv run --with` の一時環境にだけ入れるもの（torch・
   transformers・fairseq・torchfcpe）。ランタイムには入らない（[ADR-0080](docs/adr/0080-torch-free-rvc-runtime.md)）
+
+`nvidia-*` wheel は上の 1 つめとは別扱いにします。`rvc` extra が pin している
+`nvidia-cublas` / `nvidia-cudnn-cu13` / `nvidia-cufft` / `nvidia-cuda-runtime`（と推移的に
+入る `nvidia-cuda-nvrtc` / `nvidia-nvjitlink`）は、**MIT や Apache-2.0 のような OSS
+ライセンスではなく NVIDIA の EULA で配布されています**（各 wheel 同梱の LICENSE を参照。
+cuDNN は別条項）。再配布の条件が OSS 依存とは異なるため、同じ行に並べません。本リポジトリは
+これらを同梱・再配布せず、利用者の `uv sync` が PyPI から取得します
+（[ADR-0083](docs/adr/0083-cuda-runtime-from-nvidia-wheels.md)）。本プロジェクトを配布物へ
+同梱する場合は、各 wheel の EULA 原文を確認してください。
 
 本ファイルは法的助言ではありません。再配布や同梱を行う場合は、各上流の LICENSE 原文
 （必要に応じて専門家）を確認してください。記載内容は 2026-07-18 時点の各上流 LICENSE に

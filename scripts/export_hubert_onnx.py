@@ -47,6 +47,7 @@ from scripts.hubert_metrics import MAX_ABS_MAX
 from scripts.hubert_metrics import MAX_ABS_MAX_FP16
 from scripts.hubert_metrics import feature_cosine
 from scripts.hubert_metrics import feature_max_abs_diff
+from scripts.hubert_metrics import should_write_assets
 from vspeech.lib.rvc import FEATS_L9_PROJ
 from vspeech.lib.rvc import FEATS_L12_RAW
 from vspeech.lib.rvc import parse_output_names
@@ -56,6 +57,12 @@ from vspeech.lib.rvc import parse_output_names
 # at module level would make this module unimportable from the tests and leave
 # layer_indices / HubertOnnxWrapper untestable. The same move scripts/convert_hubert.py
 # makes for fairseq.
+#
+# torch cannot get the same treatment: HubertOnnxWrapper's base class needs it at class
+# definition time. So this module IS unimportable without torch, which since ADR-0080 is
+# every environment that is not the export overlay. That is why the exit-code contract
+# (`should_write_assets`) lives in scripts/hubert_metrics.py instead of here -- the tests
+# that pin it must run in the ordinary suite.
 
 L9 = 9
 L12 = 12
@@ -244,23 +251,6 @@ def check(
         )
         ok = ok and verdict == "OK"
     return ok
-
-
-def should_write_assets(ok: bool, measure_only: bool) -> bool:
-    """Judge the run, then decide whether the assets get written. Never the reverse.
-
-    `--measure-only` decides *what is written*; it must not decide *what the exit code
-    means*. Honouring it first -- which is what this used to do -- made a failing
-    equivalence gate exit 0, so a `--measure-only` run reported success while printing
-    FAIL lines nobody was required to read. The gate is judged for both modes here, and
-    the caller writes nothing unless this returns True.
-    """
-    if not ok:
-        raise SystemExit("等価ゲートに落ちました。資産は書き出しません。")
-    if measure_only:
-        print("--measure-only: 資産は更新していません")
-        return False
-    return True
 
 
 def main() -> None:

@@ -147,6 +147,21 @@ def main() -> None:
             "seeded runs are not bit-exact; golden equality is unsafe -- investigate"
         )
 
+    # [Open, deferred 2026-08-12 -- outside ADR-0080's scope] This artifact carries no
+    # provenance. Its streaming sibling (scripts/stream_vc_baseline.py) records the [rvc]
+    # config and which package supplied each loaded CUDA library, and refuses to judge
+    # when either differs; here nothing but the input, the seed and the output is stored.
+    # So swapping the RVC checkpoint, the f0 extractor, f0_up_key -- or the CUDA supplier
+    # one level down -- silently re-anchors the golden at the next capture, and
+    # tests/test_change_voice_golden.py goes on comparing against a different subject
+    # while reporting a code regression. That is not hypothetical: ADR-0083's supplier
+    # move alone dropped this golden's score to corr 0.999756 / SNR 33.12 dB against a
+    # 35.0 dB gate, which is exactly how it presented itself.
+    # Deferred because adding the record means re-capturing the golden on real hardware,
+    # and this branch's acceptance criterion is bit equality against the pre-change
+    # implementation -- a re-capture cannot ride along with it. Do it at the next
+    # re-capture, and mirror `provenance()` / `provenance_mismatches()` from
+    # scripts/stream_vc_baseline.py rather than inventing a second shape for the same job.
     GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
     np.savez(
         GOLDEN_NPZ,

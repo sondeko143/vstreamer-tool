@@ -77,11 +77,21 @@ rvc = [
     # CUDA 14 の onnxruntime を入れても lock は緑のまま通る。気付く場所は
     # tests/test_onnx_session.py::test_each_preload_is_pointed_at_a_directory_that_has_what_it_wants
     # で、onnxruntime が要求する DLL 名が実在しなくなった時点で赤くなる。
-    # 罠: nvidia-cublas は win_amd64 wheel を出さない版がある (13.6.1.10 など)。
-    "nvidia-cublas>=13.6.0.2,<14",
-    "nvidia-cudnn-cu13>=9.24.0.43,<10",
-    "nvidia-cufft>=12.3.0.29,<13",
-    "nvidia-cuda-runtime>=13.3.29,<14",
+    # 罠: nvidia-cublas は win_amd64 wheel を出さない版がある (13.6.1.10。13.6.0.2 にはある)。
+    # 「win_amd64 wheel がある版」はバージョン式では書けないので、判明している版を名指しで
+    # 除外する。除外しないと、次に lock を取り直した誰かが上限内の最新として 13.6.1.10 を
+    # 掴み、解決が落ちる。今 13.6.0.2 なのは lock がそう固定しているからにすぎず、制約が
+    # それを要求していたわけではない。将来また wheel の無い版が出たら同じ形で lock が
+    # 落ちる (environments が win32 のみなので wheel が無ければ解決できない) ので、
+    # そのときここに `!=<版>` を足す。
+    # sys_platform マーカー: この 4 つは win_amd64 wheel しか存在しない CUDA ランタイムで、
+    # このファイルの他のプラットフォーム固有 pin (pyvcroid2 / voicevox-core) と同じ性質。
+    # [tool.uv] environments が win32 だけを解決するので実効上の差は無いが、要求そのものが
+    # 「Windows でだけ要る」と読めるようにしておく。
+    "nvidia-cublas>=13.6.0.2,!=13.6.1.10,<14 ; sys_platform == 'win32'",
+    "nvidia-cudnn-cu13>=9.24.0.43,<10 ; sys_platform == 'win32'",
+    "nvidia-cufft>=12.3.0.29,<13 ; sys_platform == 'win32'",
+    "nvidia-cuda-runtime>=13.3.29,<14 ; sys_platform == 'win32'",
     "numpy>=2,<3",
     # 保留 (ADR-0080 の範囲外): scipy を import しているのは tests/test_pitch_extract.py
     # だけで、`vspeech/` からは 0 件になった (リサンプルは ADR-0082 で自前ポリフェーズへ)。

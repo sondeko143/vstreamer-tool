@@ -21,6 +21,11 @@ It also refuses to run at all when the baseline's geometry, models or model para
 differ from the current config, since a difference that came from config drift would
 otherwise be read as a difference caused by the code under test.
 
+`capture` has one exit code and two ways to refuse. It writes nothing unless the capture
+reproduced itself bit for bit (`check_self_noise`) and the CUDA supplier of the run was
+actually identified (`check_cuda_libraries_are_identified`); a reference that fails either
+would be trusted blindly by every later `compare`.
+
 The config path is supplied out-of-band through `$VSPEECH_STREAM_VC_BASELINE_CONFIG`
 (`--config` overrides it), the same way tests/test_change_voice_golden.py takes its
 config, so no machine-specific path lives in the repo. The npz lands under
@@ -54,6 +59,7 @@ runnable, unchanged, against the numpy implementation.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from dataclasses import dataclass
@@ -104,6 +110,8 @@ def seed_runtime(seed: int, mode: str) -> None:
       proven to add nothing, which is why scripts/capture_change_voice_golden.py's own
       `seed_all` stopped seeding torch (Task 4).
     - "none": no seeding at all, which measures the synthesizer's own stochastic spread.
+      A diagnostic only: `capture` prints the spread and then refuses to write, because a
+      baseline that cannot reproduce itself cannot be a reference (`check_self_noise`).
 
     Must be called immediately before the block sequence it governs.
     """
@@ -303,6 +311,58 @@ def cuda_library_provenance() -> dict[str, Any]:
     return {"suppliers": suppliers, "versions": _supplier_versions(suppliers)}
 
 
+def check_cuda_libraries_are_identified(record: dict[str, Any], source: str) -> None:
+    """Refuse a provenance record whose supplier map is empty.
+
+    An empty map does not mean "no CUDA library was involved". It is indistinguishable
+    from module enumeration having failed (`_loaded_module_paths` returns `[]` on any
+    error) and from the record having been taken before the sessions were opened. Two
+    such records compare equal, so `provenance_mismatches` would report a match having
+    compared nothing -- the same class of defect the supplier record was introduced to
+    prevent, one level further down.
+
+    Deliberately not inside `provenance()`: that function is a plain reading of the live
+    process, and the tests build records from it in a process that has opened no GPU
+    session. The two places that need the record to *mean* something call this -- capture,
+    which writes the reference, and compare, which judges against it. Both are GPU-only
+    paths by construction (this harness measures a real-time conversion loop), so an
+    empty map there is a fault, not a configuration.
+    """
+    if not record.get("cuda_libraries", {}).get("suppliers"):
+        raise SystemExit(
+            f"{source} の CUDA ライブラリ供給元を 1 つも特定できませんでした。"
+            "供給元が空の記録どうしは「一致」してしまい、何も突き合わせないまま合格に"
+            "見えます (ADR-0083 が防ごうとした取り違えそのもの)。"
+            "CUDA セッションが開けているか (CPU へフォールバックしていないか)、"
+            "プロセスのモジュール列挙が失敗していないかを確認してください。"
+        )
+
+
+def _redact_home(value: str) -> str:
+    """A config path with the user's home directory collapsed back to `~`.
+
+    Config paths belong in the record because *which* model was loaded decides the
+    samples. An absolute one would carry `C:\\Users\\<name>\\...` -- the environment PII
+    this repo's secret-scanning gate exists to keep out -- into an artifact that gets
+    passed around as a reference. Collapsing home to `~` removes exactly that while
+    leaving the value readable, and leaves a `~`-relative config (what this project's own
+    configs use) byte-identical, so baselines captured before this stay comparable.
+
+    Anything still absolute afterwards (another drive, a UNC share that would name a host)
+    becomes a digest. That discriminates exactly as well as the string did -- two
+    different paths give two different digests -- without naming anything. Neither form
+    catches a different file swapped in at the same path, but neither did the raw string:
+    only the path was ever recorded, never the file.
+    """
+    try:
+        collapsed = "~/" + Path(value).relative_to(Path.home()).as_posix()
+    except ValueError:
+        collapsed = value
+    if not Path(collapsed).is_absolute():
+        return collapsed
+    return "sha256:" + hashlib.sha256(collapsed.encode("utf-8")).hexdigest()[:16]
+
+
 def provenance(sv_config: StreamVcConfig, target_sample_rate: int) -> dict[str, Any]:
     """Everything besides the geometry that decides what the emitted samples are.
 
@@ -322,6 +382,13 @@ def provenance(sv_config: StreamVcConfig, target_sample_rate: int) -> dict[str, 
     # set(...) rather than the frozenset itself: pydantic's IncEx type is invariant on
     # the mutable set.
     rvc = sv_config.rvc.model_dump(mode="json", exclude=set(_DEVICE_SELECTION_FIELDS))
+    # Path-valued fields are recorded through `_redact_home`; see its docstring for why
+    # the raw string must not reach the artifact. Decided from the live attribute rather
+    # than from the dumped string, so a field that becomes a Path later is covered
+    # automatically instead of quietly leaking.
+    for name in list(rvc):
+        if isinstance(getattr(sv_config.rvc, name, None), Path):
+            rvc[name] = _redact_home(rvc[name])
     return {
         "rvc": rvc,
         "target_sample_rate": int(target_sample_rate),
@@ -425,6 +492,31 @@ class Latency:
 
 
 def latency_stats(latencies_s: NDArray[np.float64]) -> Latency:
+    """Summarise a per-tick wall-time series.
+
+    [Open, deferred 2026-08-12 -- cause unproven, not a blocker for ADR-0080] The p95 this
+    reports degraded badly across the branch and nobody has explained why. Measured on the
+    shipping producer config, N=200 blocks per run:
+
+        torch runtime (Task 1)                 p95 47.86 ms (median of 15)  max  58.50 ms
+        numpy runtime, torch installed (T3)    p95 47.94/49.06/50.46 ms     max  55-66 ms
+        numpy runtime, torch uninstalled (T5)  p95 109.51 ms (1 run)        max 226.37 ms
+        same configuration, re-measured (T6)   p95 74.16 ms (median of 5)   max 137-216 ms
+
+    p50 barely moved (44.17 -> 43.36 ms) and the acceptance criterion binds p50 only, so
+    the branch passed on it. The tail is what is unexplained, and it matters: max 216 ms
+    against a 160 ms block period is a dropped tick.
+
+    Two facts argue the branch does not cause it. The CUDA supplier was already the
+    `nvidia-*` wheels from Task 3 onward (ADR-0083's explicit `directory=` pins it even
+    with torch installed but unimported), and the Task 6 runs are bit-identical to the
+    Task 3 baseline -- the same kernels ran in the same order, which a tail from different
+    kernel selection could not produce. One fact argues the measurement window was simply
+    loaded: the full test suite took 113.70 s in that window against 30.45 s earlier in
+    the same session and 31.08 s afterwards on identical code (N=1 each). That is
+    corroboration, not proof; host contention was never observed directly. Re-measure p95
+    on an idle machine before believing either story.
+    """
     arr = np.asarray(latencies_s, dtype=np.float64)
     return Latency(
         n=int(arr.size),
@@ -569,6 +661,38 @@ def judge(
     )
 
 
+def check_self_noise(self_noise: Verdict, seed_mode: str) -> None:
+    """A capture becomes the reference only if it reproduces itself bit for bit.
+
+    `capture` runs the same block sequence twice, in one process, at the same seed. That
+    comparison used to be printed and stored and then ignored, so a run that was not
+    reproducible would still have been written out and become the reference the whole A/B
+    rests on -- every later `compare` would then be measuring the synthesizer's own spread
+    and blaming the code under test. Its sibling
+    scripts/capture_change_voice_golden.py has raised on this since it was written; this
+    is the same contract, in the same shape.
+
+    `--seed-mode none` is included on purpose rather than excused. It is a diagnostic
+    that measures the unseeded spread, and it prints that measurement before this raises;
+    what it cannot do is produce a baseline, because `compare` would replay it unseeded
+    and could never match. Exiting non-zero with nothing written is the honest outcome.
+    """
+    if self_noise.bit_exact:
+        return
+    raise SystemExit(
+        "同一プロセス・同一 seed の 2 回が bit 一致しませんでした "
+        f"(max|diff|={self_noise.max_abs_diff}, seed_mode={seed_mode})。"
+        "再現しない採取をベースラインにすると、以後の compare はすべて合成器の"
+        "ばらつきを測って実装の差と取り違えます。ベースラインは書き出しません。"
+        + (
+            " --seed-mode none は仕様上ここで必ず止まります (ばらつきの計測用であって"
+            "ベースラインは作れません)。--seed-mode ort を使ってください。"
+            if seed_mode == "none"
+            else ""
+        )
+    )
+
+
 def resolve_config(explicit: Path | None) -> Path:
     """--config, else $VSPEECH_STREAM_VC_BASELINE_CONFIG. Missing -> a usage error."""
     if explicit is not None:
@@ -614,6 +738,13 @@ def capture(args: argparse.Namespace) -> int:
     print(latency_stats(lat1).line("latency run1"))
     print(latency_stats(lat2).line("latency run2"))
 
+    # Both gates run before anything is written: an artifact that cannot be judged, or
+    # that was not reproducible when it was taken, must never reach the disk where the
+    # next `compare` would silently trust it.
+    check_self_noise(self_noise, args.seed_mode)
+    prov = provenance(sv_config, rt["target_sample_rate"])
+    check_cuda_libraries_are_identified(prov, "この採取")
+
     args.out.parent.mkdir(parents=True, exist_ok=True)
     np.savez(
         args.out,
@@ -624,13 +755,7 @@ def capture(args: argparse.Namespace) -> int:
         seed_mode=np.str_(args.seed_mode),
         input_seed=np.int64(args.input_seed),
         warmup=np.int64(args.warmup),
-        provenance_json=np.str_(
-            json.dumps(
-                provenance(sv_config, rt["target_sample_rate"]),
-                sort_keys=True,
-                ensure_ascii=False,
-            )
-        ),
+        provenance_json=np.str_(json.dumps(prov, sort_keys=True, ensure_ascii=False)),
         # The config path is deliberately NOT recorded. It is an absolute path on the
         # capturing machine (`C:\\Users\\<name>\\...`), i.e. the environment PII this
         # repo's secret-scanning gate exists to keep out, and nothing reads it: what
@@ -674,15 +799,18 @@ def compare(args: argparse.Namespace) -> int:
         raise SystemExit(
             f"geometry が baseline と一致しません: baseline={base_geo} config={geo}"
         )
-    mismatches = provenance_mismatches(
-        json.loads(str(data["provenance_json"])),
-        provenance(sv_config, rt["target_sample_rate"]),
-    )
+    baseline_prov = json.loads(str(data["provenance_json"]))
+    current_prov = provenance(sv_config, rt["target_sample_rate"])
+    mismatches = provenance_mismatches(baseline_prov, current_prov)
     if mismatches:
         raise SystemExit(
             "baseline と設定/モデルが一致しません (差分を実装の変更と取り違えるため中止):\n  "
             + "\n  ".join(mismatches)
         )
+    # After the mismatch gate the two supplier maps are known identical, so checking one
+    # covers both -- and it has to be checked, because two empty maps are what "identical"
+    # looks like when nothing was ever identified.
+    check_cuda_libraries_are_identified(current_prov, "この実行")
 
     print(f"baseline: {args.baseline}")
     print(f"config: {config_path}")
