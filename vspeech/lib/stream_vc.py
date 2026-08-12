@@ -36,10 +36,10 @@ def next_context(seq, context_len: int):
     """The last `context_len` elements of `seq` (the next tick's left context).
 
     When `context_len == 0`, `seq[-0:]` would return the whole thing, so return an
-    explicit empty slice. Being written in terms of `len(seq)` it behaves identically on
-    numpy and torch. When `context_len >= len(seq)` the whole sequence is returned (a
-    clamp -- a defensive guard that passes as much left context as is available; the
-    StreamingVc caller pre-fills the context to full length).
+    explicit empty slice. Written in terms of `len(seq)` and slicing only, so it makes no
+    assumption about the sequence type. When `context_len >= len(seq)` the whole sequence
+    is returned (a clamp -- a defensive guard that passes as much left context as is
+    available; the StreamingVc caller pre-fills the context to full length).
     """
     if context_len <= 0:
         return seq[:0]
@@ -90,8 +90,8 @@ def crossfade_weights(
 def overlap_add(prev_tail, head, fade_in, fade_out):
     """Fade `prev_tail` out, fade `head` in, and add them.
 
-    The one line of a crossfade overlap-add. Being elementwise it works on numpy arrays
-    and torch tensors alike (callers pass equal lengths in the same domain).
+    The one line of a crossfade overlap-add. Being elementwise it makes no assumption
+    about the sequence type (callers pass equal lengths in the same domain).
     """
     return prev_tail * fade_out + head * fade_in
 

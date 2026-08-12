@@ -20,7 +20,7 @@ L12_DIM = 3
 
 
 def _tiny_graph(elem_type: int):
-    """source (1,N) -> feats_l9_proj (1,N,2), feats_l12_raw (1,N,3)。
+    """source (1,N) -> feats_l9_proj (1,N,2), feats_l12_raw (1,N,3).
 
     The values are copies of the input, so the test can verify the contents. The
     dimensions differ (2 vs 3), so the shape uniquely reveals which output was taken.

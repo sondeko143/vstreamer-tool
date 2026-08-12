@@ -200,7 +200,12 @@ def test_change_voice_on_cpu_without_f0(cpu_models):
     ) == (None, None)
 
     feats = np.zeros((1, 4, HUBERT_DIM), dtype=np.float32)
-    with pytest.raises(Exception, match="pitch"):
+    # The exact class onnxruntime raises for a required input that is absent from the
+    # feed: `_validate_input` checks it in Python before the graph runs, so it is a
+    # plain ValueError rather than one of ORT's native error types. Pinned rather than
+    # left as `Exception`, which `match="pitch"` alone would let a TypeError from a
+    # mistyped keyword satisfy.
+    with pytest.raises(ValueError, match=r"Required inputs.*pitch"):
         infer(
             is_half=False,
             session=session,

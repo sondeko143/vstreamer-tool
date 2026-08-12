@@ -13,6 +13,8 @@ import numpy as np
 import pytest
 
 from scripts.stream_vc_baseline import CONFIG_ENV
+from scripts.stream_vc_baseline import classify_cuda_library
+from scripts.stream_vc_baseline import cuda_library_suppliers
 from scripts.stream_vc_baseline import geometry
 from scripts.stream_vc_baseline import judge
 from scripts.stream_vc_baseline import latency_stats
@@ -164,12 +166,96 @@ def test_provenance_records_the_models_and_their_parameters():
     assert "f0_extractor_type" in geo["rvc"]
 
 
+def test_provenance_records_where_the_cuda_libraries_came_from():
+    """The supplier is part of what decides the samples, so it is part of provenance.
+
+    ADR-0083 moved cuBLAS/cuDNN from torch's `lib` to the `nvidia-*` wheels, which
+    changed the emitted waveform while every other recorded field stayed identical --
+    so the first baseline went on comparing and reported the difference as a code
+    regression. Both halves are recorded: which package supplied each loaded library,
+    and at which version, since a wheel bump changes the kernels just as a supplier
+    swap does.
+    """
+    prov = provenance(_config(), 48000)
+    assert set(prov["cuda_libraries"]) == {"suppliers", "versions"}
+    assert isinstance(prov["cuda_libraries"]["suppliers"], dict)
+    assert isinstance(prov["cuda_libraries"]["versions"], dict)
+
+
 def test_provenance_ignores_which_gpu_was_used():
     """The same baseline must stay checkable on another card."""
     a = provenance(_config(gpu_id=0, gpu_name="RTX 4060"), 48000)
     b = provenance(_config(gpu_id=1, gpu_name="RTX 5060"), 48000)
     assert a == b
     assert provenance_mismatches(a, b) == []
+
+
+def test_classify_cuda_library_names_the_supplying_package():
+    """Only the supplier token, never the path (it is machine-specific, and PII)."""
+    venv = r"C:\proj\.venv\Lib\site-packages"
+    assert classify_cuda_library(rf"{venv}\torch\lib\cublasLt64_13.dll") == "torch"
+    assert (
+        classify_cuda_library(rf"{venv}\nvidia\cu13\bin\x86_64\cublasLt64_13.dll")
+        == "nvidia-wheel"
+    )
+    assert (
+        classify_cuda_library(rf"{venv}\nvidia\cudnn\bin\cudnn64_9.dll")
+        == "nvidia-wheel"
+    )
+    assert (
+        classify_cuda_library(r"C:\Program Files\NVIDIA\CUDA\v13.3\bin\cublas64_13.dll")
+        == "system"
+    )
+
+
+def test_cuda_library_suppliers_picks_only_the_math_libraries():
+    """The CUDA major is in the filename, so the match is by prefix, not exact name."""
+    venv = r"C:\proj\.venv\Lib\site-packages"
+    got = cuda_library_suppliers(
+        [
+            rf"{venv}\nvidia\cu13\bin\x86_64\cublasLt64_13.dll",
+            rf"{venv}\nvidia\cu13\bin\x86_64\cudart64_13.dll",
+            rf"{venv}\nvidia\cudnn\bin\cudnn64_9.dll",
+            rf"{venv}\torch\lib\cufft64_12.dll",
+            r"C:\Windows\System32\kernel32.dll",  # unrelated, must not appear
+            rf"{venv}\onnxruntime\capi\onnxruntime_providers_cuda.dll",  # not a math lib
+        ]
+    )
+    assert got == {
+        "cublaslt64_13.dll": "nvidia-wheel",
+        "cudart64_13.dll": "nvidia-wheel",
+        "cudnn64_9.dll": "nvidia-wheel",
+        "cufft64_12.dll": "torch",
+    }
+
+
+def test_provenance_mismatch_names_a_changed_cuda_supplier():
+    """A supplier swap must stop the comparison, not be blamed on the code under test."""
+    a = provenance(_config(), 48000)
+    b = json.loads(json.dumps(a))
+    b["cuda_libraries"]["suppliers"] = {"cublaslt64_13.dll": "torch"}
+    lines = provenance_mismatches(a, b)
+    assert lines, "a supplier swap went unnoticed"
+    assert any("cuda_libraries.suppliers.cublaslt64_13.dll" in line for line in lines)
+
+
+def test_provenance_mismatch_names_a_bumped_cuda_library_version():
+    a = provenance(_config(), 48000)
+    b = json.loads(json.dumps(a))
+    b["cuda_libraries"]["versions"] = {"nvidia-cublas": "0.0.0"}
+    lines = provenance_mismatches(a, b)
+    assert any("cuda_libraries.versions.nvidia-cublas" in line for line in lines)
+
+
+def test_provenance_mismatch_rejects_a_baseline_that_predates_the_supplier_record():
+    """An npz captured before the supplier was recorded cannot be judged against.
+
+    It is exactly the artifact whose supplier is unknown, which is the situation that
+    caused the confusion in the first place -- so it must refuse rather than compare.
+    """
+    current = provenance(_config(), 48000)
+    old = {k: v for k, v in current.items() if k != "cuda_libraries"}
+    assert provenance_mismatches(old, current)
 
 
 def test_provenance_mismatch_names_the_changed_field():

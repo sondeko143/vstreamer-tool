@@ -152,6 +152,137 @@ def geometry(sv_config: StreamVcConfig) -> dict[str, float]:
 # result.
 _DEVICE_SELECTION_FIELDS = frozenset({"gpu_id", "gpu_name"})
 
+# Basenames of the CUDA math libraries whose build decides fp16 kernel selection, matched
+# against the DLLs onnxruntime actually pulled into this process. Prefixes rather than
+# exact names because the CUDA major is in the filename (`cublasLt64_13.dll`) and moves.
+_CUDA_LIBRARY_PREFIXES = ("cublas", "cudnn", "cufft", "cudart")
+
+
+_SUPPLIER_BY_PACKAGE = {"torch": "torch", "nvidia": "nvidia-wheel"}
+
+
+def classify_cuda_library(path: str) -> str:
+    """Which installed package a loaded CUDA library came from.
+
+    Only the supplier token is recorded, never the path: the path is machine-specific
+    (a `C:\\Users\\<name>` prefix would be environment PII, and would also make a
+    baseline uncheckable on another machine for no reason). What has to be caught is the
+    *supplier*, because that is what changes the kernels.
+
+    The decision is the top-level package **directly under site-packages**, not any
+    component that happens to be named after one: a CUDA toolkit installed at
+    `C:\\Program Files\\NVIDIA\\CUDA\\v13.3\\bin` is a third supplier, and reading it as
+    the wheel would hide precisely the swap this is here to catch.
+    """
+    parts = [part.lower() for part in Path(path).parts]
+    for i, part in enumerate(parts[:-1]):
+        if part in ("site-packages", "dist-packages"):
+            return _SUPPLIER_BY_PACKAGE.get(parts[i + 1], "system")
+    return "system"
+
+
+def _loaded_module_paths() -> list[str]:
+    """Full paths of every DLL currently loaded into this process (Windows).
+
+    Asks the OS rather than re-deriving onnxruntime's search logic: which copy of
+    cuBLAS/cuDNN actually got loaded is the fact of interest, and re-implementing
+    `preload_dlls`' rules here would drift from them exactly when it mattered.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    psapi = ctypes.WinDLL("psapi", use_last_error=True)
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    psapi.EnumProcessModules.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(wintypes.HMODULE),
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    psapi.GetModuleFileNameExW.argtypes = [
+        wintypes.HANDLE,
+        wintypes.HMODULE,
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+    ]
+    process = kernel32.GetCurrentProcess()
+    count = 2048
+    for _ in range(4):  # grow once or twice at most; bounded so a lie cannot spin here
+        modules = (wintypes.HMODULE * count)()
+        needed = wintypes.DWORD()
+        if not psapi.EnumProcessModules(
+            process, modules, ctypes.sizeof(modules), ctypes.byref(needed)
+        ):
+            return []
+        got = needed.value // ctypes.sizeof(wintypes.HMODULE)
+        if got <= count:
+            break
+        count = got
+    else:
+        return []
+    buffer = ctypes.create_unicode_buffer(32768)
+    paths: list[str] = []
+    for i in range(got):
+        if psapi.GetModuleFileNameExW(process, modules[i], buffer, len(buffer)):
+            paths.append(buffer.value)
+    return paths
+
+
+def cuda_library_suppliers(paths: list[str]) -> dict[str, str]:
+    """`{dll basename: supplier}` for the CUDA math libraries among `paths`. Pure."""
+    return {
+        name.lower(): classify_cuda_library(path)
+        for path in paths
+        if (name := Path(path).name).lower().startswith(_CUDA_LIBRARY_PREFIXES)
+    }
+
+
+def _supplier_versions(suppliers: dict[str, str]) -> dict[str, str]:
+    """Installed versions of the distributions that actually supplied a loaded library.
+
+    Only the ones that supplied: recording torch's version unconditionally would make
+    the baseline refuse to judge merely because torch was uninstalled, even though a
+    torch that is installed but never imported supplies nothing.
+    """
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import distributions
+    from importlib.metadata import version
+
+    tokens = set(suppliers.values())
+    names: list[str] = []
+    if "torch" in tokens:
+        names.append("torch")
+    if "nvidia-wheel" in tokens:
+        names += sorted(
+            name
+            for dist in distributions()
+            if (name := dist.metadata["Name"] or "").startswith("nvidia-")
+        )
+    found: dict[str, str] = {}
+    for name in names:
+        try:
+            found[name] = version(name)
+        except PackageNotFoundError:  # pragma: no cover - listed because installed
+            continue
+    return found
+
+
+def cuda_library_provenance() -> dict[str, Any]:
+    """Where this process's CUDA math libraries came from, and at which version.
+
+    Call it only **after** the sessions are open, since nothing is loaded before that.
+
+    This exists because the supplier flipping from torch's `lib` to the `nvidia-*`
+    wheels (ADR-0083) silently invalidated the first baseline captured under this
+    harness: the emitted waveform changed (measured 43dB SNR on one tick, amplified by
+    SOLA's argmax to corr 0.72 over 200 blocks) while every recorded field still
+    matched, so the difference presented itself as a code regression. Recording the
+    supplier turns that into a refusal to judge.
+    """
+    suppliers = cuda_library_suppliers(_loaded_module_paths())
+    return {"suppliers": suppliers, "versions": _supplier_versions(suppliers)}
+
 
 def provenance(sv_config: StreamVcConfig, target_sample_rate: int) -> dict[str, Any]:
     """Everything besides the geometry that decides what the emitted samples are.
@@ -164,11 +295,36 @@ def provenance(sv_config: StreamVcConfig, target_sample_rate: int) -> dict[str, 
 
     `target_sample_rate` comes from the RVC model's own metadata, so it doubles as a
     check that the recorded model file really is the one that was loaded.
+
+    `cuda_libraries` records the same thing one level down the stack -- see
+    `cuda_library_provenance`. It is collected from the live process, so this must be
+    called after the runtime is built.
     """
     # set(...) rather than the frozenset itself: pydantic's IncEx type is invariant on
     # the mutable set.
     rvc = sv_config.rvc.model_dump(mode="json", exclude=set(_DEVICE_SELECTION_FIELDS))
-    return {"rvc": rvc, "target_sample_rate": int(target_sample_rate)}
+    return {
+        "rvc": rvc,
+        "target_sample_rate": int(target_sample_rate),
+        "cuda_libraries": cuda_library_provenance(),
+    }
+
+
+def _flatten(prefix: str, value: Any) -> dict[str, Any]:
+    """`{dotted path: leaf}` for nested dicts, so a mismatch names the exact field.
+
+    An empty dict stays a leaf rather than vanishing, which is what makes "the baseline
+    never recorded this section" (None) distinguishable from "it recorded it as empty".
+    Collapsing the two would let an npz captured before `cuda_libraries` existed be
+    judged against -- the artifact whose supplier is unknown is exactly the one that
+    must not be.
+    """
+    if not isinstance(value, dict) or not value:
+        return {prefix: value}
+    flat: dict[str, Any] = {}
+    for key in value:
+        flat.update(_flatten(f"{prefix}.{key}", value[key]))
+    return flat
 
 
 def provenance_mismatches(
@@ -181,13 +337,16 @@ def provenance_mismatches(
             f"target_sample_rate: baseline={baseline.get('target_sample_rate')} "
             f"current={current.get('target_sample_rate')}"
         )
-    base_rvc = baseline.get("rvc", {})
-    cur_rvc = current.get("rvc", {})
-    for key in sorted(set(base_rvc) | set(cur_rvc)):
-        if base_rvc.get(key) != cur_rvc.get(key):
-            lines.append(
-                f"rvc.{key}: baseline={base_rvc.get(key)!r} current={cur_rvc.get(key)!r}"
-            )
+    for section in ("rvc", "cuda_libraries"):
+        # .get(section) -- not .get(section, {}) -- so an absent section reads as None
+        # and cannot be mistaken for one that was recorded and happened to be empty.
+        base = _flatten(section, baseline.get(section))
+        cur = _flatten(section, current.get(section))
+        for key in sorted(set(base) | set(cur)):
+            if base.get(key) != cur.get(key):
+                lines.append(
+                    f"{key}: baseline={base.get(key)!r} current={cur.get(key)!r}"
+                )
     return lines
 
 
