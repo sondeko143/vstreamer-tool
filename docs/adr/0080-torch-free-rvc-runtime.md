@@ -1,6 +1,6 @@
 # 0080. 変換経路も含めてランタイム全体を torch から切り離し、rvc extra から torch/torchaudio/faiss-cpu を外す（0078 の続き）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-12
 - 効力: 既定
 - Related: extends [ADR-0078](0078-torch-free-device-resolution.md); spec [2026-08-12-rvc-torch-free-runtime-design.md](../superpowers/specs/2026-08-12-rvc-torch-free-runtime-design.md); [ADR-0081](0081-ort-native-value-binding.md)（推論境界）, [ADR-0082](0082-rvc-resample-on-inhouse-polyphase.md)（信号処理境界）, [ADR-0069](0069-torch-213-and-terminal-torchaudio.md)（外す対象のピン）, [ADR-0072](0072-stream-vc-lookahead.md)（下記のとおり、その測定値の再現性を失わせる）
@@ -39,7 +39,14 @@
 
 ## Consequences
 
-VC ホストの venv から torch が消える。削減量は spec の受入基準として実測を残す（0078 の whisper ホストでは 464MB / 2.84 秒だった）。
+VC ホストの venv から torch が消える。削減量の実測（[ADR-0078](0078-torch-free-device-resolution.md) と同じ量 — readiness marker までの起動時間と、trampoline を除いた実プロセスの常駐 working set。変更前は N=3、変更後は N=6 の中央値）:
+
+| 設定 | 起動時間 | 常駐 WS |
+|---|---|---|
+| `config_vc.toml`（発話単位 VC、rmvpe） | 20.33s → **5.56s**（-14.77s） | 2332.1MB → **2146.7MB**（-185.4MB） |
+| `config_stream_producer.toml`（Stream VC、fcpe） | 18.84s → **5.88s**（-12.96s） | 2246.2MB → **1825.0MB**（-421.2MB） |
+
+起動時間の削減は 0078 が torch の import 単体について測った 3.17 秒より大きい。主因は上の Context が挙げた `ctranslate2` で、torch が venv から消えると `import ctranslate2` は 5.39 秒から **0.39 秒**になる。常駐の削減量が 2 設定で揃わない理由は特定していない。
 
 **オフラインで ONNX 資産を作るときだけ、オーバーレイ経由で torch が降ってくる。** 初回は数百 MB のダウンロード待ちが増える。`export-hubert-onnx` は fp16 グラフを CUDA 上で export するため、この経路には引き続き GPU と CUDA 対応 torch が要る。
 

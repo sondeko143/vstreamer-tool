@@ -1,6 +1,6 @@
 # 0081. ONNX セッション間の受け渡しを onnxruntime ネイティブの OrtValue に統一する（torch の dlpack ゼロコピーを捨てる）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-12
 - 効力: 既定
 - Related: [ADR-0080](0080-torch-free-rvc-runtime.md)（この決定の動機）; refines [ADR-0024](0024-onnx-session-single-factory.md)（セッション生成は単一ファクトリのまま）; [ADR-0053](0053-streaming-vc-fixed-block-crossfade.md)（shape 固定の由来）

@@ -1,6 +1,6 @@
 # 0082. RVC 経路のサンプルレート変換を自前ポリフェーズ実装に一本化する（torchaudio を廃止、0073 を変換経路へ拡張）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-12
 - 効力: 既定
 - Related: extends [ADR-0073](0073-device-boundary-inhouse-polyphase-resampler.md); [ADR-0080](0080-torch-free-rvc-runtime.md)（この決定の動機）; [ADR-0069](0069-torch-213-and-terminal-torchaudio.md)（廃止する依存のピン）; [ADR-0075](0075-wire-sample-rate-validation.md)（比の上限）; [ADR-0036](0036-whisper-resample-via-pyav.md)（下記のとおり、その記述の片側を無効化する）
