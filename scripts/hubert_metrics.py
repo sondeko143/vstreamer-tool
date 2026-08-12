@@ -1,8 +1,8 @@
 """Metrics used to judge the equivalence of the HuBERT replacement, and the verdict.
 
 The decision logic and the thresholds live here alone, so that the conversion tool
-(scripts/convert_hubert.py) and the equivalence tests (tests/test_hubert_equivalence.py,
-tests/test_change_voice_golden.py) reach a verdict from the same formulas and the same
+(scripts/convert_hubert.py) and the equivalence tests (tests/lib/test_rvc_hubert_equivalence.py,
+tests/lib/test_rvc_golden.py) reach a verdict from the same formulas and the same
 thresholds. Always import the values; never copy them.
 
 Design rule: no metric may ever return a "perfect score" for broken input (fail-closed).
@@ -32,7 +32,7 @@ MAX_ABS_MAX = 1e-4
 #   ONNX fp16 (spec 2)          corr 0.99995400  SNR 39.52 dB
 # The difference is rounding between ORT's and torch's fp16 kernels, not a defect in the
 # graph. Running the same ONNX in fp32 reproduces fairseq's features to max_abs 1.010e-05
-# (tests/test_hubert_equivalence.py).
+# (tests/lib/test_rvc_hubert_equivalence.py).
 # Sensitivity cross-check: the fp16-vs-fp32 feature difference of max_abs 0.43 drops SNR to
 # 3.03 dB. For an error ratio of about 30x, 20*log10(30) ~ 29.5 dB, which is consistent
 # with the 39.52 -> 3.03 drop.

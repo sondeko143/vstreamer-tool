@@ -423,7 +423,7 @@ async def subtitle_obs_worker(
     # The same dict is reused across sessions (reconnects) -- rebuilding it on every flap
     # would warn again on every reconnect even for the same broken value
     # (see test_style_warn_once_persists_across_reconnects_not_just_within_a_session
-    # in tests/test_subtitle_obs.py, which goes RED if this dict is moved
+    # in tests/worker/test_subtitle_obs.py, which goes RED if this dict is moved
     # inside the loop below).
     style_warned: dict[str, bool] = {}
     # The warn-once flag for "a p=s (translated) message arrived but translated_source is

@@ -19,7 +19,7 @@ username (in `C:\Users\<name>\…` paths) and a host name leaked into committed
 
 Redaction placeholders (`<USER>`, `<NAS_HOST>`) and standard Windows accounts
 (`Public`, `Default`, …) are allowlisted, so the sanitized docs/tests pass. So is
-the obs-websocket auth test vector (`tests/test_obs_ws.py`, [ADR-0043](adr/0043-obs-websocket-client-in-house.md)):
+the obs-websocket auth test vector (`tests/lib/test_obs_ws.py`, [ADR-0043](adr/0043-obs-websocket-client-in-house.md)):
 its salt and expected hash are high-entropy base64 and trip `generic-api-key`,
 but they are fixed test inputs, not credentials.
 

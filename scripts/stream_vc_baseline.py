@@ -27,7 +27,7 @@ actually identified (`check_cuda_libraries_are_identified`); a reference that fa
 would be trusted blindly by every later `compare`.
 
 The config path is supplied out-of-band through `$VSPEECH_STREAM_VC_BASELINE_CONFIG`
-(`--config` overrides it), the same way tests/test_change_voice_golden.py takes its
+(`--config` overrides it), the same way tests/lib/test_rvc_golden.py takes its
 config, so no machine-specific path lives in the repo. The npz lands under
 tests/assets/rvc_golden/, which is gitignored.
 
@@ -569,7 +569,7 @@ class Verdict:
     def within_tolerance(self) -> bool:
         """The thresholds hold both over the whole stream and on the worst single block.
 
-        The whole-stream pair matches tests/test_change_voice_golden.py, but on its own
+        The whole-stream pair matches tests/lib/test_rvc_golden.py, but on its own
         it is too coarse here: at N=200 the gate would still admit one block sitting at
         about -12 dB SNR, because that block's noise is only 1/200 of the total energy.
         A per-block floor at the same thresholds closes that, and costs nothing on a

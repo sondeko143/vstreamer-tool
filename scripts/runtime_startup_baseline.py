@@ -165,7 +165,7 @@ MEASURED_PATHS: tuple[MeasuredPath, ...] = (
             "imports go through the dispatcher rather than around it, and its recorded "
             "module set contains no GUI toolkit, so a toolkit pulled in through the "
             "dispatcher -- the exact ADR-0040 regression -- arrives here as an unlisted "
-            "top-level name and is named by the failure. `tests/test_subtitle_dispatch.py` "
+            "top-level name and is named by the failure. `tests/worker/test_subtitle.py` "
             "used to assert that by naming tkinter; ADR-0087 removed the assertion as "
             "redundant to this measurement, so this is where the guarantee lives now. "
             "Measuring it apart from the TK back end is what keeps the two distinguishable."

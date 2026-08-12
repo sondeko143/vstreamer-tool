@@ -1146,3 +1146,44 @@ def test_standard_sample_rate_family_never_needs_a_pathological_resampler():
     for a in _STANDARD_SAMPLE_RATES:
         for b in _STANDARD_SAMPLE_RATES:
             make_resampler(a, b)  # must not raise ValueError
+
+
+# The stream_vc asset checks used to live in a separate tests/test_stream_vc_preflight.py
+# with its own copy of `_fields`; ADR-0088 folded them in. Its
+# `test_stream_vc_disabled_no_problems` was dropped rather than moved: the
+# `test_disabled_recording_playback_stream_vc_skip_rate_checks` above asserts the strictly
+# stronger `collect_problems(...) == []` over the same disabled section.
+
+
+def test_stream_vc_enabled_missing_model_reported():
+    c = Config()
+    c.stream_vc.enable = True
+    c.stream_vc.rvc.model_file = Path("/nonexistent/voice.onnx")
+    c.stream_vc.rvc.hubert_model_file = Path("/nonexistent/hubert")
+    fields = _fields(collect_problems(c))
+    assert "stream_vc.rvc.model_file" in fields
+    assert "stream_vc.rvc.hubert_model_file" in fields
+
+
+def test_stream_vc_vad_gate_missing_model_reported():
+    c = Config()
+    c.stream_vc.enable = True
+    c.stream_vc.vad_gate = True
+    c.stream_vc.vad_model_file = Path("/nonexistent/silero_vad.onnx")
+    assert "stream_vc.vad_model_file" in _fields(collect_problems(c))
+
+
+def test_stream_vc_vad_gate_off_not_reported():
+    c = Config()
+    c.stream_vc.enable = True
+    c.stream_vc.vad_model_file = Path("/nonexistent/silero_vad.onnx")
+    assert "stream_vc.vad_model_file" not in _fields(collect_problems(c))
+
+
+def test_stream_vc_enabled_crossfade_gt_block_reported():
+    c = Config()
+    c.stream_vc.enable = True
+    c.stream_vc.block_ms = 10.0
+    c.stream_vc.crossfade_ms = 20.0  # crossfade must be < block
+    problems = collect_problems(c)
+    assert any(p.field == "stream_vc.crossfade_ms" for p in problems)

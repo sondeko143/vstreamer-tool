@@ -2,7 +2,7 @@
 
 The RVC decoder, the HuBERT content encoder and RMVPE all go through here. Never
 construct one anywhere else: a duplicate means the execution-provider choice only ever
-gets fixed in one of them. `tests/test_onnx_session.py` enforces this. The CPU-pinned
+gets fixed in one of them. `tests/lib/test_onnx_session.py` enforces this. The CPU-pinned
 Silero VAD (`vad.py`) is the only exception.
 
 Whether the CUDA EP is requested comes from onnxruntime's own provider list, never from

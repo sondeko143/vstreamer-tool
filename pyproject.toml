@@ -61,7 +61,7 @@ rvc = [
     # ただし解決器はこれを onnxruntime の要求と突き合わせない — onnxruntime-gpu の
     # nvidia 依存は [cuda]/[cudnn] extra 側にあり、こちらは要求していないため。つまり
     # CUDA 14 の onnxruntime を入れても lock は緑のまま通る。気付く場所は
-    # tests/test_onnx_session.py::test_each_preload_is_pointed_at_a_directory_that_has_what_it_wants
+    # tests/lib/test_onnx_session.py::test_each_preload_is_pointed_at_a_directory_that_has_what_it_wants
     # で、onnxruntime が要求する DLL 名が実在しなくなった時点で赤くなる。
     # 罠: nvidia-cublas は win_amd64 wheel を出さない版がある (13.6.1.10。13.6.0.2 にはある)。
     # 「win_amd64 wheel がある版」はバージョン式では書けないので、判明している版を名指しで
@@ -79,7 +79,7 @@ rvc = [
     "nvidia-cufft>=12.3.0.29,<13 ; sys_platform == 'win32'",
     "nvidia-cuda-runtime>=13.3.29,<14 ; sys_platform == 'win32'",
     "numpy>=2,<3",
-    # 保留 (ADR-0080 の範囲外): scipy を import しているのは tests/test_pitch_extract.py
+    # 保留 (ADR-0080 の範囲外): scipy を import しているのは tests/lib/test_pitch_extract.py
     # だけで、`vspeech/` からは 0 件になった (リサンプルは ADR-0082 で自前ポリフェーズへ)。
     # つまりこれは実質テスト専用依存だが、外すには dev グループへ移す判断が要り、それは
     # torch/torchaudio/faiss-cpu を外すという本 ADR の決定とは別の決定になる。次にここを
@@ -143,11 +143,27 @@ requires = ["uv_build>=0.11.20,<0.12.0"]
 build-backend = "uv_build"
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "scripts/tests"]
+# tests/ は vspeech/ のパッケージ木の鏡像 (ADR-0088)。scripts/ のテストも tests/scripts/
+# に収容したので、testpaths は 1 本でよい。
+testpaths = ["tests"]
 pythonpath = "."
 asyncio_mode = "auto"
 addopts = "-m 'not voicevox_e2e'"
+# GPU・実行時資産への依存はここに登録した requires_* マーカーで宣言し、条件の評価は
+# tests/conftest.py の pytest_runtest_setup 1 箇所で行う (ADR-0089)。登録してあるので
+# `uv run pytest --markers` がそのまま「skip を解くには何が要るか」の一覧になり、
+# `uv run pytest -m requires_cuda` で選択もできる。マーカーを足すときは conftest の
+# REQUIREMENTS と対で足すこと。
 markers = [
+    "requires_cuda: CUDA デバイスが 1 台以上あること",
+    "requires_rvc_config: $VSPEECH_RVC_GOLDEN_CONFIG が実在する RVC worker config を指すこと",
+    "requires_rvc_golden: tests/assets/rvc_golden/change_voice_golden.npz があること",
+    "requires_hubert_assets: $VSPEECH_HUBERT_ASSET_DIR と $VSPEECH_HUBERT_GOLDEN_DIR/hubert_golden.npz があること",
+    "requires_hubert_fp16_golden: $VSPEECH_HUBERT_GOLDEN_DIR/hubert_golden_fp16.npz があること",
+    "requires_fcpe_onnx: $VSPEECH_FCPE_ONNX が実在する fcpe.onnx を指すこと",
+    "requires_vad_model: $VSPEECH_VAD_MODEL が実在する silero_vad.onnx を指すこと",
+    "requires_stream_vc_config: $VSPEECH_STREAM_VC_CONFIG が実機 config を指すこと",
+    "requires_torch: torch が import できること（オフラインツールの overlay 環境のみ）",
     "voicevox_e2e: VOICEVOX 実合成 E2E（実行時資産が必要。通常実行では除外）",
 ]
 

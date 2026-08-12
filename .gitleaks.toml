@@ -44,7 +44,7 @@ regexes = [
   '''<NAS_HOST>''',
   '''(?i)users[\\/]{1,2}(?:public|default|defaultuser|default user|all users)''',
   # obs-websocket 5.x の認証アルゴリズムを固定する回帰ベクタ (ADR-0043,
-  # tests/test_obs_ws.py)。base64/sha256 の高エントロピー文字列なので
+  # tests/lib/test_obs_ws.py)。base64/sha256 の高エントロピー文字列なので
   # generic-api-key に引っかかるが、資格情報ではない: password は文字列
   # "supersecretpassword" で、salt / challenge / 期待値はこのテスト専用の
   # 固定値。実在の OBS インスタンスのものではない。

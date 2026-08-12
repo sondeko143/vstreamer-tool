@@ -104,3 +104,5 @@
 | [0085](0085-gate-runtime-weight-on-outcome.md) | ランタイムの重さのゲートをパッケージ名の列挙から成果測定（モジュール集合 + 常駐メモリ）へ移す | Accepted | 2026-08-12 |
 | [0086](0086-forbidden-name-list-by-what-else-catches-it.md) | 名前による import 禁止を「他のゲートが捉えないもの」だけに絞り、理由は ADR 層に置く | Superseded by [0087](0087-weight-guarded-by-measurement-not-named-bans.md) | 2026-08-12 |
 | [0087](0087-weight-guarded-by-measurement-not-named-bans.md) | 依存の重さは名指しの禁止ではなく計測だけで守る（0084 と 0086 を supersede） | Accepted | 2026-08-12 |
+| [0088](0088-mirror-test-layout-on-package-tree.md) | テストの配置をプロダクションのパッケージ木に写し、共有フィクスチャを conftest に集める | Accepted | 2026-08-13 |
+| [0089](0089-runtime-asset-gates-as-registered-markers.md) | GPU・実行時資産に依存するテストのゲートを登録済みマーカーで宣言する | Accepted | 2026-08-13 |
