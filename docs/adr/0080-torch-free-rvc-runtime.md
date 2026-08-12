@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-08-12
 - 効力: 既定
-- Related: extends [ADR-0078](0078-torch-free-device-resolution.md); spec [2026-08-12-rvc-torch-free-runtime-design.md](../superpowers/specs/2026-08-12-rvc-torch-free-runtime-design.md); [ADR-0081](0081-ort-native-value-binding.md)（推論境界）, [ADR-0082](0082-rvc-resample-on-inhouse-polyphase.md)（信号処理境界）, [ADR-0069](0069-torch-213-and-terminal-torchaudio.md)（外す対象のピン）
+- Related: extends [ADR-0078](0078-torch-free-device-resolution.md); spec [2026-08-12-rvc-torch-free-runtime-design.md](../superpowers/specs/2026-08-12-rvc-torch-free-runtime-design.md); [ADR-0081](0081-ort-native-value-binding.md)（推論境界）, [ADR-0082](0082-rvc-resample-on-inhouse-polyphase.md)（信号処理境界）, [ADR-0069](0069-torch-213-and-terminal-torchaudio.md)（外す対象のピン）, [ADR-0072](0072-stream-vc-lookahead.md)（下記のとおり、その測定値の再現性を失わせる）
 
 ## Context
 
@@ -46,5 +46,9 @@ VC ホストの venv から torch が消える。削減量は spec の受入基�
 `dio` / `harvest`（pyworld）を選ぶ経路は元から任意依存で、この決定では変えない。
 
 torch を必要とするテストはオフラインツール用のものだけになる。それらは `importorskip` で守り、ランタイム側のテストからは torch を落とす。
+
+**[ADR-0072](0072-stream-vc-lookahead.md) が記録した lookahead の測定値は、この変更後のツールでは再現しない。** `scripts/stream_vc_lookahead_eval.py` の対数メルは torchaudio の `MelSpectrogram` を使っていたが、torchaudio を落とすため numpy 実装に置き換わった。両者は数値的に互換ではなく、実測でビンあたり平均 |Δ| が 16kHz で 0.49dB、**48kHz で 2.09dB**、そこから導かれる `spectral_distance` が 48kHz で平均 +0.30 / p95 +0.26 ずれる。48kHz が実際に使われるレートである。0072 は p95 の差 0.78dB・平均の差 0.28dB を根拠に `lookahead_ms=40` を選んでおり、このずれはその効果量の 25〜35%、平均の差にいたっては全量を超える。
+
+1 回の実行の中では比較は依然として整合しているので、**lookahead=40 という決定自体は覆らない**。覆るのは 0072 の表の再現性だけである。0072 は Accepted なので本文は書き換えない — 数値を採り直す必要が生じたときは、新しいツールで測り直した表を新しい ADR に置くこと。
 
 `ctranslate2` と torch の関係（0078 で記録した機構）は変わらない。全 extra を単一 venv に入れる開発機では、他に torch を引くものが無くなるため今回はじめて torch が消える — ただし将来 torch を引く依存が 1 つでも戻れば、コード側が torch-free でも常駐は元に戻る。守っているのは構造ガードではなく依存表であり、`test_forbidden_imports.py` はコード側しか見ていない。

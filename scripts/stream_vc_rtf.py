@@ -17,8 +17,10 @@ by a human. The measured span deliberately includes the input H2D and output D2H
 
 The pure analysis helpers (make_voiced_signal / parse_grid / summarize / format_table /
 recommend / go_no_go) depend only on numpy and can be imported and tested on a CPU with no
-GPU. The torch / vspeech / StreamingVc imports are deferred into the functions that run
-the measurement.
+GPU. The vspeech / StreamingVc imports are deferred into the functions that run the
+measurement. No torch anywhere in this file (ADR-0081 took it out of the conversion path
+this harness measures; see `run_sweep`'s docstring for why no explicit CUDA
+synchronization barrier replaced the one that used to live here).
 """
 
 from __future__ import annotations
@@ -230,17 +232,25 @@ def run_sweep(
     warmup_iters: int,
     margin: float,
 ) -> list[BlockResult]:
-    """Sweep and measure the per-block latency of each (block, context, f0)."""
-    import time
+    """Sweep and measure the per-block latency of each (block, context, f0).
 
-    import torch
+    Holds no torch on purpose (ADR-0081 moved the conversion path to numpy +
+    onnxruntime-native `OrtValue` binding): `process_block` ends with
+    `_run_on_device`'s `io_binding.get_outputs()[0].numpy()`, which is a synchronous
+    device-to-host copy -- the CUDA work behind a tick is already complete by the time
+    `process_block` returns, so no explicit `torch.cuda.synchronize` barrier is needed
+    before or after it. This used to carry one (removed here); confirmed non-load-bearing
+    by reading `_run_on_device` (vspeech/lib/rvc.py), not assumed -- the sibling harness
+    `scripts/stream_vc_baseline.py` already relies on the same fact and has never carried
+    the barrier. Removing it does not change what this sweep measures.
+    """
+    import time
 
     from vspeech.config import F0ExtractorType
     from vspeech.lib.stream_vc import StreamingVc
 
     rate = 16000
     device = rt["device"]
-    is_cuda = device.type == "cuda"
     results: list[BlockResult] = []
 
     if not rt["f0_enabled"]:
@@ -286,12 +296,8 @@ def run_sweep(
                     latencies: list[float] = []
                     for i in range(iters + warmup_iters):
                         block = next_block(signal, block_len, i)
-                        if is_cuda:
-                            torch.cuda.synchronize(device)
                         t0 = time.perf_counter()
                         sv.process_block(block)
-                        if is_cuda:
-                            torch.cuda.synchronize(device)
                         t1 = time.perf_counter()
                         if i >= warmup_iters:
                             latencies.append(t1 - t0)

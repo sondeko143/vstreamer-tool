@@ -361,6 +361,28 @@ def test_seed_runtime_none_touches_nothing():
     seed_runtime(0, "none")  # must not import or raise
 
 
+def test_seed_runtime_both_degrades_with_a_clear_message_when_torch_is_missing(
+    monkeypatch,
+):
+    """`--seed-mode both` needs torch installed separately now that it has left the
+    runtime (ADR-0081); denied it, `seed_runtime` must fail loud with an actionable
+    message naming the alternative (`ort`), not let a bare ModuleNotFoundError
+    traceback surface.
+    """
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _deny_torch(name, *args, **kwargs):
+        if name == "torch" or name.startswith("torch."):
+            raise ModuleNotFoundError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _deny_torch)
+    with pytest.raises(SystemExit, match="--seed-mode both needs torch"):
+        seed_runtime(0, "both")
+
+
 def test_resolve_config_prefers_the_explicit_path(monkeypatch):
     monkeypatch.setenv(CONFIG_ENV, "from-env.toml")
     assert resolve_config(Path("explicit.toml")) == Path("explicit.toml")

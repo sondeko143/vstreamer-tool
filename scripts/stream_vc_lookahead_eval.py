@@ -259,7 +259,13 @@ def _mel_filterbank(n_fft: int, rate: int, n_mels: int) -> NDArray[np.float64]:
 
     Filters degenerate to all-zero where two adjacent bin edges round to the same FFT
     bin (possible at the low end with a coarse FFT resolution); that filter just
-    contributes nothing to the sum below rather than dividing by zero.
+    contributes nothing to the sum below rather than dividing by zero. At the
+    n_fft=1024/n_mels=80 shape this file uses, this leaves exactly 1 of the 80 channels
+    dead at a 48kHz rate (none at 16kHz). Harmless for the ranking use below -- a
+    constant-zero channel contributes the same (zero) term to both sides of every
+    `spectral_distance` comparison, so it cancels -- but it is a real difference from
+    torchaudio's filterbank, which has no dead channel at this shape. See `log_mel`'s
+    docstring for the full non-interchangeability picture this contributes to.
     """
     mel_bounds = _hz_to_mel(np.array([0.0, rate / 2.0], dtype=np.float64))
     mel_edges = np.linspace(mel_bounds[0], mel_bounds[1], n_mels + 2)
@@ -284,9 +290,22 @@ def log_mel(x: NDArray[np.int16], rate: int) -> NDArray[np.float64]:
     `torchaudio.transforms.MelSpectrogram(n_fft=1024, hop_length=256, n_mels=80)` now
     that torch/torchaudio are out of the dependency table (ADR-0081/ADR-0082). This is
     only ever used as a ranking distance metric between lookahead settings -- the module
-    docstring: "the numbers rank the settings and the wavs decide" -- so exact numeric
-    parity with torchaudio's filterbank is not required, only internal consistency
-    between the reference and candidate calls.
+    docstring: "the numbers rank the settings and the wavs decide" -- so internal
+    consistency between the reference and candidate calls within a single run is what
+    matters, and that consistency holds (both are always computed by this same function).
+
+    It is NOT numerically interchangeable with the torchaudio mel it replaced, though:
+    measured per-bin |delta| mean 0.49 dB at 16kHz and 2.09 dB at 48kHz, and the derived
+    `spectral_distance` shifts by mean/p95 +0.30/+0.26 dB at 48kHz -- the operative rate
+    for this file, since callers pass `rate = rt["target_sample_rate"]` (the RVC model's
+    own rate, commonly 48kHz), not 16kHz. That is on the same order as the effect
+    docs/adr/0072-stream-vc-lookahead.md's own logmel table reasons about (a 0.78 dB p95
+    spread and a 0.28 dB mean spread across its lookahead grid) -- so **figures recorded
+    by earlier (torchaudio-based) runs of this script are not comparable to figures from
+    this (numpy-based) implementation**; re-run the eval to get numbers on the same
+    footing as any current comparison. See also `_mel_filterbank`'s docstring for the one
+    structural difference (a dead channel at 48kHz that torchaudio's filterbank does not
+    have).
     """
     wav = x.astype(np.float64) / 32768.0
     pad = _MEL_N_FFT // 2

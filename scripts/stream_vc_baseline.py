@@ -34,14 +34,16 @@ left out: none of them is touched by the torch removal, and including them would
 their behaviour into a measurement about `StreamingVc.process_block`.
 
 Determinism, and why `--seed-mode` exists: the RVC synthesizer is VITS-style and draws
-random noise on every inference, so conversion is stochastic run-to-run. The existing
-utterance golden (scripts/capture_change_voice_golden.py) seeds torch *and*
-onnxruntime. ADR-0080 deletes torch from the runtime, so only `ort.set_seed()` will
-survive -- hence "ort" is a first-class mode here, and "none" measures the unseeded
-spread the seeding is supposed to remove. Reproducibility within one process is also not
-the same question as reproducibility across processes: `capture` answers the first (it
-runs the block sequence twice in one process), and `compare` -- which by construction
-runs in a later process -- answers the second.
+random noise on every inference, so conversion is stochastic run-to-run. The utterance
+golden (scripts/capture_change_voice_golden.py) used to seed torch *and* onnxruntime;
+ADR-0080 deletes torch from the runtime, and Task 3 measured `ort.set_seed()` alone
+sufficient (torch seeding contributed nothing), so it now seeds onnxruntime only -- hence
+"ort" is the default mode here, "both" stays available (needs torch installed
+separately) to reproduce the historical supplier-isolation evidence, and "none" measures
+the unseeded spread the seeding is supposed to remove. Reproducibility within one process
+is also not the same question as reproducibility across processes: `capture` answers the
+first (it runs the block sequence twice in one process), and `compare` -- which by
+construction runs in a later process -- answers the second.
 
 The timing loop holds no torch on purpose. `process_block` ends with a device-to-host
 copy of the decoder output, which is synchronous, so the tick is complete when it
@@ -90,10 +92,17 @@ INPUT_RATE = 16000
 def seed_runtime(seed: int, mode: str) -> None:
     """Seed every RNG the stochastic RVC synthesizer can consume, per `mode`.
 
-    - "both": onnxruntime + torch, the recipe scripts/capture_change_voice_golden.py
-      uses today.
-    - "ort": onnxruntime only. This is the only recipe that survives ADR-0080, since
-      torch leaves the runtime; whether it is sufficient is measured, not assumed.
+    - "both": onnxruntime + torch. Reproduces the historical supplier-isolation
+      evidence from before ADR-0081 (when scripts/capture_change_voice_golden.py still
+      seeded torch too) and needs torch installed separately -- it is no longer a
+      runtime dependency (ADR-0081) and Task 5 drops it from the dependency table
+      entirely. Fails loud with an actionable message, not an ImportError traceback,
+      when torch is not importable.
+    - "ort": onnxruntime only, and the default. This is the recipe that survives
+      torch's removal; Task 3 measured it sufficient on its own (cross-process
+      bit-identical captures, max|diff|=0, N=200 blocks twice) -- torch seeding was
+      proven to add nothing, which is why scripts/capture_change_voice_golden.py's own
+      `seed_all` stopped seeding torch (Task 4).
     - "none": no seeding at all, which measures the synthesizer's own stochastic spread.
 
     Must be called immediately before the block sequence it governs.
@@ -106,7 +115,16 @@ def seed_runtime(seed: int, mode: str) -> None:
 
     ort.set_seed(seed)
     if mode == "both":
-        import torch
+        try:
+            import torch
+        except ModuleNotFoundError as e:
+            raise SystemExit(
+                "--seed-mode both needs torch, which is not installed in this "
+                "environment (it is an offline/optional dependency, not a runtime "
+                "one -- ADR-0081). Install it separately to reproduce the historical "
+                "supplier-isolation evidence, or use --seed-mode ort (the default, "
+                "and the recipe proven sufficient on its own)."
+            ) from e
 
         torch.manual_seed(seed)
         if torch.cuda.is_available():
@@ -707,7 +725,11 @@ def main() -> int:
     p_capture.add_argument("--warmup", type=int, default=3)
     p_capture.add_argument("--seed", type=int, default=0)
     p_capture.add_argument("--input-seed", type=int, default=0)
-    p_capture.add_argument("--seed-mode", choices=SEED_MODES, default="both")
+    # "ort" by default: it is the recipe that survives torch's removal and was
+    # measured sufficient on its own (see seed_runtime's docstring). Pass
+    # --seed-mode both explicitly (and have torch installed) to reproduce the
+    # historical supplier-isolation evidence instead.
+    p_capture.add_argument("--seed-mode", choices=SEED_MODES, default="ort")
     p_capture.set_defaults(func=capture)
 
     # No threshold overrides on purpose: this subcommand *is* the gate, and a gate whose

@@ -2,8 +2,10 @@ import wave
 
 import numpy as np
 
+from scripts.stream_vc_lookahead_eval import _mel_filterbank
 from scripts.stream_vc_lookahead_eval import align_offset
 from scripts.stream_vc_lookahead_eval import frame_energy
+from scripts.stream_vc_lookahead_eval import log_mel
 from scripts.stream_vc_lookahead_eval import right_context_ms
 from scripts.stream_vc_lookahead_eval import spectral_distance
 from scripts.stream_vc_lookahead_eval import warmup_skip_samples
@@ -29,6 +31,46 @@ def test_frame_energy_is_per_hop_rms():
 
 def test_frame_energy_of_a_short_signal_is_empty():
     assert frame_energy(np.ones(3, dtype=np.float32), hop=4).shape == (0,)
+
+
+def test_log_mel_shape_and_finite_on_a_short_input():
+    """A 200-sample input is well under one FFT frame (1024), but the reflect-padding
+    (512 samples each side) still yields exactly one frame, and every value is finite."""
+    x = (0.3 * np.sin(2 * np.pi * 220.0 * np.arange(200) / 16000) * 20000).astype(
+        np.int16
+    )
+    out = log_mel(x, 16000)
+    assert out.shape == (80, 1)
+    assert np.all(np.isfinite(out))
+
+
+def test_log_mel_handles_a_length_one_input():
+    """The shortest possible input (a single sample) does not raise or divide by zero
+    (guards the padding/framing arithmetic at its own boundary)."""
+    out = log_mel(np.array([12345], dtype=np.int16), 16000)
+    assert out.shape == (80, 1)
+    assert np.all(np.isfinite(out))
+
+
+def test_log_mel_of_silence_is_a_constant_floor():
+    """All-zero input -> every mel bin of every frame reads the 1e-10 floor added inside
+    log_mel (10*log10(1e-10) = -100 dB), not NaN/-inf from log(0)."""
+    out = log_mel(np.zeros(4000, dtype=np.int16), 16000)
+    assert np.all(np.isfinite(out))
+    assert np.allclose(out, 10.0 * np.log10(1e-10))
+
+
+def test_mel_filterbank_has_a_dead_channel_only_at_48k():
+    """Documents the one structural gap from torchaudio's filterbank noted in
+    log_mel's docstring: at this n_fft=1024/n_mels=80 shape, floor-to-bin rounding
+    leaves exactly one all-zero channel at 48kHz (the operative rate for this file's
+    real callers) and none at 16kHz. torchaudio's filterbank has no dead channel here;
+    this one is harmless for the ranking use in log_mel (a zero channel contributes the
+    same term to both sides of every spectral_distance comparison), but it is real."""
+    fb_16k = _mel_filterbank(1024, 16000, 80)
+    fb_48k = _mel_filterbank(1024, 48000, 80)
+    assert np.count_nonzero(~fb_16k.any(axis=1)) == 0
+    assert np.count_nonzero(~fb_48k.any(axis=1)) == 1
 
 
 def test_align_offset_recovers_a_known_shift():
