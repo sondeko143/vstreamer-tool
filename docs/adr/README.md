@@ -101,5 +101,5 @@
 | [0082](0082-rvc-resample-on-inhouse-polyphase.md) | RVC 経路のサンプルレート変換を自前ポリフェーズ実装に一本化する（torchaudio を廃止、0073 を変換経路へ拡張） | Accepted | 2026-08-12 |
 | [0083](0083-cuda-runtime-from-nvidia-wheels.md) | CUDA ランタイム（cuBLAS / cuDNN）の供給元を torch から nvidia wheel へ移す | Accepted | 2026-08-12 |
 | [0084](0084-dependency-table-torch-gate.md) | torch/torchaudio/faiss-cpu の不在を pyproject と uv.lock に対するテストで守る（0080 の穴を塞ぐ） | Accepted | 2026-08-12 |
-| [0085](0085-gate-runtime-weight-on-outcome.md) | ランタイムの重さのゲートをパッケージ名の列挙から成果測定（モジュール集合 + 常駐メモリ）へ移す | Proposed | 2026-08-12 |
+| [0085](0085-gate-runtime-weight-on-outcome.md) | ランタイムの重さのゲートをパッケージ名の列挙から成果測定（モジュール集合 + 常駐メモリ）へ移す | Accepted | 2026-08-12 |
 | [0086](0086-forbidden-name-list-by-what-else-catches-it.md) | 名前による import 禁止を「他のゲートが捉えないもの」だけに絞り、理由は ADR 層に置く | Accepted | 2026-08-12 |

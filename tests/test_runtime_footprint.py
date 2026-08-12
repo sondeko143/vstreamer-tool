@@ -25,10 +25,11 @@ lands on the unconditional startup path, which no name list covers. The same lim
 to onnxruntime and to anything else reached only from a lazily-imported worker.
 
 There are **two indicators, and neither is sufficient alone** (ADR-0085 measured why):
-`pydantic_settings` costs +13.7 MB RSS / +176 modules imported in isolation, but only
-about 32 modules and ~1.6 MB that are unique to it on the real startup path. A module
-check sees those 32; a resident-memory threshold loose enough not to flap does not see
-1.6 MB. Each covers the other's blind spot.
+`pydantic_settings` costs +13.7 MB RSS / +176 modules on top of an already-loaded
+pydantic (+18.75 MiB / +240 modules from a bare interpreter, re-measured at N=10 in
+ADR-0086), but only about 32 modules and ~1.6 MB unique to it on the real startup path.
+A module check sees those 32; a resident-memory threshold loose enough not to flap does
+not see 1.6 MB. Each covers the other's blind spot.
 
 Startup **time** is measured and printed by the script and is deliberately absent from
 every verdict here. ADR-0085 rejected it on measured grounds, and the measurement runs
