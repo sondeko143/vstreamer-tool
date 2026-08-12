@@ -1052,7 +1052,6 @@ rvc = [
     { name = "nvidia-cudnn-cu13", marker = "sys_platform == 'win32'" },
     { name = "nvidia-cufft", marker = "sys_platform == 'win32'" },
     { name = "onnxruntime-gpu", marker = "sys_platform == 'win32'" },
-    { name = "scipy", marker = "sys_platform == 'win32'" },
 ]
 voicevox = [
     { name = "voicevox-core", marker = "sys_platform == 'win32'" },
@@ -1079,6 +1078,7 @@ dev = [
     { name = "pytest-httpx", marker = "sys_platform == 'win32'" },
     { name = "pytest-xdist", marker = "sys_platform == 'win32'" },
     { name = "ruff", marker = "sys_platform == 'win32'" },
+    { name = "scipy", marker = "sys_platform == 'win32'" },
     { name = "ty", marker = "sys_platform == 'win32'" },
 ]
 
@@ -1106,7 +1106,6 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "pyhumps", specifier = ">=3.8.0,<4" },
     { name = "pyvcroid2", marker = "sys_platform == 'win32' and extra == 'vroid2'", git = "https://github.com/Nkyoku/pyvcroid2" },
-    { name = "scipy", marker = "extra == 'rvc'", specifier = ">=1.10.1,<2" },
     { name = "sounddevice", marker = "extra == 'audio'", specifier = ">=0.5,<0.6" },
     { name = "toml", specifier = ">=0.10.2,<0.11" },
     { name = "voicevox-core", marker = "extra == 'voicevox'", url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl" },
@@ -1128,6 +1127,7 @@ dev = [
     { name = "pytest-httpx" },
     { name = "pytest-xdist", specifier = ">=3.8,<4" },
     { name = "ruff", specifier = ">=0.15.17" },
+    { name = "scipy", specifier = ">=1.10.1,<2" },
     { name = "ty", specifier = ">=0.0.49" },
 ]
 

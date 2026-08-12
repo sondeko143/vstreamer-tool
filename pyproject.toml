@@ -79,12 +79,8 @@ rvc = [
     "nvidia-cufft>=12.3.0.29,<13 ; sys_platform == 'win32'",
     "nvidia-cuda-runtime>=13.3.29,<14 ; sys_platform == 'win32'",
     "numpy>=2,<3",
-    # 保留 (ADR-0080 の範囲外): scipy を import しているのは tests/lib/test_pitch_extract.py
-    # だけで、`vspeech/` からは 0 件になった (リサンプルは ADR-0082 で自前ポリフェーズへ)。
-    # つまりこれは実質テスト専用依存だが、外すには dev グループへ移す判断が要り、それは
-    # torch/torchaudio/faiss-cpu を外すという本 ADR の決定とは別の決定になる。次にここを
-    # 触る人が、rvc extra から落として dev へ移すかを決めること。
-    "scipy>=1.10.1,<2",
+    # scipy はここにあったが dev グループへ移した (ADR-0091)。ADR-0080 が保留にしていた
+    # 判断で、rvc 実行時から 100MB が消える。
 ]
 mozc = ["mozcpy>=0.1.1,<0.2"]
 vroid2 = ["pyvcroid2 ; sys_platform == 'win32'"]
@@ -113,6 +109,11 @@ dev = [
     "beniget>=0.5.0",
     "onnx>=1.19,<2",
     "pytest-xdist>=3.8,<4",
+    # テスト専用 (ADR-0091)。`vspeech/` からは 1 件も import されておらず、用途は
+    # tests/lib/test_pitch_extract.py が `median_filter_f0` を検証するときの独立参照
+    # (`signal.medfilt`) 1 箇所だけ。自作の素朴な medfilt で代用すると自分のコードを
+    # 自分のコードと比べることになるので、参照実装としては外部のものを使う。
+    "scipy>=1.10.1,<2",
 ]
 
 [tool.uv]
@@ -149,9 +150,10 @@ build-backend = "uv_build"
 testpaths = ["tests"]
 pythonpath = "."
 asyncio_mode = "auto"
-# `-n auto` は既定で並列実行する (ADR-0090)。交互 A/B 3 組でウォーム時 37.1s -> 20.1s、
-# しかも分散が 43% -> 7% に縮む。速さより「毎回だいたい同じ時間で終わる」ほうが効く。
-# デバッグ時は `-n0` を足すとプロセス内直列に戻る (pdb / -s が使える)。
+# `-n auto` は既定で並列実行する (ADR-0090)。交互 A/B 3 組で 32.9s -> 18.8s。
+# 注: ADR-0090 は「分散が 43% -> 7% に縮む」ことも根拠に挙げたが、その分散の出所は
+# AV のリアルタイムスキャンで、除外設定を入れた後は直列も同じだけ安定する。今この
+# 既定を支えているのは速さの差だけ。デバッグ時は `-n0` で直列に戻る (pdb / -s が使える)。
 addopts = "-m 'not voicevox_e2e' -n auto"
 # GPU・実行時資産への依存はここに登録した requires_* マーカーで宣言し、条件の評価は
 # tests/conftest.py の pytest_runtest_setup 1 箇所で行う (ADR-0089)。登録してあるので
