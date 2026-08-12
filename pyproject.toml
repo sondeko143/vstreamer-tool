@@ -27,37 +27,23 @@ dependencies = [
     # (websockets.client.connect -> websockets.asyncio.client.connect) の影響は
     # lib/obs_ws.py に閉じ込める。
     "websockets>=14,<17",
-    # 3.13+ で stdlib から外れる audioop の後方移植 (C ポート)。recording/playback/vc の
-    # 音量・dBFS 経路が `import audioop` のまま、飽和セマンティクスを保ったまま動く。
-    "audioop-lts ; python_version >= '3.13'",
+    # PEP 594 で stdlib から外れた audioop の後方移植 (C ポート)。recording/playback/vc は
+    # `import audioop` のまま、飽和セマンティクスを保ったまま動く。
+    "audioop-lts",
 ]
 
 [project.optional-dependencies]
 voicevox = ["voicevox-core"]
 whisper = [
     "faster-whisper==1.2.1",
-    # torch は入れない。推論は ctranslate2 が行い、GPU の選択は CUDA driver API 経由に
-    # なった (ADR-0078)。以前はデバイス番号ひとつを得るためだけに torch を積んでおり、
-    # 常駐 +476.7MB / 起動 +3.17s を払っていた。
     # >=1.27: CUDA 13 世代に対応する最初の版 (roadmap フェーズ2)。
     "onnxruntime-gpu>=1.27,<2",
     "numpy>=2,<3",
 ]
 rvc = [
-    # torch / torchaudio は入れない (ADR-0080)。推論は onnxruntime が行い、テンソル配線は
-    # numpy + OrtValue (ADR-0081)、リサンプルは自前ポリフェーズ (ADR-0082) になった。
-    # 「import しない」では足りず「入れない」ことが条件である: ctranslate2 (コア依存) が
-    # `try: import torch` で掴むため、環境にある限りプロセスは torch を読み込む (ADR-0078)。
-    # ONNX 資産を作るオフラインツール (poe export-hubert-onnx / poe export-fcpe-onnx) だけが
-    # torch を要求し、`uv run --with` のオーバーレイから受け取る。
-    # faiss-cpu も外した (ADR-0080): repo のどの .py も import せず、対応する設定項目も無い。
-    # pyworld (dio/harvest の f0 抽出) は runtime 依存から外した: cp314 wheel が無く、
-    # 既定は rmvpe。dio/harvest を使う場合のみ手動導入 (`uv pip install pyworld`)。
-    # pitch_extract.py が遅延 import する。
     # >=1.27: CUDA 13 世代 (下の nvidia wheel 群) に対応する最初の版 (roadmap フェーズ2)。
     "onnxruntime-gpu>=1.27,<2",
-    # CUDA ランタイムの供給元 (ADR-0083)。onnxruntime-gpu の wheel は CUDA を同梱せず、
-    # この venv では torch/lib だけが供給元だった。torch を外したので唯一の供給元。
+    # CUDA ランタイムの供給元 (ADR-0083)。onnxruntime-gpu の wheel は CUDA を同梱しない。
     # 名指しなのは `onnxruntime-gpu[cuda,cudnn]` が解決不能なため — 1.27.0 は
     # `nvidia-cuda-nvrtc-cu13~=13.0` を pin するが、NVIDIA は CUDA 13 世代で `-cu13`
     # 接尾辞を落としており、その名前は PyPI ではスタブ (0.0.1) しか存在しない。
@@ -102,8 +88,7 @@ rvc = [
 ]
 mozc = ["mozcpy>=0.1.1,<0.2"]
 vroid2 = ["pyvcroid2 ; sys_platform == 'win32'"]
-# sounddevice: PortAudio 同梱の py3-none wheel (ABI 非依存) なので cp314 でも wheel が入る。
-# PyAudio は cp314 wheel が無く sdist ビルドに PortAudio が要る (roadmap フェーズ3 で移行)。
+# PortAudio 同梱の py3-none wheel (ABI 非依存) なので cp314 でも wheel が入る。
 audio = ["sounddevice>=0.5,<0.6"]
 
 [project.urls]
@@ -111,8 +96,7 @@ Repository = "https://github.com/sondeko143/vstreamer-tool"
 
 [project.scripts]
 vspeech = "vspeech.main:cmd"
-# 走っている pipeline への制御コマンド (ADR-0061)。追加依存は無い — click と
-# grpc は既にコア依存で、vspeech から EventType/EventAddress だけを借りる。
+# 追加依存ゼロの制御コマンド (ADR-0061): click / grpc は既にコア依存。
 vsctl = "cli.main:main"
 
 [dependency-groups]
@@ -144,11 +128,6 @@ environments = [
 # provides the `onnxruntime` module that faster-whisper imports.
 override-dependencies = ["onnxruntime ; sys_platform == 'never'"]
 
-# PyTorch の cu130 index はここには無い。torch は依存でなくなった (ADR-0080) ので、
-# index も [tool.uv.sources] のエントリも残さない。CUDA 版 torch が要るのは
-# `poe export-hubert-onnx` だけで、そこは wheel を URL 直指しで `uv run --with` に渡す
-# — [tool.uv.sources] は `--with` の要求解決には適用されない (実測: 適用されれば
-# cu130、実際に来たのは PyPI の 2.13.0+cpu)。
 [tool.uv.sources]
 vstreamer-protos = { url = "https://github.com/sondeko143/vstreamer-protos/releases/download/v0.1.1/vstreamer_protos-0.1.1-py3-none-any.whl" }
 voicevox-core = { url = "https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl" }
@@ -202,9 +181,7 @@ extend-select = ["I", "UP"]
 force-single-line = true
 
 # Task automation lives in poe_tasks.toml (included below), kept out of this file
-# so pyproject stays focused on package metadata. The former Makefile's
-# voicevox-assets target was folded into poe there too; its requirements-pod and
-# clean targets went away with the container deploy (ADR-0067).
-# Run any task via `uv run poe <task>`; `uv run poe` with no task lists them all.
+# so pyproject stays focused on package metadata. Run any task via
+# `uv run poe <task>`; `uv run poe` with no task lists them all.
 [tool.poe]
 include = ["poe_tasks.toml"]
