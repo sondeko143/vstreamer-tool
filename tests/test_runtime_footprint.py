@@ -11,10 +11,18 @@ worker past that point is imported lazily inside `vspeech_coro` behind
 `config.<section>.enable` and needs a config file, model assets and often a GPU, which
 ADR-0085 keeps out of the default suite. So this slice is the largest one measurable
 without any of that, and it is the slice *every* pipeline pays whichever workers it
-enables. A dependency that only a lazily-imported worker touches is out of reach by
-construction -- a known limit, not an oversight. The measurement itself lives in
-`scripts/runtime_startup_baseline.py`, which is also the tool that re-records the
-baseline.
+enables. The measurement itself lives in `scripts/runtime_startup_baseline.py`, which is
+also the tool that re-records the baseline.
+
+**This gate does not guard torch, and nothing here should be read as though it did.**
+Nothing on this startup path imports `ctranslate2`: the transcription worker is imported
+lazily, and it defers `faster_whisper` into a function body, so even
+`import vspeech.worker.transcription` loads no ctranslate2 (both measured). ctranslate2 is
+what picks up a merely *installed* torch, so `uv add torch` leaves every check in this
+file green. **ADR-0084's dependency-table gate in `test_forbidden_imports.py` remains the
+load-bearing guard for torch.** What this file adds is orthogonal: it catches weight that
+lands on the unconditional startup path, which no name list covers. The same limit applies
+to onnxruntime and to anything else reached only from a lazily-imported worker.
 
 There are **two indicators, and neither is sufficient alone** (ADR-0085 measured why):
 `pydantic_settings` costs +13.7 MB RSS / +176 modules imported in isolation, but only
@@ -30,12 +38,23 @@ behind this file reproduced it: the same import, back to back on the same machin
 Two entries in the recorded top-level list look like noise and are not:
 `81d243bd2c585b0f4821__mypyc` is charset_normalizer's mypyc-compiled runtime (the hex is a
 build id) and `_cython_3_1_1` is a Cython version shim. Both change name when their
-package is rebuilt, which is a legitimate baseline update like any other.
+package is rebuilt, which is a legitimate baseline update like any other. Two others that
+*would* have been noise are filtered out before they reach the baseline at all -- see
+`PROVISIONING_ARTIFACTS`.
+
+Re-recording is the fastest way to turn any snapshot gate green, so the record itself is
+checked too: enough runs behind it, and a calibration showing the resident-memory budget
+still catches something.
 """
 
 from functools import cache
 
+import pytest
+
+from scripts.runtime_startup_baseline import MIN_RUNS_FOR_UPDATE
 from scripts.runtime_startup_baseline import Measurement
+from scripts.runtime_startup_baseline import _build_baseline
+from scripts.runtime_startup_baseline import build_parser
 from scripts.runtime_startup_baseline import load_baseline
 from scripts.runtime_startup_baseline import measure_startup
 
@@ -99,11 +118,17 @@ def test_startup_module_count_stays_within_budget():
 
 
 def test_startup_resident_memory_stays_within_budget():
-    """The half a module count cannot see: native weight.
+    """The half a module count cannot see: native weight *on this path*.
 
-    A single native extension can be a handful of modules and hundreds of megabytes --
-    torch was +476.7 MB (ADR-0080) -- so the module indicators alone would let it back in
-    almost unremarked.
+    A native extension can be a handful of modules and tens of megabytes, which the module
+    indicators would wave through almost unremarked. The recorded calibration measures how
+    much of that this budget actually stops; numpy, the lightest heavy native dependency
+    installed here, is the case it is sized against.
+
+    Read the scope narrowly. This says nothing about torch: torch arrives through
+    ctranslate2, which nothing on this startup path imports, so it never reaches this
+    measurement at all. ADR-0084's dependency-table gate is what stands between the runtime
+    and torch's +476.7 MB (ADR-0080), not this assertion.
     """
     budget = _baseline()["resident_memory_mib"]
     observed = _startup().working_set_mib
@@ -146,3 +171,87 @@ def test_a_newcomer_on_the_startup_path_is_named():
         f"module that is not, and change NEWCOMER."
     )
     assert len(injected.modules) > len(_startup().modules)
+
+
+def test_the_recorded_baseline_rests_on_enough_runs():
+    """Re-recording must not be a way to quietly narrow the budgets.
+
+    A budget is anchored on the worst run seen, so fewer runs means a *tighter* budget, not
+    merely a weaker one -- measured: an N=2 re-record of an unchanged runtime moved the
+    resident-memory budget from 64.0 to 63.0 MiB, which is how a stable gate starts
+    flapping. The CLI refuses `--update` below this floor; this pins the committed record
+    so a hand-edit or a bypass is visible too.
+    """
+    for indicator in ("module_count", "resident_memory_mib"):
+        runs = _baseline()[indicator]["runs"]
+        assert runs >= MIN_RUNS_FOR_UPDATE, (
+            f"{indicator} was recorded from {runs} run(s), below the floor of "
+            f"{MIN_RUNS_FOR_UPDATE}. One run is not a measurement, and too few runs write "
+            f"a budget tighter than the code deserves.\n" + _regenerate_hint()
+        )
+
+
+def test_the_recorded_budget_is_calibrated_against_something_it_catches():
+    """The tripwire on the resident-memory budget's usefulness.
+
+    Nothing stops someone widening this budget by re-recording on a bloated tree, and the
+    resulting record would read perfectly normally. The calibration is the check that it
+    still stops something: `over_budget_mib` is by how much the budget catches the
+    calibration module. If a re-record ever pushes that to zero or below, the budget has
+    stopped guarding anything, and this fails instead of merely reading oddly.
+    """
+    calibration = _baseline()["resident_memory_mib"]["calibration"]
+    assert calibration["measured"], (
+        f"the recorded baseline has no calibration: {calibration['module']} was not "
+        "installed when it was taken, so nothing shows the resident-memory budget still "
+        "catches anything. Re-record with the extras synced "
+        "(`uv sync --all-extras`).\n" + _regenerate_hint()
+    )
+    assert calibration["over_budget_mib"] > 0, (
+        f"the resident-memory budget no longer catches {calibration['module']}: it "
+        f"measured {calibration['working_set_mib']:.2f} MiB against a budget of "
+        f"{_baseline()['resident_memory_mib']['budget']:.2f} MiB, i.e. "
+        f"{calibration['over_budget_mib']:.2f} MiB over.\n"
+        "A budget that its own calibration walks under is guarding nothing. Tighten it "
+        "(RSS_HEADROOM_MIB in scripts/runtime_startup_baseline.py) rather than accepting "
+        "the record."
+    )
+
+
+def test_the_documented_regeneration_command_is_one_the_tool_accepts():
+    """The instruction handed to a maintainer at the worst possible moment must work.
+
+    It did not: `uv run poe runtime-baseline -- --update --runs 10` exits 2 with
+    "unrecognized arguments" and writes nothing, because poe forwards the `--` separator to
+    the task verbatim. Every failure message above quotes this string, so it is parsed here
+    with the tool's own parser rather than trusted.
+    """
+    prefix = "uv run poe runtime-baseline "
+    command = _baseline()["regenerate_with"]
+    assert command.startswith(prefix), command
+    tail = command[len(prefix) :].split()
+    assert "--" not in tail, (
+        f"{command!r} passes a `--` separator through poe to argparse, which rejects the "
+        "whole tail (exit 2). Drop it."
+    )
+    args = build_parser().parse_args(tail)
+    assert args.update, f"{command!r} would not re-record anything"
+    assert args.runs >= MIN_RUNS_FOR_UPDATE, (
+        f"{command!r} asks for {args.runs} run(s), which the tool refuses for --update"
+    )
+
+
+def test_a_measurement_that_disagrees_with_itself_is_not_recorded():
+    """The recorder refuses to bake a flap into the baseline.
+
+    The gate compares a *single* run against the recorded list, so a name seen in only some
+    runs would be written down and then read as stale on the runs that lack it. Recording
+    the intersection instead only moves the flap to the additions check. Any disagreement
+    means the gate would flap either way, so the honest answer is to refuse and say which
+    names moved.
+    """
+    steady = Measurement(("vspeech", "json"), 50.0, 40.0, 1.0)
+    wobbly = Measurement(("vspeech", "json", "sqlite3"), 50.0, 40.0, 1.0)
+    with pytest.raises(SystemExit) as caught:
+        _build_baseline([steady, wobbly], None)
+    assert "sqlite3" in str(caught.value)

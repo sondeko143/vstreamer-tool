@@ -79,10 +79,14 @@ stream-vc-baseline = { cmd = "python -m scripts.stream_vc_baseline", help = "Cap
 # ランタイムの起動が持ち込むモジュール集合と常駐メモリの基準データを取り直す (ADR-0085)。
 # 通常のテスト実行に常駐する成果ゲート tests/test_runtime_footprint.py が読む
 # tests/runtime_startup_baseline.json を書き直すのがこれ。GPU も実行時資産も要らない。
-#   uv run poe runtime-baseline                       # 実測して現状の値を見るだけ
-#   uv run poe runtime-baseline -- --update --runs 10 # 基準データを書き直す
+#   uv run poe runtime-baseline                    # 実測して現状の値を見るだけ
+#   uv run poe runtime-baseline --update --runs 10 # 基準データを書き直す
+# **`--` を挟まないこと。** poe は `--` をタスクへそのまま渡すので、argparse が引数列ごと
+# 拒否して終了コード 2 になり、何も書かれない (実測)。
 # 機能追加でモジュール集合が正当に増えたときの手順がこれで、ゲートの失敗メッセージも
-# このコマンドを案内する。--update したら **差分を読んで承認してからコミットする**
+# このコマンドを案内する。--runs は 10 未満だと --update が拒否される: 予算は「見た中で
+# 最悪の run」に張り付くので、回数が少ないほど**狭い**予算が書かれてゲートが暴れる。
+# --update したら **差分を読んで承認してからコミットする**
 # (増えた名前が意図した依存かどうかを見る場所がそこしかない)。
 runtime-baseline = { cmd = "python -m scripts.runtime_startup_baseline", help = "Measure/record the runtime startup module set and resident memory baseline (ADR-0085)" }
 

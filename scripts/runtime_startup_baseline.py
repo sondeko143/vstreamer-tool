@@ -4,9 +4,11 @@ ADR-0085 moves the protection of the runtime's weight off a list of package name
 the outcome: what starting the runtime actually loads, and what it costs in resident
 memory. This module is the measurement behind that gate --
 `tests/test_runtime_footprint.py` calls `measure_startup()` once per session, and a
-maintainer regenerates the recorded baseline with:
-
-    uv run poe runtime-baseline -- --update --runs 10
+maintainer regenerates the recorded baseline with `REGENERATE_COMMAND` below. Note the
+absence of a `--` separator in it: poe forwards `--` to the task literally, so the form
+with one is rejected by argparse (measured: exit 2, "unrecognized arguments").
+`tests/test_runtime_footprint.py` pins that, because this command is the one instruction a
+maintainer receives at the moment the gate fires.
 
 **"The runtime's startup path" here means importing `vspeech.main`.** That is everything
 `python -m vspeech` loads before it has read a config file: click, the config schema, the
@@ -15,9 +17,17 @@ logger, telemetry, preflight, the shared context, and the two infrastructure wor
 lazily inside `vspeech_coro`, gated by `config.<section>.enable`, and needs a config file
 plus model assets and often a GPU -- which ADR-0085 rules out of the default test suite.
 So this slice is both the largest one measurable without any of that, and the one *every*
-pipeline pays whichever workers it enables. A dependency that only a lazily-imported
-worker touches is out of this gate's reach by construction; that is a known limit, not an
-oversight.
+pipeline pays whichever workers it enables.
+
+**What that excludes, by name, so nobody over-reads this gate: torch.** Nothing on this
+path imports `ctranslate2` -- the transcription worker is imported lazily, and it defers
+`faster_whisper` into a function body, so even `import vspeech.worker.transcription` loads
+no ctranslate2 (measured, both). ctranslate2 is what grabs a merely *installed* torch, so
+`uv add torch` leaves every check in `tests/test_runtime_footprint.py` green.
+**[ADR-0084](../docs/adr/0084-dependency-table-torch-gate.md)'s dependency-table gate
+remains the load-bearing guard for torch**, and this gate does not replace it. The same
+goes for onnxruntime and every other dependency reached only from a lazily-imported
+worker.
 
 Startup time is measured and printed, and is deliberately **not** part of any verdict:
 ADR-0085 rejected it on measured grounds (the same suite on identical code took 30.45s /
@@ -42,6 +52,24 @@ BASELINE_PATH = REPO_ROOT / "tests" / "runtime_startup_baseline.json"
 
 ENTRY_POINT = "vspeech.main"
 
+# The one instruction a maintainer gets when the gate fires, so it is defined once and
+# every message quotes this. No `--` separator: poe passes it through to the task
+# verbatim and argparse then rejects the whole tail.
+REGENERATE_COMMAND = "uv run poe runtime-baseline --update --runs 10"
+
+# `--update` below this many runs is refused. A budget is an upper bound anchored on the
+# worst run seen, so too few runs is not merely a weak measurement -- it writes a *tighter*
+# budget than the code deserves and the gate starts flapping. Measured: an N=2 re-record of
+# an unchanged runtime moved the resident-memory budget from 64.0 to 63.0 MiB.
+MIN_RUNS_FOR_UPDATE = 10
+
+# Modules that record how this venv was provisioned rather than what the runtime depends
+# on: setuptools' distutils shim (setuptools is in uv.lock only as a transitive edge of
+# ctranslate2, declared by nothing) and virtualenv's own patch module. Both are injected by
+# `.pth` files at site initialisation, so they would come and go with packaging plumbing
+# and fail the staleness check for a reason that has nothing to do with runtime weight.
+PROVISIONING_ARTIFACTS = frozenset({"_distutils_hack", "_virtualenv"})
+
 # How the recorded budgets are derived from a measurement. Both live here rather than in
 # the JSON so that there is one place to change the rule; `--update` bakes the resulting
 # numbers *and* these values into the JSON's prose, so the two cannot drift apart.
@@ -59,9 +87,10 @@ RSS_HEADROOM_MIB = 4.0
 
 # Put on the startup path once per `--update`, to record what the resident-memory budget is
 # actually proved to catch. numpy is the lightest heavy native dependency this project
-# installs at all, so it is the hardest realistic case: a budget that catches numpy catches
-# onnxruntime or torch by a wide margin. It lives in the whisper/rvc extras, so the
-# calibration is skipped rather than required when it is absent.
+# installs at all, so it is the hardest realistic case for the budget. It lives in the
+# whisper/rvc extras; when it is absent the calibration is recorded as not measured, which
+# `tests/test_runtime_footprint.py` treats as a failure of the *record* rather than of the
+# environment reading it.
 CALIBRATION_MODULE = "numpy"
 
 # The child's payload. The preamble before the snapshot is `sys` and `time` only -- both
@@ -138,7 +167,11 @@ print(
 
 @dataclass(frozen=True)
 class Measurement:
-    """One child process's startup footprint."""
+    """One child process's startup footprint.
+
+    `modules` has already had `PROVISIONING_ARTIFACTS` filtered out, so both indicators
+    read the same population.
+    """
 
     modules: tuple[str, ...]
     working_set_mib: float
@@ -207,8 +240,13 @@ def measure_startup(entry_points: tuple[str, ...] = (ENTRY_POINT,)) -> Measureme
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
     payload = json.loads(result.stdout)
+    modules = tuple(
+        name
+        for name in payload["modules"]
+        if name.split(".")[0] not in PROVISIONING_ARTIFACTS
+    )
     return Measurement(
-        modules=tuple(payload["modules"]),
+        modules=modules,
         working_set_mib=payload["working_set_mib"],
         private_mib=payload["private_mib"],
         seconds=payload["seconds"],
@@ -240,9 +278,14 @@ def _calibration_sentence(calibration: Measurement | None, rss_budget: float) ->
         f"Calibrated the same way: putting {CALIBRATION_MODULE} on this startup path "
         f"takes the working set to {calibration.working_set_mib:.2f} MiB, {verdict} the "
         f"budget. {CALIBRATION_MODULE} is the lightest heavy native dependency this "
-        "project installs at all, so a budget that catches it catches onnxruntime or "
-        "torch (+476.7 MB, ADR-0080) by a wide margin. If that margin ever reads UNDER, "
-        "the budget has stopped guarding anything and must be tightened."
+        "project installs at all, so it is the hardest realistic case for the budget. If "
+        "that margin ever reads UNDER, the budget has stopped guarding anything and must "
+        "be tightened; tests/test_runtime_footprint.py fails on a record that says so. "
+        "What this budget does NOT reach: torch. Nothing on this startup path imports "
+        "ctranslate2 (the transcription worker is imported lazily and defers "
+        "faster_whisper into a function body), so a merely installed torch never appears "
+        "in this measurement -- ADR-0084's dependency-table gate is the load-bearing "
+        "guard for torch, not this one."
     )
 
 
@@ -282,9 +325,21 @@ def _build_baseline(runs: list[Measurement], calibration: Measurement | None) ->
         else ("with no run-to-run spread measured to compare it against")
     )
 
-    top_level: set[str] = set()
-    for measurement in runs:
-        top_level |= measurement.top_level
+    # Every run has to agree, and the union is not good enough: the gate compares a
+    # *single* run against this list, so a name seen in only some runs would be recorded
+    # and then read as a stale entry on the runs that lack it. Recording the intersection
+    # instead just moves the flap to the additions check. Any disagreement at all means
+    # the gate would flap, so refuse to record one rather than bake it in.
+    seen = [measurement.top_level for measurement in runs]
+    top_level = frozenset.union(*seen)
+    unstable = sorted(top_level - frozenset.intersection(*seen))
+    if unstable:
+        raise SystemExit(
+            "モジュール集合が実行ごとに揺れているので基準データを記録できません。"
+            f"全 {n} 回に現れなかった名前: {', '.join(unstable)}\n"
+            "このまま記録するとゲートが暴れます。揺れの原因 (子プロセスへ漏れている "
+            "環境変数、条件付き import など) を先に潰してください。"
+        )
 
     count_spread = counts[-1] - counts[0]
     return {
@@ -294,7 +349,7 @@ def _build_baseline(runs: list[Measurement], calibration: Measurement | None) ->
             "pristine child process loads, and what it costs in resident memory. Read by "
             "tests/test_runtime_footprint.py. Regenerate, do not hand-edit."
         ),
-        "regenerate_with": "uv run poe runtime-baseline -- --update --runs 10",
+        "regenerate_with": REGENERATE_COMMAND,
         "module_count": {
             "observed_max": counts[-1],
             "observed_min": counts[0],
@@ -339,9 +394,8 @@ def _write_baseline(baseline: dict, path: Path = BASELINE_PATH) -> None:
     )
 
 
-def main() -> int:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # ty: ignore[unresolved-attribute]
-
+def build_parser() -> argparse.ArgumentParser:
+    """The CLI, as a factory so a test can check `REGENERATE_COMMAND` really parses."""
     parser = argparse.ArgumentParser(
         description="ランタイムの起動が持ち込むモジュール集合と常駐メモリを実測する"
         "（ADR-0085 の成果ゲートの基準データ）"
@@ -349,18 +403,34 @@ def main() -> int:
     parser.add_argument(
         "--runs",
         type=int,
-        default=5,
-        help="測定回数。1 回は測定ではないので 5 以上を勧める",
+        default=MIN_RUNS_FOR_UPDATE,
+        help=f"測定回数。1 回は測定ではない。--update には {MIN_RUNS_FOR_UPDATE} 回以上が要る",
     )
     parser.add_argument(
         "--update",
         action="store_true",
         help=f"実測値で {BASELINE_PATH.name} を書き直す（差分を見て承認すること）",
     )
+    return parser
+
+
+def main() -> int:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # ty: ignore[unresolved-attribute]
+
+    parser = build_parser()
     args = parser.parse_args()
 
     if args.runs < 1:
         parser.error("--runs は 1 以上")
+    # 予算は「見た中で最悪の run」に張り付くので、回数が少ないほど予算は**狭く**なる。
+    # 実測: 変更していないランタイムを N=2 で採り直すと常駐メモリの予算が 64.0 -> 63.0MiB
+    # に締まった。そのまま記録すればゲートが暴れる。
+    if args.update and args.runs < MIN_RUNS_FOR_UPDATE:
+        parser.error(
+            f"--update には --runs {MIN_RUNS_FOR_UPDATE} 以上が要ります"
+            f"（指定は {args.runs}）。回数が足りないと、実際より狭い予算を"
+            "書き込んでしまいます"
+        )
 
     runs: list[Measurement] = []
     for i in range(args.runs):

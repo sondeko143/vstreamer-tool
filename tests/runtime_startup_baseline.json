@@ -1,27 +1,27 @@
 {
   "entry_point": "vspeech.main",
   "what_this_is": "The outcome gate of ADR-0085: what importing the runtime's entry point in a pristine child process loads, and what it costs in resident memory. Read by tests/test_runtime_footprint.py. Regenerate, do not hand-edit.",
-  "regenerate_with": "uv run poe runtime-baseline -- --update --runs 10",
+  "regenerate_with": "uv run poe runtime-baseline --update --runs 10",
   "module_count": {
-    "observed_max": 718,
-    "observed_min": 718,
+    "observed_max": 716,
+    "observed_min": 716,
     "runs": 20,
-    "budget": 734,
-    "basis": "len(sys.modules) after importing vspeech.main. N=20 consecutive runs: min 718, max 718 (spread 0). Budget = max + 16. ADR-0085 requires this indicator to catch pydantic_settings' +32 modules, so the slack is held below half of that signal while still absorbing the submodule shuffle of a routine dependency upgrade."
+    "budget": 732,
+    "basis": "len(sys.modules) after importing vspeech.main. N=20 consecutive runs: min 716, max 716 (spread 0). Budget = max + 16. ADR-0085 requires this indicator to catch pydantic_settings' +32 modules, so the slack is held below half of that signal while still absorbing the submodule shuffle of a routine dependency upgrade."
   },
   "resident_memory_mib": {
-    "observed_max": 59.21,
-    "observed_min": 58.58,
-    "observed_median": 58.77,
+    "observed_max": 59.08,
+    "observed_min": 58.52,
+    "observed_median": 58.81,
     "runs": 20,
     "budget": 64.0,
-    "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.main. N=20 consecutive runs: min 58.58, median 58.77, max 59.21 MiB -- spread 0.63 MiB (1.1% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.79 MiB of headroom, about 8x the observed spread, so it does not flap. Calibrated the same way: putting numpy on this startup path takes the working set to 67.24 MiB, 3.24 MiB over the budget. numpy is the lightest heavy native dependency this project installs at all, so a budget that catches it catches onnxruntime or torch (+476.7 MB, ADR-0080) by a wide margin. If that margin ever reads UNDER, the budget has stopped guarding anything and must be tightened. What it deliberately does not catch is pydantic_settings' ~1.6 MiB of cost unique to this path (ADR-0085) -- the module indicators cover that, which is why there are two.",
+    "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.main. N=20 consecutive runs: min 58.52, median 58.81, max 59.08 MiB -- spread 0.56 MiB (1.0% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.92 MiB of headroom, about 9x the observed spread, so it does not flap. Calibrated the same way: putting numpy on this startup path takes the working set to 66.91 MiB, 2.91 MiB over the budget. numpy is the lightest heavy native dependency this project installs at all, so it is the hardest realistic case for the budget. If that margin ever reads UNDER, the budget has stopped guarding anything and must be tightened; tests/test_runtime_footprint.py fails on a record that says so. What this budget does NOT reach: torch. Nothing on this startup path imports ctranslate2 (the transcription worker is imported lazily and defers faster_whisper into a function body), so a merely installed torch never appears in this measurement -- ADR-0084's dependency-table gate is the load-bearing guard for torch, not this one. What it deliberately does not catch is pydantic_settings' ~1.6 MiB of cost unique to this path (ADR-0085) -- the module indicators cover that, which is why there are two.",
     "calibration": {
       "module": "numpy",
       "measured": true,
-      "working_set_mib": 67.24,
-      "over_budget_mib": 3.24,
-      "module_count": 802
+      "working_set_mib": 66.91,
+      "over_budget_mib": 2.91,
+      "module_count": 800
     }
   },
   "top_level_modules": [
@@ -51,7 +51,6 @@
     "_cython_3_1_1",
     "_datetime",
     "_decimal",
-    "_distutils_hack",
     "_frozen_importlib",
     "_frozen_importlib_external",
     "_functools",
@@ -88,7 +87,6 @@
     "_types",
     "_typing",
     "_uuid",
-    "_virtualenv",
     "_warnings",
     "_weakref",
     "_weakrefset",
