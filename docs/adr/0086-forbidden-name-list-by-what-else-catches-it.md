@@ -1,6 +1,6 @@
 # 0086. 名前による import 禁止を「他のゲートが捉えないもの」だけに絞り、理由は ADR 層に置く
 
-- Status: Accepted
+- Status: Superseded by [ADR-0087](0087-weight-guarded-by-measurement-not-named-bans.md)
 - Date: 2026-08-12
 - 効力: 既定
 - Related: [ADR-0085](0085-gate-runtime-weight-on-outcome.md)（成果ゲート。本 ADR はその棚卸し側）; [ADR-0084](0084-dependency-table-torch-gate.md)（依存表ガード。維持）; [ADR-0080](0080-torch-free-rvc-runtime.md)（`FORBIDDEN` に torch/torchaudio を足すと決めた ADR。**不変条件は変わらず、それを固定する仕組みだけが依存表ガードへ移る**）; [ADR-0022](0022-hubert-onnx-runtime.md)（transformers の理由の所在）, [ADR-0021](0021-hubert-drop-fairseq.md), [ADR-0066](0066-config-input-file-only.md)（pydantic-settings の理由の所在）; spec [2026-08-12-outcome-based-runtime-gate-design.md](../superpowers/specs/2026-08-12-outcome-based-runtime-gate-design.md)

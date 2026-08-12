@@ -1,6 +1,6 @@
 # 0084. torch 不在を pyproject と uv.lock に対するテストで守る
 
-- Status: Accepted
+- Status: Superseded by [ADR-0087](0087-weight-guarded-by-measurement-not-named-bans.md)
 - Date: 2026-08-12
 - 効力: 制約
 - Related: [ADR-0080](0080-torch-free-rvc-runtime.md)（この決定が塞ぐ穴を Consequences で自認していた ADR）; [ADR-0078](0078-torch-free-device-resolution.md)（ctranslate2 と torch の関係を記録）
