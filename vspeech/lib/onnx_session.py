@@ -18,8 +18,10 @@ onnxruntime falls back to `CPUExecutionProvider` in silence. That supplier used 
 `nvidia-*` wheels in the `rvc` extra. The place that opens the session is the place that
 guarantees the libraries, so the ADR-0024 single factory stays single.
 
-`preload_dlls` returns without loading anything when torch is already imported (torch has
-loaded the same libraries itself), so the two never both load a copy.
+`preload_dlls` returns without loading anything when torch is already imported *and* built
+against the same CUDA major, because torch has then loaded the same libraries itself; the
+two never both load a copy. A torch built against a different CUDA major does not stop it
+-- onnxruntime warns about the mismatch and loads its own.
 
 `log_severity` is ORT's log threshold (0=VERBOSE / 1=INFO / 2=WARNING / 3=ERROR /
 4=FATAL). The default of `SessionOptions().log_severity_level` is **-1 = inherit the
@@ -39,6 +41,7 @@ from typing import Any
 from onnxruntime import GraphOptimizationLevel
 from onnxruntime import InferenceSession
 from onnxruntime import SessionOptions
+from onnxruntime import cuda_version
 from onnxruntime import get_available_providers
 from onnxruntime import preload_dlls
 
@@ -50,11 +53,40 @@ from vspeech.lib.cuda_util import Device
 # library in one shared directory (`nvidia/cu13/bin/x86_64`) and only cuDNN -- the one
 # distribution that kept its `-cu13` name -- still uses the old shape. Finding the
 # directory from the file means neither layout is baked in here.
-_CUDA_PROBE = "cublasLt64_*.dll"
+#
+# cuDNN gets a version-agnostic probe because every cuDNN wheel lands in that same one
+# directory. The CUDA half must not: see `_cuda_probe`.
 _CUDNN_PROBE = "cudnn64_*.dll"
 
 _cuda_libraries_lock = threading.Lock()
 _cuda_libraries_loaded = False
+
+
+def _cuda_probe() -> str:
+    """The cuBLASLt filename that onnxruntime's own build will ask for.
+
+    The CUDA half has to name the generation. NVIDIA gives each CUDA generation its own
+    directory (`nvidia/cu13/...`), so with two co-installed, a version-agnostic glob
+    would return whichever sorted first -- `cu12` ahead of `cu13`, a future `cu14`
+    behind it -- rather than the one this build wants. That directory holds none of the
+    files `preload_dlls` then looks for, so nothing loads and the session falls back to
+    CPU, with a fail-loud message pointing nowhere near the cause.
+    """
+    major = (cuda_version or "").split(".")[0]
+    # No CUDA in this build; the caller cannot reach here, since the CUDA EP would not
+    # be in `get_available_providers()`.
+    return f"cublasLt64_{major}.dll" if major else "cublasLt64_*.dll"
+
+
+def _nvidia_roots() -> list[str]:
+    """The directories the installed `nvidia` namespace package spans."""
+    try:
+        spec = importlib.util.find_spec("nvidia")
+    except ImportError:
+        return []
+    if spec is None or spec.submodule_search_locations is None:
+        return []
+    return list(spec.submodule_search_locations)
 
 
 def _nvidia_wheel_dir(probe: str) -> str | None:
@@ -64,13 +96,7 @@ def _nvidia_wheel_dir(probe: str) -> str | None:
     default search (a CUDA-compatible torch's `lib`, then the legacy wheel layout, then
     the process DLL search path).
     """
-    try:
-        spec = importlib.util.find_spec("nvidia")
-    except ImportError:
-        return None
-    if spec is None or spec.submodule_search_locations is None:
-        return None
-    for root in spec.submodule_search_locations:
+    for root in _nvidia_roots():
         for hit in sorted(Path(root).rglob(probe)):
             return str(hit.parent)
     return None
@@ -80,15 +106,22 @@ def _preload_cuda_libraries() -> None:
     """Load the CUDA libraries the CUDA EP links against. Once per process (ADR-0083).
 
     Two calls because CUDA and cuDNN ship in different directories, and `preload_dlls`
-    looks for every file it wants in the single directory it is given. Failures only
-    print -- `check_cuda_provider` is what turns a CPU fallback into a startup error.
+    looks for every file it wants in the single directory it is given.
+
+    A library it cannot find is printed, not raised -- `check_cuda_provider` is what
+    turns the resulting CPU fallback into a startup error. It does raise for a
+    `directory` that does not exist, which cannot happen here because each path comes
+    from having just found a file inside it.
     """
     global _cuda_libraries_loaded
     with _cuda_libraries_lock:
         if _cuda_libraries_loaded:
             return
         preload_dlls(
-            cuda=True, cudnn=False, msvc=True, directory=_nvidia_wheel_dir(_CUDA_PROBE)
+            cuda=True,
+            cudnn=False,
+            msvc=True,
+            directory=_nvidia_wheel_dir(_cuda_probe()),
         )
         preload_dlls(
             cuda=False,

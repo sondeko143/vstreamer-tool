@@ -66,8 +66,12 @@ rvc = [
     #   cudnn-cu13  -> cudnn64_9.dll ほか cuDNN サブ DLL 7 個 (cuDNN のみ旧命名のまま)
     #   cufft       -> cufft64_12.dll        (CUDA 13 世代の cuFFT は 12.x)
     #   cuda-runtime-> cudart64_13.dll
-    # 上限は DLL 名に焼かれたメジャー版そのもの。onnxruntime を上げて要求 CUDA / cuDNN
-    # メジャーが変わったら、ここが lock 時に赤くなって見直しを強制する (それが狙い)。
+    # 上限は DLL 名に焼かれたメジャー版そのもの (cublas64_13 / cufft64_12 / cudnn64_9)。
+    # ただし解決器はこれを onnxruntime の要求と突き合わせない — onnxruntime-gpu の
+    # nvidia 依存は [cuda]/[cudnn] extra 側にあり、こちらは要求していないため。つまり
+    # CUDA 14 の onnxruntime を入れても lock は緑のまま通る。気付く場所は
+    # tests/test_onnx_session.py::test_each_preload_is_pointed_at_a_directory_that_has_what_it_wants
+    # で、onnxruntime が要求する DLL 名が実在しなくなった時点で赤くなる。
     # 罠: nvidia-cublas は win_amd64 wheel を出さない版がある (13.6.1.10 など)。
     "nvidia-cublas>=13.6.0.2,<14",
     "nvidia-cudnn-cu13>=9.24.0.43,<10",

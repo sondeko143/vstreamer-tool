@@ -117,13 +117,64 @@ def test_a_cuda_session_preloads_the_cuda_libraries(tmp_path, monkeypatch):
 
 
 def test_a_cpu_session_does_not_load_the_cuda_libraries(tmp_path, monkeypatch):
-    """A CPU-only pipeline must not pay for -- or require -- the CUDA libraries."""
-    captured = _capture(monkeypatch, cuda_available=False)
+    """A CPU device must not pay for the CUDA libraries -- on a CUDA-capable box too.
 
-    onnx_session.create_session(tmp_path / "m.onnx", Device("cuda", 0))
+    `cuda_available=True` is the point: with it False both guards would block the
+    preload and the test could not tell which one did the work.
+    """
+    captured = _capture(monkeypatch, cuda_available=True)
+
     onnx_session.create_session(tmp_path / "m.onnx", Device("cpu"))
 
     assert captured["preloads"] == []
+
+
+def test_a_box_without_the_cuda_ep_does_not_load_the_cuda_libraries(
+    tmp_path, monkeypatch
+):
+    """The other guard: a cuda device on a build whose CUDA EP is missing."""
+    captured = _capture(monkeypatch, cuda_available=False)
+
+    onnx_session.create_session(tmp_path / "m.onnx", Device("cuda", 0))
+
+    assert captured["preloads"] == []
+
+
+def test_the_cuda_probe_names_the_generation_this_build_wants():
+    """The probe has to carry onnxruntime's CUDA major, not a wildcard."""
+    from onnxruntime import cuda_version
+
+    major = cuda_version.split(".")[0]
+    assert onnx_session._cuda_probe() == f"cublasLt64_{major}.dll"
+
+
+def test_a_co_installed_cuda_generation_does_not_win_the_directory(
+    tmp_path, monkeypatch
+):
+    """NVIDIA gives each CUDA generation its own directory under `nvidia/`.
+
+    A version-agnostic glob returns whichever sorts first, which is unrelated to the
+    generation onnxruntime was built against -- so `preload_dlls` would be handed a
+    directory holding none of the files it wants and load nothing at all.
+    """
+    root = tmp_path / "nvidia"
+    for generation, dll in (
+        ("cu12", "cublasLt64_12.dll"),
+        ("cu13", "cublasLt64_13.dll"),
+        ("cu14", "cublasLt64_14.dll"),
+    ):
+        bin_dir = root / generation / "bin" / "x86_64"
+        bin_dir.mkdir(parents=True)
+        (bin_dir / dll).write_bytes(b"")
+    monkeypatch.setattr(onnx_session, "_nvidia_roots", lambda: [str(root)])
+
+    assert onnx_session._nvidia_wheel_dir("cublasLt64_13.dll") == str(
+        root / "cu13" / "bin" / "x86_64"
+    )
+    # The hazard this guards against: the wildcard picks the oldest generation present.
+    assert onnx_session._nvidia_wheel_dir("cublasLt64_*.dll") == str(
+        root / "cu12" / "bin" / "x86_64"
+    )
 
 
 def test_the_cuda_libraries_are_loaded_once_per_process(tmp_path, monkeypatch):
@@ -150,7 +201,7 @@ def test_each_preload_is_pointed_at_a_directory_that_has_what_it_wants():
         pytest.skip("the pinned wheels and this DLL list are Windows-only")
     from onnxruntime import _get_nvidia_dll_paths
 
-    cuda_dir = onnx_session._nvidia_wheel_dir(onnx_session._CUDA_PROBE)
+    cuda_dir = onnx_session._nvidia_wheel_dir(onnx_session._cuda_probe())
     cudnn_dir = onnx_session._nvidia_wheel_dir(onnx_session._CUDNN_PROBE)
     if cuda_dir is None or cudnn_dir is None:
         pytest.skip("nvidia CUDA wheels are not installed")
