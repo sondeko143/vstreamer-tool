@@ -62,13 +62,16 @@ curl -sSfL https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/do
 VOICEVOX は whisper / RVC が使う `onnxruntime-gpu` とは**別ビルド**の
 `voicevox_onnxruntime` を読みます。正しい方が読まれるよう `onnxruntime_path` は明示してください。
 
-GPU を使う場合、torch (`2.13.0+cu130`) と `onnxruntime-gpu` は CUDA 13 ランタイムを同梱するので、
+GPU を使う場合、CUDA 13 ランタイム (cuBLAS / cuDNN / cuFFT / cudart) は `rvc` extra が
+名指しで pin している `nvidia-*` wheel が venv 内に供給します。`onnxruntime-gpu` の wheel は
+CUDA を同梱しないので、これが唯一の供給元です
+([ADR-0083](docs/adr/0083-cuda-runtime-from-nvidia-wheels.md))。したがって
 RVC / ボイスチェンジャーだけのホストは **NVIDIA ドライバ R580 以降**があれば足ります
 ([ADR-0028](docs/adr/0028-migrate-to-cuda-13.md))。
 
 whisper を GPU で回すホストは、それに加えて **CUDA 12 ツールキット (cuBLAS + cuDNN 9)** が要ります。
 faster-whisper が使う ctranslate2 は CUDA 12 専用ビルドしかなく `cublas64_12.dll` を要求しますが、
-torch が cu130 になった時点でこれを同梱しなくなったためです
+venv に入るのは CUDA 13 世代の wheel だけだからです
 ([ADR-0039](docs/adr/0039-whisper-hosts-need-cuda12-toolkit.md))。
 
 ## 実行

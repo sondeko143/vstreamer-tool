@@ -360,7 +360,7 @@ max_queued_blocks = 8
 # 側ジッタバッファ)。role の既定は "local" = 上の M2 単一マシン挙動と完全に同一で、
 # 下記キーは全て無視される。2マシンに分けるときだけ、それぞれのマシンの config で
 # role を切り替えて有効化する。
-# role = "local"          # local(既定) | producer(録音+VC 機) | consumer(再生専任機、GPU/torch 不要)
+# role = "local"          # local(既定) | producer(録音+VC 機) | consumer(再生専任機、GPU 不要)
 # role を producer/consumer にする側は、上の transport_type も "udp" にすること
 # (in_process のままだと起動時 preflight で拒否される)。
 # transport_type = "udp"

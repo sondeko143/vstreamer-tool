@@ -12,7 +12,9 @@ MIT License（同梱の [`LICENSE`](LICENSE)）で配布します。
 
 含まないもの:
 
-- 宣言済みの pip 依存（torch・onnxruntime・faster-whisper など、各 wheel 同梱のライセンスに従う）
+- 宣言済みの pip 依存（onnxruntime-gpu・faster-whisper・`nvidia-*` など、各 wheel 同梱のライセンスに従う）
+- オフラインの ONNX 生成タスクが `uv run --with` の一時環境にだけ入れるもの（torch・
+  transformers・fairseq・torchfcpe）。ランタイムには入らない（[ADR-0080](docs/adr/0080-torch-free-rvc-runtime.md)）
 
 本ファイルは法的助言ではありません。再配布や同梱を行う場合は、各上流の LICENSE 原文
 （必要に応じて専門家）を確認してください。記載内容は 2026-07-18 時点の各上流 LICENSE に

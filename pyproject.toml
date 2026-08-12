@@ -83,6 +83,11 @@ rvc = [
     "nvidia-cufft>=12.3.0.29,<13",
     "nvidia-cuda-runtime>=13.3.29,<14",
     "numpy>=2,<3",
+    # 保留 (ADR-0080 の範囲外): scipy を import しているのは tests/test_pitch_extract.py
+    # だけで、`vspeech/` からは 0 件になった (リサンプルは ADR-0082 で自前ポリフェーズへ)。
+    # つまりこれは実質テスト専用依存だが、外すには dev グループへ移す判断が要り、それは
+    # torch/torchaudio/faiss-cpu を外すという本 ADR の決定とは別の決定になる。次にここを
+    # 触る人が、rvc extra から落として dev へ移すかを決めること。
     "scipy>=1.10.1,<2",
 ]
 mozc = ["mozcpy>=0.1.1,<0.2"]

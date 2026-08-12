@@ -27,7 +27,7 @@ deadcode = { cmd = "uv run --with vulture vulture vspeech --min-confidence 80", 
 # ランタイム依存へ戻すと ctranslate2 が掴んで削減が消える。
 #
 # convert-hubert: hubert_base.pt -> hubert_contentvec/ (transformers 資産)。
-#   `--python 3.11` は必須。省くとプロジェクトの 3.12 に落ち、cp311 の fairseq wheel が
+#   `--python 3.11` は必須。省くとプロジェクトの 3.14 に落ち、cp311 の fairseq wheel が
 #   入らない。`--no-project` なので [tool.uv.sources] は読まれず、torch は PyPI 版
 #   (Windows は CPU) になる。変換は CPU で足りるのでこれでよい。
 #   例: uv run poe convert-hubert --input ~/.config/vstreamer/hubert_base.pt \
@@ -44,10 +44,11 @@ convert-hubert = { cmd = "uv run --isolated --no-project --python 3.11 --with 'f
 #     - torch を依存から外す直前の資産を作ったのと同じ wheel に固定され、export が
 #       ツールチェーン差ではなく資産の差だけを反映する。
 #   URL が 404 になったら (Python か torch を上げたとき) ここを差し替える。
-#   VRAM: fp16 の検証セッションが単一の Conv で 9.95GB を要求する。この開発機の cuda:0
-#   (RTX 4060 Laptop 8GB) では必ず OOM で落ちるので、大きいカードを `CUDA_VISIBLE_DEVICES`
-#   で cuda:0 に見せてから実行する (実測: 16GB の RTX 5060 Ti なら通る)。
-#   例: CUDA_VISIBLE_DEVICES=1 uv run poe export-hubert-onnx --asset ./hubert_contentvec --golden ./hubert_golden
+#   VRAM: fp16 の検証セッションが単一の Conv で 9.95GB を要求する。8GB のカードが cuda:0
+#   だと必ず OOM で落ちるので、それだけ載るカードの序数を `CUDA_VISIBLE_DEVICES` に入れて
+#   cuda:0 に見せてから実行する (実測: 16GB のカードなら通る)。
+#   例 (PowerShell): $env:CUDA_VISIBLE_DEVICES = "<十分な VRAM を持つカードの序数>"
+#                    uv run poe export-hubert-onnx --asset ./hubert_contentvec --golden ./hubert_golden
 export-hubert-onnx = { cmd = "uv run --all-extras --with 'torch @ https://download.pytorch.org/whl/cu130/torch-2.13.0%2Bcu130-cp314-cp314-win_amd64.whl' --with transformers --with onnx --with onnxscript python -m scripts.export_hubert_onnx", help = "transformers asset -> ONNX (offline, project env + CUDA torch overlay)" }
 # export-fcpe-onnx: torchfcpe の bundled FCPE -> fcpe.onnx (波形入力)。torch は
 #   オーバーレイから来る (ADR-0080)。ここは PyPI の CPU wheel で足りる — export も検証も
