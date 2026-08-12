@@ -21,9 +21,10 @@ audit = { cmd = "uv audit", help = "Dependency vulnerability audit" }
 security = { cmd = "uv run --with bandit bandit -q -r vspeech cli", help = "Security lint (bandit, project interpreter)" }
 deadcode = { cmd = "uv run --with vulture vulture vspeech --min-confidence 80", help = "Dead-code scan (advisory)" }
 
-# 一度きりのオフライン工程。依存 (fairseq / transformers / onnx / onnxscript) は
-# pyproject にも uv.lock にも載せず、`uv run --with` の一時環境で供給する。
-# `poe security` / `poe deadcode` と同じ手口。
+# 一度きりのオフライン工程。依存 (torch / fairseq / transformers / torchfcpe / onnx /
+# onnxscript) は pyproject にも uv.lock にも載せず、`uv run --with` の一時環境で供給する。
+# `poe security` / `poe deadcode` と同じ手口。torch がここにしか無いのが ADR-0080 の要点で、
+# ランタイム依存へ戻すと ctranslate2 が掴んで削減が消える。
 #
 # convert-hubert: hubert_base.pt -> hubert_contentvec/ (transformers 資産)。
 #   `--python 3.11` は必須。省くとプロジェクトの 3.12 に落ち、cp311 の fairseq wheel が
@@ -33,18 +34,32 @@ deadcode = { cmd = "uv run --with vulture vulture vspeech --min-confidence 80", 
 #           --output ./hubert_contentvec --golden ./hubert_golden
 convert-hubert = { cmd = "uv run --isolated --no-project --python 3.11 --with 'fairseq @ https://github.com/sondeko143/fairseq-311/releases/download/v0.12.2.post1/fairseq-0.12.2.post1-cp311-cp311-win_amd64.whl' --with 'numpy<1.24' --with torch --with transformers python -m scripts.convert_hubert", help = "hubert_base.pt -> transformers asset (offline, throwaway 3.11 env)" }
 # export-hubert-onnx: hubert_contentvec/ -> hubert_fp32.onnx + hubert_fp16.onnx。
-#   `--no-project` は付けない。fp16 を CUDA 上で export するためプロジェクト環境の
-#   cu128 torch が要る。
-#   例: uv run poe export-hubert-onnx --asset ./hubert_contentvec --golden ./hubert_golden
-export-hubert-onnx = { cmd = "uv run --with transformers --with onnx --with onnxscript python -m scripts.export_hubert_onnx", help = "transformers asset -> ONNX (offline, project env + overlay)" }
-# export-fcpe-onnx: torchfcpe の bundled FCPE -> fcpe.onnx (波形入力)。--extra rvc は
-#   検証で onnxruntime を使うため。STFT を conv1d-DFT に差し替えて legacy tracer で
-#   export する詳細は ADR-0049 と scripts/export_fcpe_onnx.py の docstring。
+#   `--no-project` は付けない: このスクリプトは vspeech.lib.rvc と scripts.hubert_metrics を
+#   import するのでプロジェクト環境が要る。`--all-extras` なのは、素の `uv run` が venv を
+#   「extra 無し」へ同期し直して rvc/whisper/voicevox を剥がしてしまうため。
+#   torch は wheel を URL で直指しする (ADR-0080)。理由は 2 つ:
+#     - fp16 グラフを CUDA 上で export するので CPU wheel では落ちる。Windows の PyPI
+#       torch は CPU ビルドで、`[tool.uv.sources]` は `--with` の解決には効かない
+#       (実測: `--with torch` で来たのは 2.13.0+cpu)。
+#     - torch を依存から外す直前の資産を作ったのと同じ wheel に固定され、export が
+#       ツールチェーン差ではなく資産の差だけを反映する。
+#   URL が 404 になったら (Python か torch を上げたとき) ここを差し替える。
+#   VRAM: fp16 の検証セッションが単一の Conv で 9.95GB を要求する。この開発機の cuda:0
+#   (RTX 4060 Laptop 8GB) では必ず OOM で落ちるので、大きいカードを `CUDA_VISIBLE_DEVICES`
+#   で cuda:0 に見せてから実行する (実測: 16GB の RTX 5060 Ti なら通る)。
+#   例: CUDA_VISIBLE_DEVICES=1 uv run poe export-hubert-onnx --asset ./hubert_contentvec --golden ./hubert_golden
+export-hubert-onnx = { cmd = "uv run --all-extras --with 'torch @ https://download.pytorch.org/whl/cu130/torch-2.13.0%2Bcu130-cp314-cp314-win_amd64.whl' --with transformers --with onnx --with onnxscript python -m scripts.export_hubert_onnx", help = "transformers asset -> ONNX (offline, project env + CUDA torch overlay)" }
+# export-fcpe-onnx: torchfcpe の bundled FCPE -> fcpe.onnx (波形入力)。torch は
+#   オーバーレイから来る (ADR-0080)。ここは PyPI の CPU wheel で足りる — export も検証も
+#   `torch.device("cpu")` で行うので CUDA ビルドは要らない。`--all-extras` は検証で使う
+#   onnxruntime のため、かつ単独 extra が他を剥がすのを避けるため。STFT を conv1d-DFT に
+#   差し替えて legacy tracer で export する詳細は ADR-0049 と
+#   scripts/export_fcpe_onnx.py の docstring。
 #   例: uv run poe export-fcpe-onnx --output ~/.config/vstreamer/fcpe.onnx
-export-fcpe-onnx = { cmd = "uv run --extra rvc --with torchfcpe --with onnx --with onnxscript python -m scripts.export_fcpe_onnx", help = "FCPE -> waveform-input ONNX (offline, project env + overlay)" }
+export-fcpe-onnx = { cmd = "uv run --all-extras --with torch --with torchfcpe --with onnx --with onnxscript python -m scripts.export_fcpe_onnx", help = "FCPE -> waveform-input ONNX (offline, project env + overlay)" }
 
 # RVC ストリーミング VC の RTF 実測ハーネス。--all-extras で sync 済みの
-# プロジェクト環境で走らせる(rvc extra の torch/onnxruntime-gpu が要る)。
+# プロジェクト環境で走らせる(rvc extra の onnxruntime-gpu が要る)。
 #   uv sync --all-extras
 #   uv run poe stream-vc-rtf --config ./config.toml
 # 掃引軸は --block-ms / --context-ms / --f0 / --iters / --margin で上書き可。

@@ -3,7 +3,7 @@
 Run on the pre-refactor code with the real RVC model + GPU, passing your RVC
 worker's TOML config (the `[rvc]` section: model_file / hubert_model_file /
 rmvpe_model_file or fcpe_model_file / gpu):
-    uv run --extra rvc python scripts/capture_change_voice_golden.py \
+    uv run --all-extras python scripts/capture_change_voice_golden.py \
         --config path/to/your-rvc-config.toml
 
 The RVC synthesizer (VITS-style) injects random noise, so change_voice is
