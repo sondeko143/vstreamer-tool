@@ -1,6 +1,6 @@
 # 0087. 依存の重さは名指しの禁止ではなく計測だけで守る（0084 と 0086 を supersede）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-12
 - 効力: 既定
 - Related: supersedes [ADR-0084](0084-dependency-table-torch-gate.md), [ADR-0086](0086-forbidden-name-list-by-what-else-catches-it.md); extends [ADR-0085](0085-gate-runtime-weight-on-outcome.md); [ADR-0080](0080-torch-free-rvc-runtime.md)（削減の出所）; refines [ADR-0055](0055-stream-vc-producer-consumer-role-split.md), [ADR-0078](0078-torch-free-device-resolution.md)（主張の形だけを変える）
@@ -38,6 +38,8 @@
 `torch` を `uv add` しても、どのテストも止めない。**重さとして現れたときに、それを測っているゲートが捕まえる。** 捕まえられるかどうかは「どの経路を測っているか」に完全に依存するので、経路の網羅がこの決定の生命線になる。測っていない経路で重くなったものは検出されない。
 
 保護の対象が「名前」から「経路」に移ったので、**新しいワーカーや新しい起動経路を足したときは、それを測定対象に加える**必要がある。これは名前リストの保守と違い、追加すべきかどうかが機械的に決まる（実行される経路かどうか）。
+
+実装時に分かったこと: 上で名指しした 2 件（0055 / 0078）は、この形のテストの**全部ではなかった**。同じ「特定モジュールの不在を名指しで主張する」テストが `tests/test_vc_helpers.py`（torch、ADR-0082 由来）と `tests/test_subtitle_dispatch.py`（tkinter、ADR-0040 由来）にもあり、どちらも成果測定が同じ経路を覆っていたため削除した。名前による禁止がリストの外へも漏れ出していたということで、「所属の原理が無い」という本 ADR の観測を裏づける。
 
 [ADR-0084](0084-dependency-table-torch-gate.md) が塞いだ穴（`uv add torch` が全ゲートを緑のまま通る）は、経路を広げることで塞ぐ。エントリポイントだけを測っている間は開いたままである。
 

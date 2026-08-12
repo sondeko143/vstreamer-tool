@@ -103,4 +103,4 @@
 | [0084](0084-dependency-table-torch-gate.md) | torch/torchaudio/faiss-cpu の不在を pyproject と uv.lock に対するテストで守る（0080 の穴を塞ぐ） | Superseded by [0087](0087-weight-guarded-by-measurement-not-named-bans.md) | 2026-08-12 |
 | [0085](0085-gate-runtime-weight-on-outcome.md) | ランタイムの重さのゲートをパッケージ名の列挙から成果測定（モジュール集合 + 常駐メモリ）へ移す | Accepted | 2026-08-12 |
 | [0086](0086-forbidden-name-list-by-what-else-catches-it.md) | 名前による import 禁止を「他のゲートが捉えないもの」だけに絞り、理由は ADR 層に置く | Superseded by [0087](0087-weight-guarded-by-measurement-not-named-bans.md) | 2026-08-12 |
-| [0087](0087-weight-guarded-by-measurement-not-named-bans.md) | 依存の重さは名指しの禁止ではなく計測だけで守る（0084 と 0086 を supersede） | Proposed | 2026-08-12 |
+| [0087](0087-weight-guarded-by-measurement-not-named-bans.md) | 依存の重さは名指しの禁止ではなく計測だけで守る（0084 と 0086 を supersede） | Accepted | 2026-08-12 |

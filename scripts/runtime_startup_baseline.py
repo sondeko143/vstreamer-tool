@@ -146,9 +146,14 @@ MEASURED_PATHS: tuple[MeasuredPath, ...] = (
         imports=("vspeech.worker.subtitle", "vspeech.worker.subtitle_obs"),
         covers=(
             "The subtitle worker's OBS back end, which ADR-0040 split out so an OBS "
-            "pipeline runs headless. Measuring it apart from the TK back end is what keeps "
-            "that headless claim honest: a GUI toolkit arriving on this path shows up as "
-            "both a new top-level name and a jump in resident memory."
+            "pipeline runs headless. **This path is what holds ADR-0040's boundary.** Its "
+            "imports go through the dispatcher rather than around it, and its recorded "
+            "module set contains no GUI toolkit, so a toolkit pulled in through the "
+            "dispatcher -- the exact ADR-0040 regression -- arrives here as an unlisted "
+            "top-level name and is named by the failure. `tests/test_subtitle_dispatch.py` "
+            "used to assert that by naming tkinter; ADR-0087 removed the assertion as "
+            "redundant to this measurement, so this is where the guarantee lives now. "
+            "Measuring it apart from the TK back end is what keeps the two distinguishable."
         ),
         reaches=("websockets",),
     ),

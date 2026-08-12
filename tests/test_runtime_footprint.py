@@ -233,6 +233,26 @@ def test_the_baseline_records_every_measured_path_and_nothing_else():
     )
 
 
+@measured
+def test_the_record_describes_the_path_the_code_actually_measures(path_name: str):
+    """The record copies the path's own description, and a copy can rot.
+
+    `imports` is self-enforcing -- changing it changes the module set and the gate demands
+    a re-record. `covers` and `reaches` are not: prose can be rewritten and a `reaches`
+    entry added or dropped without any measurement moving, leaving the committed record
+    describing a path that no longer exists. That is the precise failure ADR-0086/0087
+    were written about, one layer down, so it is checked rather than trusted.
+    """
+    path = PATHS_BY_NAME[path_name]
+    record = _record(path_name)
+    recorded = (record["imports"], record["reaches"], record["covers"])
+    current = (list(path.imports), list(path.reaches), path.covers)
+    assert recorded == current, (
+        f"the recorded description of the {path_name} path no longer matches the code.\n"
+        f"recorded: {recorded}\ncode:     {current}\n" + _regenerate_hint()
+    )
+
+
 def test_a_newcomer_on_a_measured_path_is_named():
     """The gate is proved to fire, on every run, not just the day it was written.
 

@@ -1,5 +1,4 @@
 import io
-import sys
 
 from pydantic import SecretStr
 
@@ -22,36 +21,13 @@ def test_subtitle_worker_type_round_trips_through_toml():
     assert reloaded.subtitle.worker_type == SubtitleWorkerType.OBS
 
 
-def test_importing_the_subtitle_dispatcher_does_not_import_tkinter():
-    """The crux of the headless goal: tkinter must not be pulled in through the dispatcher
-    (ADR-0040).
-
-    tkinter is stdlib, so it may already be loaded via another path. What we want to check
-    is not "subtitle does not depend on tkinter" but "importing subtitle does not newly
-    load tkinter", so it is dropped first and then verified.
-
-    [Open, deferred 2026-08-13 -- outside ADR-0087's scope] This does name a module in
-    order to assert its absence, which ADR-0087 removed from every *weight* claim in this
-    repo. It was left because it is not a weight claim: ADR-0040 split the back ends so an
-    OBS pipeline runs on a host with no GUI toolkit available at all, which is a
-    module-boundary constraint about the dispatcher, of the same kind as
-    tests/test_onnx_session.py's single-session-factory rule -- and ADR-0087's decision
-    covers the paths that were asserted framework-free for weight, not this. The weight
-    half is covered independently now: tests/test_runtime_footprint.py measures a
-    `subtitle_obs` path (dispatcher + OBS back end) whose recorded module set contains no
-    GUI toolkit, so a toolkit arriving there fires on cost without being named. Whether
-    this assertion should follow is ADR-0040's call to make, not this one's.
-    """
-    for name in list(sys.modules):
-        if name == "tkinter" or name.startswith("tkinter."):
-            del sys.modules[name]
-    for name in list(sys.modules):
-        if name.startswith("vspeech.worker.subtitle"):
-            del sys.modules[name]
-
-    import vspeech.worker.subtitle  # noqa: F401
-
-    assert "tkinter" not in sys.modules
+# ADR-0040's headless invariant -- that importing the subtitle dispatcher pulls in no GUI
+# toolkit -- used to be asserted here by naming tkinter and checking it was absent from
+# `sys.modules`. ADR-0087 took every assertion of that shape out of this repo, and this one
+# was redundant besides: `tests/test_runtime_footprint.py` measures a `subtitle_obs` path
+# whose imports go *through* the dispatcher, and its recorded module set contains no GUI
+# toolkit. A toolkit arriving through the dispatcher therefore fails that gate, which names
+# it as an unlisted newcomer without anything here having to forbid it in advance.
 
 
 def test_obs_password_survives_a_toml_round_trip():
