@@ -66,11 +66,36 @@ FORBIDDEN = {
 # that whoever next reaches for this list can see what guards these names now, and redo the
 # judgement instead of guessing at it:
 #   torch, torchaudio -- ADR-0084's table gate below, both halves proved by injecting each
-#     into pyproject.toml and into uv.lock. Residual it deliberately does not cover: a torch
-#     a developer installed by hand is not policed at all (ADR-0084 rejected reading the
-#     installed environment, because the offline `uv run --with` overlay legitimately has
-#     one). In such a venv an `import torch` under `vspeech/` is caught only by the next
-#     person to run the suite without it -- loudly, but later than this list would have.
+#     into pyproject.toml and into uv.lock. What backs those two names up *inside*
+#     `vspeech/` is narrower than "the suite breaks loudly", and the difference matters
+#     before anyone leans on it. All of the following was injected and measured in this
+#     repo (2026-08-12, Python 3.14.5 / win32, `uv sync --all-extras`, torch not installed,
+#     exit codes read from a redirected file):
+#       - The loud case ADR-0086 measured is an *unconditional* module-level `import torch`
+#         in a module the suite imports. Collection aborts, or the `python -m vspeech`
+#         smoke tests fail.
+#       - A *guarded* one is invisible to the suite. `try: import torch / except
+#         ImportError: torch = None` -- the very idiom ctranslate2 uses to pick torch up --
+#         put into `vspeech/lib/rvc.py` left the full suite at exit 0 (1178 passed). So did
+#         an `import torch` in a function body no test executes
+#         (`vspeech/worker/vc.py::rvc_worker`, 1178 passed), and one in a new module under
+#         `vspeech/` that no test imports (1178 passed). ADR-0086's census -- 55 modules,
+#         52 of them reached at collection -- is a snapshot, and no test pins it. (An
+#         import in a function the suite *does* execute still fails loudly: the same line
+#         in `rvc.py::load_hubert_model` gave 6 failed, 3 errors.)
+#       - What catches all three is `uv run ty check` (exit 1,
+#         `error[unresolved-import]`), which lives in `poe check` and **not** in the suite.
+#         If the gate being relied on is pytest, these shapes are not in it.
+#     Residual ADR-0084 deliberately does not cover: a torch a developer installed by hand
+#     is not policed at all (ADR-0084 rejected reading the installed environment, because
+#     the offline `uv run --with` overlay legitimately has one). There the import resolves,
+#     so ty falls silent as well -- verified with an installed stand-in package: both the
+#     function-body form and `except ImportError: pass` gave ty exit 0. (Only the
+#     `except ImportError: <name> = None` spelling stays red there, and incidentally, on
+#     `invalid-assignment` rather than on the import.) **A hand-installed torch combined
+#     with a guarded or function-body import is caught by nothing here.** It is only the
+#     unconditional form that the next person to run the suite in a venv without torch
+#     catches -- loudly, but later than this list would have.
 #   fairseq -- the same table gate, one edge away: `uv add fairseq` in this repo resolves
 #     0.12.2 and drags torch 2.13.0 and torchaudio 2.11.0 into uv.lock, which fires it
 #     (measured). Two residuals. The edge only goes back so far: `fairseq<0.12` still

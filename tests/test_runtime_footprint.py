@@ -1,9 +1,11 @@
 """The outcome gate on the runtime's weight (ADR-0085).
 
-`test_forbidden_imports.py` protects that weight with a list of package names. That list
-is a proxy for what is actually wanted -- a runtime that starts small and stays small --
-and it has a hole a name list cannot close: a heavy dependency nobody thought to name
-walks straight through it. This file closes that hole by measuring the outcome instead.
+`test_forbidden_imports.py` used to protect that weight with a list of package names. That
+list was a proxy for what is actually wanted -- a runtime that starts small and stays
+small -- and it had a hole a name list cannot close: a heavy dependency nobody thought to
+name walks straight through it. This file closes that hole by measuring the outcome
+instead. ADR-0086 then took the weight half off that list altogether: what it still
+carries is the decision boundaries no other gate catches, not a weight proxy.
 
 **"The runtime's startup path" here means importing `vspeech.main`** in a pristine child
 process: everything `python -m vspeech` loads before it has read a config file. Every
@@ -27,9 +29,10 @@ to onnxruntime and to anything else reached only from a lazily-imported worker.
 There are **two indicators, and neither is sufficient alone** (ADR-0085 measured why):
 `pydantic_settings` costs +13.7 MB RSS / +176 modules on top of an already-loaded
 pydantic (+18.75 MiB / +240 modules from a bare interpreter, re-measured at N=10 in
-ADR-0086), but only about 32 modules and ~1.6 MB unique to it on the real startup path.
-A module check sees those 32; a resident-memory threshold loose enough not to flap does
-not see 1.6 MB. Each covers the other's blind spot.
+ADR-0086), but only **+31 modules / ~1.5 MiB** unique to it on the real startup path
+(716 -> 747 modules, N=10 with zero spread on either side; ADR-0066's "32 modules /
+about 1.6 MB" reproduced). A module check sees those 31; a resident-memory threshold loose
+enough not to flap does not see 1.5 MiB. Each covers the other's blind spot.
 
 Startup **time** is measured and printed by the script and is deliberately absent from
 every verdict here. ADR-0085 rejected it on measured grounds, and the measurement runs
@@ -45,7 +48,8 @@ package is rebuilt, which is a legitimate baseline update like any other. Two ot
 
 Re-recording is the fastest way to turn any snapshot gate green, so the record itself is
 checked too: enough runs behind it, and a calibration showing the resident-memory budget
-still catches something.
+still catches something. Neither check can tell a legitimate re-record from one taken on a
+bloated tree -- reading the diff a re-record produces is what does that.
 """
 
 from functools import cache
@@ -193,13 +197,20 @@ def test_the_recorded_baseline_rests_on_enough_runs():
 
 
 def test_the_recorded_budget_is_calibrated_against_something_it_catches():
-    """The tripwire on the resident-memory budget's usefulness.
+    """The tripwire on the resident-memory *headroom*.
 
-    Nothing stops someone widening this budget by re-recording on a bloated tree, and the
-    resulting record would read perfectly normally. The calibration is the check that it
-    still stops something: `over_budget_mib` is by how much the budget catches the
-    calibration module. If a re-record ever pushes that to zero or below, the budget has
-    stopped guarding anything, and this fails instead of merely reading oddly.
+    What this pins is `RSS_HEADROOM_MIB`, not the budget's level. `over_budget_mib` is
+    `calibration - budget`, and both terms rise together with whatever the startup path
+    happened to cost on the day of the recording, so the difference reduces to the
+    calibration module's marginal cost minus the headroom -- invariant to the base level.
+    Widening the budget by re-recording on a bloated tree is therefore **not** what this
+    catches: such a re-record writes a higher budget with the same `over_budget_mib` and
+    reads identically here. What stops that is reviewing the diff the re-record produces,
+    which is why every failure message above asks for it.
+
+    What this does catch is a headroom grown until the budget no longer stops the lightest
+    heavy native dependency this project installs. At that point the budget guards nothing,
+    and the record fails here rather than merely reading oddly.
     """
     calibration = _baseline()["resident_memory_mib"]["calibration"]
     assert calibration["measured"], (

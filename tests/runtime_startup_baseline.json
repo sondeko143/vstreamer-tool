@@ -7,20 +7,20 @@
     "observed_min": 716,
     "runs": 20,
     "budget": 732,
-    "basis": "len(sys.modules) after importing vspeech.main. N=20 consecutive runs: min 716, max 716 (spread 0). Budget = max + 16. ADR-0085 requires this indicator to catch pydantic_settings' +32 modules, so the slack is held below half of that signal while still absorbing the submodule shuffle of a routine dependency upgrade."
+    "basis": "len(sys.modules) after importing vspeech.main. N=20 consecutive runs: min 716, max 716 (spread 0). Budget = max + 16. ADR-0085 requires this indicator to catch pydantic_settings, measured at +31 modules on this path (N=10), so the slack is held below that signal -- slightly over half of it, not under -- while still absorbing the submodule shuffle of a routine dependency upgrade."
   },
   "resident_memory_mib": {
-    "observed_max": 59.08,
-    "observed_min": 58.52,
-    "observed_median": 58.81,
+    "observed_max": 59.15,
+    "observed_min": 58.62,
+    "observed_median": 58.8,
     "runs": 20,
     "budget": 64.0,
-    "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.main. N=20 consecutive runs: min 58.52, median 58.81, max 59.08 MiB -- spread 0.56 MiB (1.0% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.92 MiB of headroom, about 9x the observed spread, so it does not flap. Calibrated the same way: putting numpy on this startup path takes the working set to 66.91 MiB, 2.91 MiB over the budget. numpy is the lightest heavy native dependency this project installs at all, so it is the hardest realistic case for the budget. If that margin ever reads UNDER, the budget has stopped guarding anything and must be tightened; tests/test_runtime_footprint.py fails on a record that says so. What this budget does NOT reach: torch. Nothing on this startup path imports ctranslate2 (the transcription worker is imported lazily and defers faster_whisper into a function body), so a merely installed torch never appears in this measurement -- ADR-0084's dependency-table gate is the load-bearing guard for torch, not this one. What it deliberately does not catch is pydantic_settings' ~1.6 MiB of cost unique to this path (ADR-0085) -- the module indicators cover that, which is why there are two.",
+    "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.main. N=20 consecutive runs: min 58.62, median 58.80, max 59.15 MiB -- spread 0.54 MiB (0.9% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.85 MiB of headroom, about 9x the observed spread, so it does not flap. Calibrated the same way: putting numpy on this startup path takes the working set to 67.24 MiB, 3.24 MiB over the budget. numpy is the lightest heavy native dependency this project installs at all, so it is the hardest realistic case for the budget. If that margin ever reads UNDER, the budget has stopped guarding anything and must be tightened; tests/test_runtime_footprint.py fails on a record that says so. What this budget does NOT reach: torch. Nothing on this startup path imports ctranslate2 (the transcription worker is imported lazily and defers faster_whisper into a function body), so a merely installed torch never appears in this measurement -- ADR-0084's dependency-table gate is the load-bearing guard for torch, not this one. What it deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to this path (N=10; ADR-0085) -- the module indicators cover that, which is why there are two.",
     "calibration": {
       "module": "numpy",
       "measured": true,
-      "working_set_mib": 66.91,
-      "over_budget_mib": 2.91,
+      "working_set_mib": 67.24,
+      "over_budget_mib": 3.24,
       "module_count": 800
     }
   },

@@ -74,9 +74,17 @@ PROVISIONING_ARTIFACTS = frozenset({"_distutils_hack", "_virtualenv"})
 # the JSON so that there is one place to change the rule; `--update` bakes the resulting
 # numbers *and* these values into the JSON's prose, so the two cannot drift apart.
 #
-# Module-count slack: ADR-0085 requires the module indicator to catch pydantic_settings'
-# +32 modules, so the slack stays under half of that signal. It still absorbs the
-# submodule shuffle of a routine dependency upgrade.
+# What pydantic_settings adds to *this* startup path, which is the signal ADR-0085 requires
+# the module indicator to catch. Re-measured here rather than carried over: N=10 child
+# processes each way, `vspeech.main` 716 modules and `vspeech.main` + `pydantic_settings`
+# 747, zero spread on either side (2026-08-12). ADR-0066's older "about 32 modules" is the
+# same measurement to within one module; 31 is what this repo reads today.
+PYDANTIC_SETTINGS_MODULE_SIGNAL = 31
+# Module-count slack: it has to stay **below** that signal, or the arrival of
+# pydantic_settings would fit inside the budget. 16 clears that -- though only just, at
+# slightly over half of 31, not under half -- and the gate fires with 15 modules to spare
+# (747 against a budget of 732). It still absorbs the submodule shuffle of a routine
+# dependency upgrade.
 MODULE_COUNT_SLACK = 16
 # Resident-memory headroom, in MiB. Sized against the measured run-to-run spread, not as a
 # percentage, and deliberately not sized to absorb *growth*: any package arriving on the
@@ -359,9 +367,11 @@ def _build_baseline(runs: list[Measurement], calibration: Measurement | None) ->
                 f"len(sys.modules) after importing {ENTRY_POINT}. N={n} consecutive runs: "
                 f"min {counts[0]}, max {counts[-1]} (spread {count_spread}). "
                 f"Budget = max + {MODULE_COUNT_SLACK}. ADR-0085 requires this indicator "
-                "to catch pydantic_settings' +32 modules, so the slack is held below half "
-                "of that signal while still absorbing the submodule shuffle of a routine "
-                "dependency upgrade."
+                "to catch pydantic_settings, measured at "
+                f"+{PYDANTIC_SETTINGS_MODULE_SIGNAL} modules on this path (N=10), so the "
+                "slack is held below that signal -- slightly over half of it, not under -- "
+                "while still absorbing the submodule shuffle of a routine dependency "
+                "upgrade."
             ),
         },
         "resident_memory_mib": {
@@ -378,9 +388,9 @@ def _build_baseline(runs: list[Measurement], calibration: Measurement | None) ->
                 f"{RSS_HEADROOM_MIB:.1f} MiB headroom rounded up, i.e. {headroom:.2f} MiB "
                 f"of headroom, {versus_spread}, so it does not flap. "
                 + _calibration_sentence(calibration, rss_budget)
-                + " What it deliberately does not catch is pydantic_settings' ~1.6 MiB of "
-                "cost unique to this path (ADR-0085) -- the module indicators cover that, "
-                "which is why there are two."
+                + " What it deliberately does not catch is pydantic_settings' ~1.5 MiB of "
+                "cost unique to this path (N=10; ADR-0085) -- the module indicators cover "
+                "that, which is why there are two."
             ),
             "calibration": _calibration_record(calibration, rss_budget),
         },
