@@ -53,3 +53,18 @@ venv のディスク使用量は増える（nvidia wheel 群）。**常駐メモ
 torch と nvidia wheel が同居する環境（全 extra を入れた開発機、オフラインの ONNX 生成ツールを使う場合）では `preload_dlls()` は torch のロードを検出して何もせず戻る。二重ロードは起きない。
 
 pin した nvidia wheel のバージョン追随がこちらの持ち物になる。onnxruntime を上げるときは、その build が要求する CUDA メジャーバージョンと cuDNN のメジャーバージョンを確認する必要がある（`onnxruntime.print_debug_info()` が両方を報告する）。
+
+## 追記（実装で判明した訂正）
+
+上の Context は「`preload_dlls()` が `site-packages/nvidia/{cublas,cufft,cuda_runtime,cudnn}/bin/` から読む」と書いているが、**その配置は CUDA 12 世代までのものだった。** 実装して初めて分かった:
+
+- **CUDA 13 世代の wheel は配置も変えている。** 接尾辞を落とした `nvidia-cublas` / `nvidia-cufft` / `nvidia-cuda-runtime` は、コンポーネントごとのディレクトリではなく **`nvidia/cu13/bin/x86_64/` の 1 箇所**に全 CUDA ライブラリを入れる。旧名のまま残った `nvidia-cudnn-cu13` だけが `nvidia/cudnn/bin/` という旧来の形を保っている。
+- onnxruntime 1.27.0 の `_get_nvidia_dll_paths` は旧配置を**ハードコードしている**ため、`preload_dlls()` を引数なしで呼んでも cuBLAS / cuFFT / cudart を見つけられない（cuDNN だけ見つかる）。実測でも、preload を無効化すると 4 セッションすべてが `CPUExecutionProvider` に落ちた。
+- したがって呼び出しは **`directory=` を明示した 2 回**になる。`preload_dlls` は与えられた 1 ディレクトリの直下しか見ないので、CUDA 側と cuDNN 側で別のディレクトリを渡す必要がある。ディレクトリはライブラリ本体（`cublasLt64_*.dll` / `cudnn64_*.dll`）を探して決めるので、上流が配置を戻しても壊れない。
+- 副産物として、**torch が入っているが import されていない**環境でも供給元が nvidia wheel に固定される（`directory=None` だと onnxruntime は torch の `lib` へ迂回する）。torch 除去の前後で経路が同じになるので、ここで取った実測がそのまま除去後の予測になる。
+
+pin したのは `nvidia-cublas` / `nvidia-cudnn-cu13` / `nvidia-cufft` / `nvidia-cuda-runtime` の 4 つ（`nvidia-cuda-nvrtc` と `nvidia-nvjitlink` は前 2 つの推移的依存として入る）。上 3 つは `onnxruntime_providers_cuda.dll` の import table に載る＝欠けると DLL の load 自体が失敗する。`nvidia-cuda-runtime` だけは import table に無いが `preload_dlls` の対象なので、欠けると起動ごとに偽の失敗メッセージが出る（2.5MB なので入れた）。
+
+罠がもう 1 つある: **`nvidia-cublas` は win_amd64 wheel を出さない版がある**（13.6.1.10 など。13.6.0.2 にはある）。上限を CUDA メジャーで切ってあるので解決自体は通るが、Windows で wheel が無い版を掴もうとすると lock 時に失敗する。
+
+実測（venv のディスクは +1481.2MB / 3710.5MB → 5191.7MB）: 常駐メモリは増えない、という予想は正しかった。同一プロセスで同じ 4 セッションを開いて比較すると、nvidia wheel 供給（torch を import 不能化）が 2146.2MB、torch 供給が 2292.2MB（各 N=3 の中央値）で、**供給元を移すこと自体はメモリを増やさず、むしろ torch 本体の分だけ減る。**

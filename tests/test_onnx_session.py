@@ -5,7 +5,10 @@ protects all three.
 """
 
 import ast
+import platform
 from pathlib import Path
+
+import pytest
 
 import vspeech.lib.onnx_session as onnx_session
 from vspeech.lib.cuda_util import Device
@@ -16,8 +19,13 @@ def _capture(monkeypatch, cuda_available: bool):
 
     `cuda_available` drives onnxruntime's own provider list, which is what decides the
     EP since ADR-0078 -- not torch.
+
+    `preload_dlls` is replaced too: it has a real side effect (loading CUDA DLLs into
+    the process) that these tests must not trigger. The calls it receives are recorded
+    under `"preloads"`, and the once-per-process latch is reset so each test starts from
+    a fresh process state.
     """
-    captured: dict = {}
+    captured: dict = {"preloads": []}
 
     def fake_session(path, sess_options, providers, provider_options):
         captured["path"] = path
@@ -30,6 +38,12 @@ def _capture(monkeypatch, cuda_available: bool):
         available.insert(0, "CUDAExecutionProvider")
     monkeypatch.setattr(onnx_session, "InferenceSession", fake_session)
     monkeypatch.setattr(onnx_session, "get_available_providers", lambda: available)
+    monkeypatch.setattr(
+        onnx_session,
+        "preload_dlls",
+        lambda **kwargs: captured["preloads"].append(kwargs),
+    )
+    monkeypatch.setattr(onnx_session, "_cuda_libraries_loaded", False)
     return captured
 
 
@@ -84,6 +98,76 @@ def test_cpu_only_box_never_gets_the_cuda_ep(tmp_path, monkeypatch):
 
     assert captured["providers"] == ["CPUExecutionProvider"]
     assert captured["provider_options"] == [{}]
+
+
+def test_a_cuda_session_preloads_the_cuda_libraries(tmp_path, monkeypatch):
+    """The CUDA EP links against cuBLAS/cuFFT/cuDNN, which no longer arrive with torch.
+
+    Without this, `onnxruntime_providers_cuda.dll` fails to load and onnxruntime falls
+    back to `CPUExecutionProvider` without raising (ADR-0083).
+    """
+    captured = _capture(monkeypatch, cuda_available=True)
+
+    onnx_session.create_session(tmp_path / "m.onnx", Device("cuda", 0))
+
+    assert [(p["cuda"], p["cudnn"]) for p in captured["preloads"]] == [
+        (True, False),
+        (False, True),
+    ]
+
+
+def test_a_cpu_session_does_not_load_the_cuda_libraries(tmp_path, monkeypatch):
+    """A CPU-only pipeline must not pay for -- or require -- the CUDA libraries."""
+    captured = _capture(monkeypatch, cuda_available=False)
+
+    onnx_session.create_session(tmp_path / "m.onnx", Device("cuda", 0))
+    onnx_session.create_session(tmp_path / "m.onnx", Device("cpu"))
+
+    assert captured["preloads"] == []
+
+
+def test_the_cuda_libraries_are_loaded_once_per_process(tmp_path, monkeypatch):
+    """RVC opens three sessions (decoder, HuBERT, f0); the DLLs load on the first."""
+    captured = _capture(monkeypatch, cuda_available=True)
+
+    for _ in range(3):
+        onnx_session.create_session(tmp_path / "m.onnx", Device("cuda", 0))
+
+    assert len(captured["preloads"]) == 2
+
+
+def test_each_preload_is_pointed_at_a_directory_that_has_what_it_wants():
+    """The pinned nvidia wheels must sit where `preload_dlls` is told to look.
+
+    `preload_dlls` is given one directory per half and looks for every file it wants
+    directly inside it, so a wheel that moves its layout silently supplies nothing --
+    it only prints, and the pipeline dies later at `check_cuda_provider`. onnxruntime's
+    own list is the authority on which files those are.
+
+    Skipped when the wheels are absent (an install without the `rvc` extra).
+    """
+    if platform.system() != "Windows":
+        pytest.skip("the pinned wheels and this DLL list are Windows-only")
+    from onnxruntime import _get_nvidia_dll_paths
+
+    cuda_dir = onnx_session._nvidia_wheel_dir(onnx_session._CUDA_PROBE)
+    cudnn_dir = onnx_session._nvidia_wheel_dir(onnx_session._CUDNN_PROBE)
+    if cuda_dir is None or cudnn_dir is None:
+        pytest.skip("nvidia CUDA wheels are not installed")
+
+    # cuDNN ships this one only from 9.23; onnxruntime treats it as optional.
+    optional = {"cudnn_engines_tensor_ir64_9.dll"}
+    missing = [
+        str(Path(directory) / relative[-1])
+        for directory, cuda, cudnn in (
+            (cuda_dir, True, False),
+            (cudnn_dir, False, True),
+        )
+        for relative in _get_nvidia_dll_paths(True, cuda=cuda, cudnn=cudnn)
+        if relative[-1] not in optional
+        and not (Path(directory) / relative[-1]).is_file()
+    ]
+    assert missing == []
 
 
 def _inference_session_construction_sites() -> list[str]:

@@ -593,6 +593,63 @@ wheels = [
 ]
 
 [[package]]
+name = "nvidia-cublas"
+version = "13.6.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "nvidia-cuda-nvrtc", marker = "sys_platform == 'win32'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/08/8f/890a96ea1ff615100296977cce23296052dcb8c114d4e451201ec39df9bf/nvidia_cublas-13.6.0.2-py3-none-win_amd64.whl", hash = "sha256:3b5bcd6bfb6f65010ebf195851bcb9b2aa34b9fe08479432002991c1fe84b67d", size = 394568225, upload-time = "2026-06-29T17:15:46.911Z" },
+]
+
+[[package]]
+name = "nvidia-cuda-nvrtc"
+version = "13.3.33"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a1/42/edce72f2c5a0f587168109c867f25f4a9a6cd7289ecf0d68ed2b1070f273/nvidia_cuda_nvrtc-13.3.33-py3-none-win_amd64.whl", hash = "sha256:7d2af818851c0c224d5f92221e9226e51ee23c236df4b51f9194563979c888be", size = 45319163, upload-time = "2026-05-26T17:02:49.217Z" },
+]
+
+[[package]]
+name = "nvidia-cuda-runtime"
+version = "13.3.29"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d2/27/b53a5e0397842a5c11f0e1a39d4e5b2f22638a4126e83b3c4e196f62c969/nvidia_cuda_runtime-13.3.29-py3-none-win_amd64.whl", hash = "sha256:0667ec61c3d897388efa305ed4f7609ace88849a753ba9c6311d06dca55fff4f", size = 2630354, upload-time = "2026-05-26T17:00:05.389Z" },
+]
+
+[[package]]
+name = "nvidia-cudnn-cu13"
+version = "9.24.0.43"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "nvidia-cublas", marker = "sys_platform == 'win32'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/31/23/1dd3aa15cc4ab62c8fc88f8049ef137bc44c17892f5577bc80d994941f77/nvidia_cudnn_cu13-9.24.0.43-py3-none-win_amd64.whl", hash = "sha256:67a7273b5cf062f9446fd76cf464351a1c0f66501e6cd78f6675c0d604d8ac87", size = 412314771, upload-time = "2026-07-02T16:31:07.973Z" },
+]
+
+[[package]]
+name = "nvidia-cufft"
+version = "12.3.0.29"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "nvidia-nvjitlink", marker = "sys_platform == 'win32'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/94/64/8e9d808720559d3cbfcd1d1bc8a2e6f55deb29d692513d5a93c8d417b7e5/nvidia_cufft-12.3.0.29-py3-none-win_amd64.whl", hash = "sha256:510036a2bbab5c83ae93dc5c907c3a49d3518e3066ac3a2052ff0f7f9b27dfc4", size = 183939745, upload-time = "2026-05-26T17:07:22.091Z" },
+]
+
+[[package]]
+name = "nvidia-nvjitlink"
+version = "13.3.33"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/67/f2/ec9c05a108095828dfc58840978c627b3c313fdf2a567c6de9ffbbb46901/nvidia_nvjitlink-13.3.33-py3-none-win_amd64.whl", hash = "sha256:4297ee49639b4f2e07255a1d69b3acc7ab2d011bb892b403e91ac98368962e3b", size = 37766359, upload-time = "2026-05-26T17:11:28.96Z" },
+]
+
+[[package]]
 name = "onnx"
 version = "1.22.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1064,6 +1121,10 @@ mozc = [
 rvc = [
     { name = "faiss-cpu", marker = "sys_platform == 'win32'" },
     { name = "numpy", marker = "sys_platform == 'win32'" },
+    { name = "nvidia-cublas", marker = "sys_platform == 'win32'" },
+    { name = "nvidia-cuda-runtime", marker = "sys_platform == 'win32'" },
+    { name = "nvidia-cudnn-cu13", marker = "sys_platform == 'win32'" },
+    { name = "nvidia-cufft", marker = "sys_platform == 'win32'" },
     { name = "onnxruntime-gpu", marker = "sys_platform == 'win32'" },
     { name = "scipy", marker = "sys_platform == 'win32'" },
     { name = "torch", marker = "sys_platform == 'win32'" },
@@ -1112,6 +1173,10 @@ requires-dist = [
     { name = "mozcpy", marker = "extra == 'mozc'", specifier = ">=0.1.1,<0.2" },
     { name = "numpy", marker = "extra == 'rvc'", specifier = ">=2,<3" },
     { name = "numpy", marker = "extra == 'whisper'", specifier = ">=2,<3" },
+    { name = "nvidia-cublas", marker = "extra == 'rvc'", specifier = ">=13.6.0.2,<14" },
+    { name = "nvidia-cuda-runtime", marker = "extra == 'rvc'", specifier = ">=13.3.29,<14" },
+    { name = "nvidia-cudnn-cu13", marker = "extra == 'rvc'", specifier = ">=9.24.0.43,<10" },
+    { name = "nvidia-cufft", marker = "extra == 'rvc'", specifier = ">=12.3.0.29,<13" },
     { name = "onnxruntime-gpu", marker = "extra == 'rvc'", specifier = ">=1.27,<2" },
     { name = "onnxruntime-gpu", marker = "extra == 'whisper'", specifier = ">=1.27,<2" },
     { name = "pydantic", specifier = ">=2,<3" },
