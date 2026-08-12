@@ -18,11 +18,9 @@ _stream_config = os.environ.get(_STREAM_ENV)
 
 
 def _cuda_available() -> bool:
-    try:
-        import torch
-    except Exception:
-        return False
-    return torch.cuda.is_available()
+    from vspeech.lib.cuda_driver import list_cuda_devices
+
+    return bool(list_cuda_devices())
 
 
 @pytest.mark.skipif(

@@ -23,7 +23,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import torch
 
 from scripts.hubert_metrics import COSINE_MIN
 from scripts.hubert_metrics import COSINE_MIN_FP16
@@ -31,6 +30,7 @@ from scripts.hubert_metrics import MAX_ABS_MAX
 from scripts.hubert_metrics import MAX_ABS_MAX_FP16
 from scripts.hubert_metrics import feature_cosine
 from scripts.hubert_metrics import feature_max_abs_diff
+from vspeech.lib.cuda_driver import list_cuda_devices
 from vspeech.lib.cuda_util import Device
 
 _ASSET_ENV = "VSPEECH_HUBERT_ASSET_DIR"
@@ -99,9 +99,7 @@ def test_fp32_features_match_fairseq_golden(
 
 
 @pytest.mark.skipif(
-    not torch.cuda.is_available()
-    or GOLDEN_FP16_NPZ is None
-    or not GOLDEN_FP16_NPZ.exists(),
+    not list_cuda_devices() or GOLDEN_FP16_NPZ is None or not GOLDEN_FP16_NPZ.exists(),
     reason="fp16 graph needs CUDA and hubert_golden_fp16.npz",
 )
 @pytest.mark.parametrize(("emb_output_layer", "use_final_proj", "golden_key"), CASES)

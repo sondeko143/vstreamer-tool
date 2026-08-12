@@ -34,8 +34,9 @@ def _bare_streaming_vc(
 ):
     """A StreamingVc that drives only `_emit_with_crossfade`, with no model and no GPU.
 
-    `__init__` requires torch and the rvc extra, so a bare instance is built with just the
-    needed attributes filled in by hand (to pin the emit-length contract on CPU alone).
+    `__init__` requires the rvc extra and real model/session objects, so a bare instance
+    is built with just the needed attributes filled in by hand (to pin the emit-length
+    contract on CPU alone).
     """
     from vspeech.lib.stream_vc import StreamingVc
 
@@ -178,14 +179,15 @@ def test_emit_with_crossfade_raises_when_output_shorter_than_hop():
         sv._emit_with_crossfade(out)
 
 
-def test_helpers_work_on_torch_tensors():
-    # docstring claims numpy/torch agnosticism; verify the torch path.
-    import pytest
-
-    torch = pytest.importorskip("torch")
-    seq = torch.arange(5)
-    assert next_context(seq, 2).tolist() == [3, 4]
-    assert next_context(seq, 0).numel() == 0
+def test_next_context_works_on_any_sliceable_sequence():
+    """`next_context`'s docstring claims it makes no assumption about the sequence type
+    (only len() and slicing). Pin that against a plain list -- something that is neither
+    the production numpy/int16 path nor a framework tensor type -- so the claim stays
+    verified without depending on torch (ADR-0081 took torch out of the runtime, and this
+    module's tests should not need it either)."""
+    seq = list(range(5))
+    assert next_context(seq, 2) == [3, 4]
+    assert next_context(seq, 0) == []
 
 
 _CONFIG_ENV = "VSPEECH_RVC_GOLDEN_CONFIG"
@@ -194,11 +196,9 @@ _GOLDEN_CONFIG = Path(_config_path) if _config_path else None
 
 
 def _cuda_available() -> bool:
-    try:
-        import torch
-    except Exception:
-        return False
-    return torch.cuda.is_available()
+    from vspeech.lib.cuda_driver import list_cuda_devices
+
+    return bool(list_cuda_devices())
 
 
 _gpu_gate = pytest.mark.skipif(

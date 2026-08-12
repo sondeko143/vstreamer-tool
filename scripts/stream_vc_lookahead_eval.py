@@ -14,7 +14,10 @@ mirror it into [rvc].
         --lookahead 0,40,80,160 --out-dir ./lookahead_eval
 
 The helpers above `main` are pure numpy so they can be unit tested on CPU with no model
-(scripts/tests/test_stream_vc_lookahead_eval.py); everything touching torch lives below.
+(scripts/tests/test_stream_vc_lookahead_eval.py); `main` and below need the rvc extra to
+build a real `StreamingVc`, but nothing in this file needs torch or torchaudio any more
+(ADR-0081/ADR-0082 took both out of the runtime; `log_mel` used to reach for
+`torchaudio.transforms.MelSpectrogram` and is now a plain numpy STFT + mel filterbank).
 """
 
 from __future__ import annotations
@@ -237,14 +240,65 @@ def run_streaming(
     )
 
 
-def log_mel(x: NDArray[np.int16], rate: int) -> NDArray[np.float64]:
-    """(n_mels, frames) log-mel on a 10*log10 scale."""
-    import torch
-    import torchaudio.transforms as T
+_MEL_N_FFT = 1024
+_MEL_HOP_LENGTH = 256
+_MEL_N_MELS = 80
 
-    mel = T.MelSpectrogram(sample_rate=rate, n_fft=1024, hop_length=256, n_mels=80)
-    spec = mel(torch.from_numpy(x.astype(np.float32) / 32768.0))
-    return (10.0 * torch.log10(spec + 1e-10)).numpy().astype(np.float64)
+
+def _hz_to_mel(hz: NDArray[np.float64]) -> NDArray[np.float64]:
+    """HTK mel scale (matches torchaudio's `mel_scale="htk"` default)."""
+    return 2595.0 * np.log10(1.0 + hz / 700.0)
+
+
+def _mel_to_hz(mel: NDArray[np.float64]) -> NDArray[np.float64]:
+    return 700.0 * (10.0 ** (mel / 2595.0) - 1.0)
+
+
+def _mel_filterbank(n_fft: int, rate: int, n_mels: int) -> NDArray[np.float64]:
+    """A triangular mel filterbank, shape (n_mels, n_fft // 2 + 1).
+
+    Filters degenerate to all-zero where two adjacent bin edges round to the same FFT
+    bin (possible at the low end with a coarse FFT resolution); that filter just
+    contributes nothing to the sum below rather than dividing by zero.
+    """
+    mel_bounds = _hz_to_mel(np.array([0.0, rate / 2.0], dtype=np.float64))
+    mel_edges = np.linspace(mel_bounds[0], mel_bounds[1], n_mels + 2)
+    bins = np.floor((n_fft + 1) * _mel_to_hz(mel_edges) / rate).astype(np.int64)
+    fb = np.zeros((n_mels, n_fft // 2 + 1), dtype=np.float64)
+    for m in range(1, n_mels + 1):
+        left, center, right = int(bins[m - 1]), int(bins[m]), int(bins[m + 1])
+        if center > left:
+            fb[m - 1, left:center] = (np.arange(left, center) - left) / (center - left)
+        if right > center:
+            fb[m - 1, center:right] = (right - np.arange(center, right)) / (
+                right - center
+            )
+    return fb
+
+
+def log_mel(x: NDArray[np.int16], rate: int) -> NDArray[np.float64]:
+    """(n_mels, frames) log-mel on a 10*log10 scale.
+
+    A pure-numpy STFT (Hann window, reflect-padded, center-aligned) feeding a triangular
+    HTK mel filterbank, standing in for
+    `torchaudio.transforms.MelSpectrogram(n_fft=1024, hop_length=256, n_mels=80)` now
+    that torch/torchaudio are out of the dependency table (ADR-0081/ADR-0082). This is
+    only ever used as a ranking distance metric between lookahead settings -- the module
+    docstring: "the numbers rank the settings and the wavs decide" -- so exact numeric
+    parity with torchaudio's filterbank is not required, only internal consistency
+    between the reference and candidate calls.
+    """
+    wav = x.astype(np.float64) / 32768.0
+    pad = _MEL_N_FFT // 2
+    padded = np.pad(wav, (pad, pad), mode="reflect")
+    n_frames = max(0, 1 + (padded.shape[0] - _MEL_N_FFT) // _MEL_HOP_LENGTH)
+    window = np.hanning(_MEL_N_FFT + 1)[:-1]  # periodic Hann, matches torch.hann_window
+    starts = np.arange(n_frames) * _MEL_HOP_LENGTH
+    frames = np.stack([padded[s : s + _MEL_N_FFT] for s in starts])
+    power = np.abs(np.fft.rfft(frames * window, axis=1)) ** 2  # (n_frames, n_fft//2+1)
+    mel_fb = _mel_filterbank(_MEL_N_FFT, rate, _MEL_N_MELS)  # (n_mels, n_fft//2+1)
+    mel_spec = mel_fb @ power.T  # (n_mels, n_frames)
+    return 10.0 * np.log10(mel_spec + 1e-10)
 
 
 def format_table(rows: list[dict[str, Any]]) -> str:

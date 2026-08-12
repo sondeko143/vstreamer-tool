@@ -8,9 +8,12 @@ rmvpe_model_file or fcpe_model_file / gpu):
 
 The RVC synthesizer (VITS-style) injects random noise, so change_voice is
 stochastic run-to-run by design (verified: ~3.6% mean self-noise on both CUDA
-and CPU). That randomness is *seedable*, though: seeding torch + onnxruntime
+and CPU). That randomness is *seedable*, though: seeding onnxruntime
 immediately before the call makes the int16 output bit-exact-reproducible
-(verified self-noise 0). Everything the refactor touches (the orchestration
+(verified self-noise 0; torch seeding was measured to contribute nothing to
+this -- cross-process bit-identical captures under both recipes -- so it was
+dropped once ADR-0081 took torch out of the conversion path). Everything the
+refactor touches (the orchestration
 producing infer's inputs, and postprocessing) is deterministic on its own; only
 the untouched `infer` synthesizer is stochastic. So this captures a *seeded*
 output as the golden. The golden test re-seeds identically and asserts a tight
@@ -38,14 +41,12 @@ def seed_all(seed: int = 0) -> None:
     """Seed every RNG change_voice's stochastic synthesizer can consume.
 
     Makes the otherwise-stochastic int16 output bit-exact-reproducible. Must be
-    called immediately before each change_voice invocation.
+    called immediately before each change_voice invocation. onnxruntime's own RNG is
+    sufficient on its own -- torch seeding was measured to add nothing (see the
+    module docstring) -- so this seeds onnxruntime alone.
     """
     import onnxruntime as ort
-    import torch
 
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
     ort.set_seed(seed)
 
 

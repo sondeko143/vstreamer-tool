@@ -8,11 +8,17 @@ off-by-one.
 scripts/export_hubert_onnx.py imports transformers / safetensors lazily inside its
 functions, so this module imports even when they are not installed. The checks are done by
 passing a dummy nn.Module.
+
+torch itself is an offline-tool-only dependency now (ADR-0081 took it out of the
+runtime); an environment without it skips this whole module rather than failing
+collection.
 """
 
 from types import SimpleNamespace
 
-import torch
+import pytest
+
+torch = pytest.importorskip("torch")
 
 # 0..13, so that 10/13 (offset=+1) can be indexed in addition to 9/12
 HIDDEN_STATES = 14

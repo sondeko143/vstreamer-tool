@@ -16,12 +16,12 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import torch
 
 from scripts.hubert_metrics import CORR_MIN
 from scripts.hubert_metrics import SNR_MIN_DB
 from scripts.hubert_metrics import waveform_correlation
 from scripts.hubert_metrics import waveform_snr
+from vspeech.lib.cuda_driver import list_cuda_devices
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GOLDEN_NPZ = REPO_ROOT / "tests" / "assets" / "rvc_golden" / "change_voice_golden.npz"
@@ -34,7 +34,7 @@ GOLDEN_CONFIG = Path(_config_path) if _config_path else None
 
 pytestmark = pytest.mark.skipif(
     not GOLDEN_NPZ.exists()
-    or not torch.cuda.is_available()
+    or not list_cuda_devices()
     or GOLDEN_CONFIG is None
     or not GOLDEN_CONFIG.exists(),
     reason=f"golden npz / CUDA / ${_CONFIG_ENV} config not available",

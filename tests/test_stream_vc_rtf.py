@@ -104,11 +104,9 @@ _GOLDEN_CONFIG = Path(_config_path) if _config_path else None
 
 
 def _cuda_available() -> bool:
-    try:
-        import torch
-    except Exception:
-        return False
-    return torch.cuda.is_available()
+    from vspeech.lib.cuda_driver import list_cuda_devices
+
+    return bool(list_cuda_devices())
 
 
 @pytest.mark.skipif(

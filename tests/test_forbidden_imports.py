@@ -12,9 +12,13 @@
 - torchaudio: it pulls in torch, so keeping it is keeping torch's +476.7 MB RSS / +3.17 s
   of startup. Its only use here was a resampler duplicating the in-house polyphase FIR
   the device boundaries already run. Removed in ADR-0082.
+- torch: the RVC conversion path (HuBERT features, f0, the RVC synthesizer's `infer`)
+  now binds `OrtValue`s directly and runs on numpy + onnxruntime-native, with no
+  framework tensor anywhere on the path. Removed in ADR-0081.
 
 They are all fine in the offline tools (scripts/convert_hubert.py,
-scripts/export_hubert_onnx.py). What is forbidden is only `vspeech/`, i.e. the runtime.
+scripts/export_hubert_onnx.py, scripts/export_fcpe_onnx.py). What is forbidden is only
+`vspeech/`, i.e. the runtime.
 """
 
 import ast
@@ -26,7 +30,7 @@ import pytest
 
 VSPEECH_DIR = Path(__file__).resolve().parents[1] / "vspeech"
 
-FORBIDDEN = ("fairseq", "transformers", "pydantic_settings", "torchaudio")
+FORBIDDEN = ("fairseq", "transformers", "pydantic_settings", "torch", "torchaudio")
 
 
 def _imported_modules(path: Path):
@@ -72,9 +76,13 @@ def test_vspeech_never_imports(forbidden: str):
         ("torch", "transformers", False),
         ("torchaudio", "torchaudio", True),
         ("torchaudio.transforms", "torchaudio", True),
-        # `torch` is still allowed in the conversion path; only torchaudio is out.
-        # Without the dot in the submodule test this would false-positive.
+        # `torch` and `torchaudio` are both forbidden now, but as two separate
+        # entries in FORBIDDEN, and neither is a submodule of the other -- pin the
+        # dot boundary between the two similarly-named packages in both directions.
         ("torch", "torchaudio", False),
+        ("torchaudio", "torch", False),
+        ("torch", "torch", True),
+        ("torch.cuda", "torch", True),
     ],
 )
 def test_is_forbidden_predicate(module: str, forbidden: str, expected: bool):
