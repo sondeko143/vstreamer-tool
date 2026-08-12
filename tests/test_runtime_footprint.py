@@ -67,6 +67,7 @@ from scripts.runtime_startup_baseline import MIN_RUNS_FOR_UPDATE
 from scripts.runtime_startup_baseline import PATHS_BY_NAME
 from scripts.runtime_startup_baseline import MeasuredPath
 from scripts.runtime_startup_baseline import Measurement
+from scripts.runtime_startup_baseline import _build_baseline
 from scripts.runtime_startup_baseline import _build_path_record
 from scripts.runtime_startup_baseline import build_parser
 from scripts.runtime_startup_baseline import load_baseline
@@ -234,23 +235,48 @@ def test_the_baseline_records_every_measured_path_and_nothing_else():
 
 
 @measured
-def test_the_record_describes_the_path_the_code_actually_measures(path_name: str):
-    """The record copies the path's own description, and a copy can rot.
+def test_the_record_was_taken_on_the_path_the_code_measures(path_name: str):
+    """The budgets below a path's `imports` have to be the budgets *for* those imports.
 
-    `imports` is self-enforcing -- changing it changes the module set and the gate demands
-    a re-record. `covers` and `reaches` are not: prose can be rewritten and a `reaches`
-    entry added or dropped without any measurement moving, leaving the committed record
-    describing a path that no longer exists. That is the precise failure ADR-0086/0087
-    were written about, one layer down, so it is checked rather than trusted.
+    This is the one field the record copies from the code, and it is the one that must
+    agree: every number under it was produced by importing exactly this list, so a record
+    whose `imports` have moved is describing a different measurement. The failure is
+    self-announcing -- changing `imports` moves the module set and the indicators fire --
+    but they fire as an unexplained module-count jump, and this says what actually
+    happened.
+
+    `covers` and `reaches` deliberately are **not** in the record. They live only on the
+    dataclass, which is what the failure messages and both `reaches` checks read, so there
+    is no second copy to drift. An earlier revision recorded them and guarded the copies
+    with an equality check; that made every wording change to `covers` require an eleven
+    path re-record, which routinises the one operation `CLAUDE.md` warns is the fastest way
+    to turn a red snapshot gate green. Removing the surface beats guarding it.
     """
     path = PATHS_BY_NAME[path_name]
-    record = _record(path_name)
-    recorded = (record["imports"], record["reaches"], record["covers"])
-    current = (list(path.imports), list(path.reaches), path.covers)
-    assert recorded == current, (
-        f"the recorded description of the {path_name} path no longer matches the code.\n"
-        f"recorded: {recorded}\ncode:     {current}\n" + _regenerate_hint()
+    recorded = _record(path_name)["imports"]
+    assert recorded == list(path.imports), (
+        f"the {path_name} path's budgets were recorded for a different import list.\n"
+        f"recorded: {recorded}\ncode:     {list(path.imports)}\n" + _regenerate_hint()
     )
+
+
+def test_a_subset_build_reports_that_it_has_no_calibration():
+    """`--only` may exclude the calibration path, and then there is nothing to calibrate.
+
+    It used to raise instead: the calibration budget was looked up unconditionally, so
+    `uv run poe runtime-baseline --only vc --runs 1` -- the exact form the task table
+    documents -- took every measurement and then died with `KeyError: 'entry_point'` and a
+    traceback. A calibration measured against a path that was not built is meaningless, so
+    the subset build has to *say* it has none, which is what a reader of a partial run
+    needs to know anyway.
+    """
+    reaching = Measurement(("onnxruntime", "numpy", "vspeech"), 50.0, 40.0, 1.0)
+    subset = {"vc": [reaching, reaching]}
+    # Pass a calibration to prove it is dropped rather than merely absent: it was measured
+    # against a budget this build does not contain.
+    baseline = _build_baseline(subset, reaching)
+    assert set(baseline["paths"]) == {"vc"}
+    assert baseline["budget_rule"]["calibration"]["measured"] is False
 
 
 def test_a_newcomer_on_a_measured_path_is_named():

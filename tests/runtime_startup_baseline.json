@@ -4,13 +4,13 @@
   "budget_rule": {
     "module_count_slack": 16,
     "rss_headroom_mib": 4.0,
-    "basis": "Calibrated on the entry_point path, the lightest one and the only one numpy is absent from: putting numpy on it takes the working set to 66.95 MiB, 3.95 MiB over that path's budget of 63.00 MiB. numpy is the lightest heavy native dependency this project installs at all, so it is the hardest realistic case. One calibration speaks for every path because every budget is `worst observed run + 4.0 MiB` rounded up: what a budget catches is that headroom, which is the same everywhere, not the level the budget sits at. If this margin ever reads UNDER, the headroom has stopped guarding anything and must be tightened; tests/test_runtime_footprint.py fails on a record that says so.",
+    "basis": "Calibrated on the entry_point path, the lightest one and the only one numpy is absent from: putting numpy on it takes the working set to 66.96 MiB, 2.96 MiB over that path's budget of 64.00 MiB. numpy is the lightest heavy native dependency this project installs at all, so it is the hardest realistic case. One calibration speaks for every path because every budget is `worst observed run + 4.0 MiB` rounded up: what a budget catches is that headroom, which is the same everywhere, not the level the budget sits at. If this margin ever reads UNDER, the headroom has stopped guarding anything and must be tightened; tests/test_runtime_footprint.py fails on a record that says so.",
     "calibration": {
       "path": "entry_point",
       "module": "numpy",
       "measured": true,
-      "working_set_mib": 66.95,
-      "over_budget_mib": 3.95,
+      "working_set_mib": 66.96,
+      "over_budget_mib": 2.96,
       "module_count": 800
     }
   },
@@ -18,13 +18,6 @@
     "entry_point": {
       "imports": [
         "vspeech.main"
-      ],
-      "covers": "What `python -m vspeech` loads before it has read a config file: click, the config schema, the logger, telemetry, preflight, the shared context and the two infrastructure workers (sender/receiver) with their gRPC transport. Every pipeline pays this whichever workers it enables.",
-      "reaches": [
-        "click",
-        "pydantic",
-        "grpc",
-        "google"
       ],
       "module_count": {
         "observed_max": 716,
@@ -34,12 +27,12 @@
         "basis": "len(sys.modules) after importing vspeech.main. N=10 consecutive runs: min 716, max 716 (spread 0). Budget = max + 16. ADR-0085 requires this indicator to catch pydantic_settings, measured at +31 modules on the entry point (N=10), so the slack is held below that signal -- slightly over half of it, not under -- while still absorbing the submodule shuffle of a routine dependency upgrade."
       },
       "resident_memory_mib": {
-        "observed_max": 58.96,
-        "observed_min": 58.6,
-        "observed_median": 58.82,
+        "observed_max": 59.02,
+        "observed_min": 58.43,
+        "observed_median": 58.73,
         "runs": 10,
-        "budget": 63.0,
-        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.main. N=10 consecutive runs: min 58.60, median 58.82, max 58.96 MiB -- spread 0.36 MiB (0.6% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.04 MiB of headroom, about 11x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
+        "budget": 64.0,
+        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.main. N=10 consecutive runs: min 58.43, median 58.73, max 59.02 MiB -- spread 0.59 MiB (1.0% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.98 MiB of headroom, about 8x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
       },
       "top_level_modules": [
         "81d243bd2c585b0f4821__mypyc",
@@ -243,14 +236,6 @@
         "faster_whisper",
         "onnxruntime"
       ],
-      "covers": "The transcription worker as it actually runs, deferred imports included: `av` (pcm_to_waveform), `faster_whisper` (get_transcriber) and `onnxruntime` (the VAD gate, ADR-0037). This is the heaviest path in the project and the one the entry-point measurement could not see -- faster_whisper imports ctranslate2, whose own `try: import torch` loads a merely installed torch, so ADR-0080's 477MB comes back here first and nowhere else.",
-      "reaches": [
-        "av",
-        "faster_whisper",
-        "ctranslate2",
-        "onnxruntime",
-        "numpy"
-      ],
       "module_count": {
         "observed_max": 1123,
         "observed_min": 1123,
@@ -259,12 +244,12 @@
         "basis": "len(sys.modules) after importing vspeech.worker.transcription, av, faster_whisper, onnxruntime. N=10 consecutive runs: min 1123, max 1123 (spread 0). Budget = max + 16. ADR-0085 requires this indicator to catch pydantic_settings, measured at +31 modules on the entry point (N=10), so the slack is held below that signal -- slightly over half of it, not under -- while still absorbing the submodule shuffle of a routine dependency upgrade."
       },
       "resident_memory_mib": {
-        "observed_max": 110.99,
-        "observed_min": 110.6,
-        "observed_median": 110.81,
+        "observed_max": 110.92,
+        "observed_min": 110.46,
+        "observed_median": 110.77,
         "runs": 10,
         "budget": 115.0,
-        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.worker.transcription, av, faster_whisper, onnxruntime. N=10 consecutive runs: min 110.60, median 110.81, max 110.99 MiB -- spread 0.39 MiB (0.4% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.01 MiB of headroom, about 10x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
+        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.worker.transcription, av, faster_whisper, onnxruntime. N=10 consecutive runs: min 110.46, median 110.77, max 110.92 MiB -- spread 0.46 MiB (0.4% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.08 MiB of headroom, about 9x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
       },
       "top_level_modules": [
         "81d243bd2c585b0f4821__mypyc",
@@ -488,11 +473,6 @@
         "vspeech.lib.cuda_util",
         "vspeech.lib.pitch_extract"
       ],
-      "covers": "The RVC voice-changer worker with the modules `rvc_worker` defers into its function body: the ONNX session factory, the device layer, the conversion path and the f0 extractor. This is where ADR-0080/0081/0082 took torch and torchaudio out and left numpy plus onnxruntime.",
-      "reaches": [
-        "onnxruntime",
-        "numpy"
-      ],
       "module_count": {
         "observed_max": 430,
         "observed_min": 430,
@@ -501,12 +481,12 @@
         "basis": "len(sys.modules) after importing vspeech.worker.vc, vspeech.lib.rvc, vspeech.lib.onnx_session, vspeech.lib.cuda_util, vspeech.lib.pitch_extract. N=10 consecutive runs: min 430, max 430 (spread 0). Budget = max + 16. ADR-0085 requires this indicator to catch pydantic_settings, measured at +31 modules on the entry point (N=10), so the slack is held below that signal -- slightly over half of it, not under -- while still absorbing the submodule shuffle of a routine dependency upgrade."
       },
       "resident_memory_mib": {
-        "observed_max": 67.66,
-        "observed_min": 67.14,
-        "observed_median": 67.51,
+        "observed_max": 67.7,
+        "observed_min": 67.11,
+        "observed_median": 67.5,
         "runs": 10,
         "budget": 72.0,
-        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.worker.vc, vspeech.lib.rvc, vspeech.lib.onnx_session, vspeech.lib.cuda_util, vspeech.lib.pitch_extract. N=10 consecutive runs: min 67.14, median 67.51, max 67.66 MiB -- spread 0.52 MiB (0.8% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.34 MiB of headroom, about 8x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
+        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.worker.vc, vspeech.lib.rvc, vspeech.lib.onnx_session, vspeech.lib.cuda_util, vspeech.lib.pitch_extract. N=10 consecutive runs: min 67.11, median 67.50, max 67.70 MiB -- spread 0.58 MiB (0.9% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.30 MiB of headroom, about 7x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
       },
       "top_level_modules": [
         "__future__",
@@ -672,11 +652,6 @@
         "vspeech.worker.recording",
         "vspeech.worker.playback"
       ],
-      "covers": "The two device-facing workers and the sounddevice binding they open PortAudio through (ADR-0031), plus the in-house resampler (ADR-0073..0077).",
-      "reaches": [
-        "sounddevice",
-        "numpy"
-      ],
       "module_count": {
         "observed_max": 424,
         "observed_min": 424,
@@ -685,12 +660,12 @@
         "basis": "len(sys.modules) after importing vspeech.worker.recording, vspeech.worker.playback. N=10 consecutive runs: min 424, max 424 (spread 0). Budget = max + 16. ADR-0085 requires this indicator to catch pydantic_settings, measured at +31 modules on the entry point (N=10), so the slack is held below that signal -- slightly over half of it, not under -- while still absorbing the submodule shuffle of a routine dependency upgrade."
       },
       "resident_memory_mib": {
-        "observed_max": 56.31,
-        "observed_min": 55.84,
-        "observed_median": 56.15,
+        "observed_max": 56.19,
+        "observed_min": 55.67,
+        "observed_median": 55.98,
         "runs": 10,
         "budget": 61.0,
-        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.worker.recording, vspeech.worker.playback. N=10 consecutive runs: min 55.84, median 56.15, max 56.31 MiB -- spread 0.47 MiB (0.8% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.69 MiB of headroom, about 10x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
+        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.worker.recording, vspeech.worker.playback. N=10 consecutive runs: min 55.67, median 55.98, max 56.19 MiB -- spread 0.52 MiB (0.9% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.81 MiB of headroom, about 9x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
       },
       "top_level_modules": [
         "__future__",
@@ -862,11 +837,6 @@
         "vspeech.lib.voicevox",
         "vspeech.lib.voiceroid"
       ],
-      "covers": "The TTS worker and both back ends it dispatches to by worker_type: voicevox_core and the VOICEROID2 binding. Neither is on the entry point.",
-      "reaches": [
-        "voicevox_core",
-        "pyvcroid2"
-      ],
       "module_count": {
         "observed_max": 356,
         "observed_min": 356,
@@ -875,12 +845,12 @@
         "basis": "len(sys.modules) after importing vspeech.worker.tts, vspeech.lib.voicevox, vspeech.lib.voiceroid. N=10 consecutive runs: min 356, max 356 (spread 0). Budget = max + 16. ADR-0085 requires this indicator to catch pydantic_settings, measured at +31 modules on the entry point (N=10), so the slack is held below that signal -- slightly over half of it, not under -- while still absorbing the submodule shuffle of a routine dependency upgrade."
       },
       "resident_memory_mib": {
-        "observed_max": 42.85,
-        "observed_min": 42.46,
-        "observed_median": 42.76,
+        "observed_max": 42.95,
+        "observed_min": 42.42,
+        "observed_median": 42.74,
         "runs": 10,
         "budget": 47.0,
-        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.worker.tts, vspeech.lib.voicevox, vspeech.lib.voiceroid. N=10 consecutive runs: min 42.46, median 42.76, max 42.85 MiB -- spread 0.39 MiB (0.9% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.15 MiB of headroom, about 11x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
+        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.worker.tts, vspeech.lib.voicevox, vspeech.lib.voiceroid. N=10 consecutive runs: min 42.42, median 42.74, max 42.95 MiB -- spread 0.53 MiB (1.2% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.05 MiB of headroom, about 8x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
       },
       "top_level_modules": [
         "__future__",
@@ -1051,10 +1021,6 @@
         "vspeech.worker.subtitle",
         "vspeech.worker.subtitle_obs"
       ],
-      "covers": "The subtitle worker's OBS back end, which ADR-0040 split out so an OBS pipeline runs headless. **This path is what holds ADR-0040's boundary.** Its imports go through the dispatcher rather than around it, and its recorded module set contains no GUI toolkit, so a toolkit pulled in through the dispatcher -- the exact ADR-0040 regression -- arrives here as an unlisted top-level name and is named by the failure. `tests/test_subtitle_dispatch.py` used to assert that by naming tkinter; ADR-0087 removed the assertion as redundant to this measurement, so this is where the guarantee lives now. Measuring it apart from the TK back end is what keeps the two distinguishable.",
-      "reaches": [
-        "websockets"
-      ],
       "module_count": {
         "observed_max": 380,
         "observed_min": 380,
@@ -1063,12 +1029,12 @@
         "basis": "len(sys.modules) after importing vspeech.worker.subtitle, vspeech.worker.subtitle_obs. N=10 consecutive runs: min 380, max 380 (spread 0). Budget = max + 16. ADR-0085 requires this indicator to catch pydantic_settings, measured at +31 modules on the entry point (N=10), so the slack is held below that signal -- slightly over half of it, not under -- while still absorbing the submodule shuffle of a routine dependency upgrade."
       },
       "resident_memory_mib": {
-        "observed_max": 41.8,
-        "observed_min": 41.35,
-        "observed_median": 41.57,
+        "observed_max": 41.87,
+        "observed_min": 41.45,
+        "observed_median": 41.6,
         "runs": 10,
         "budget": 46.0,
-        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.worker.subtitle, vspeech.worker.subtitle_obs. N=10 consecutive runs: min 41.35, median 41.57, max 41.80 MiB -- spread 0.45 MiB (1.1% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.20 MiB of headroom, about 9x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
+        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.worker.subtitle, vspeech.worker.subtitle_obs. N=10 consecutive runs: min 41.45, median 41.60, max 41.87 MiB -- spread 0.42 MiB (1.0% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.13 MiB of headroom, about 10x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
       },
       "top_level_modules": [
         "__future__",
@@ -1243,10 +1209,6 @@
         "vspeech.worker.subtitle",
         "vspeech.worker.subtitle_tk"
       ],
-      "covers": "The subtitle worker's TK back end, the only path that opens a GUI toolkit.",
-      "reaches": [
-        "tkinter"
-      ],
       "module_count": {
         "observed_max": 327,
         "observed_min": 327,
@@ -1255,12 +1217,12 @@
         "basis": "len(sys.modules) after importing vspeech.worker.subtitle, vspeech.worker.subtitle_tk. N=10 consecutive runs: min 327, max 327 (spread 0). Budget = max + 16. ADR-0085 requires this indicator to catch pydantic_settings, measured at +31 modules on the entry point (N=10), so the slack is held below that signal -- slightly over half of it, not under -- while still absorbing the submodule shuffle of a routine dependency upgrade."
       },
       "resident_memory_mib": {
-        "observed_max": 41.54,
-        "observed_min": 41.32,
-        "observed_median": 41.37,
+        "observed_max": 41.58,
+        "observed_min": 41.13,
+        "observed_median": 41.45,
         "runs": 10,
         "budget": 46.0,
-        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.worker.subtitle, vspeech.worker.subtitle_tk. N=10 consecutive runs: min 41.32, median 41.37, max 41.54 MiB -- spread 0.22 MiB (0.5% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.46 MiB of headroom, about 20x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
+        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.worker.subtitle, vspeech.worker.subtitle_tk. N=10 consecutive runs: min 41.13, median 41.45, max 41.58 MiB -- spread 0.45 MiB (1.1% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.42 MiB of headroom, about 10x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
       },
       "top_level_modules": [
         "__future__",
@@ -1422,11 +1384,6 @@
       "imports": [
         "vspeech.worker.translation"
       ],
-      "covers": "The translation worker and the Google Cloud Translate client stack it imports at module level.",
-      "reaches": [
-        "google",
-        "grpc"
-      ],
       "module_count": {
         "observed_max": 842,
         "observed_min": 842,
@@ -1435,12 +1392,12 @@
         "basis": "len(sys.modules) after importing vspeech.worker.translation. N=10 consecutive runs: min 842, max 842 (spread 0). Budget = max + 16. ADR-0085 requires this indicator to catch pydantic_settings, measured at +31 modules on the entry point (N=10), so the slack is held below that signal -- slightly over half of it, not under -- while still absorbing the submodule shuffle of a routine dependency upgrade."
       },
       "resident_memory_mib": {
-        "observed_max": 64.75,
-        "observed_min": 64.08,
-        "observed_median": 64.48,
+        "observed_max": 64.7,
+        "observed_min": 64.21,
+        "observed_median": 64.42,
         "runs": 10,
         "budget": 69.0,
-        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.worker.translation. N=10 consecutive runs: min 64.08, median 64.48, max 64.75 MiB -- spread 0.66 MiB (1.0% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.25 MiB of headroom, about 6x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
+        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.worker.translation. N=10 consecutive runs: min 64.21, median 64.42, max 64.70 MiB -- spread 0.49 MiB (0.8% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.30 MiB of headroom, about 9x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
       },
       "top_level_modules": [
         "81d243bd2c585b0f4821__mypyc",
@@ -1646,11 +1603,6 @@
         "vspeech.stream_vc.transport",
         "vspeech.lib.stream_vc"
       ],
-      "covers": "The streaming-VC producer role (ADR-0055): capture, the conversion runner and the UDP transport, i.e. the modules `create_stream_vc_task` defers to at startup.",
-      "reaches": [
-        "sounddevice",
-        "numpy"
-      ],
       "module_count": {
         "observed_max": 427,
         "observed_min": 427,
@@ -1659,12 +1611,12 @@
         "basis": "len(sys.modules) after importing vspeech.stream_vc.subsystem, vspeech.stream_vc.capture, vspeech.stream_vc.runner, vspeech.stream_vc.transport, vspeech.lib.stream_vc. N=10 consecutive runs: min 427, max 427 (spread 0). Budget = max + 16. ADR-0085 requires this indicator to catch pydantic_settings, measured at +31 modules on the entry point (N=10), so the slack is held below that signal -- slightly over half of it, not under -- while still absorbing the submodule shuffle of a routine dependency upgrade."
       },
       "resident_memory_mib": {
-        "observed_max": 56.22,
-        "observed_min": 55.98,
+        "observed_max": 56.2,
+        "observed_min": 55.85,
         "observed_median": 56.05,
         "runs": 10,
         "budget": 61.0,
-        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.stream_vc.subsystem, vspeech.stream_vc.capture, vspeech.stream_vc.runner, vspeech.stream_vc.transport, vspeech.lib.stream_vc. N=10 consecutive runs: min 55.98, median 56.05, max 56.22 MiB -- spread 0.25 MiB (0.4% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.78 MiB of headroom, about 19x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
+        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.stream_vc.subsystem, vspeech.stream_vc.capture, vspeech.stream_vc.runner, vspeech.stream_vc.transport, vspeech.lib.stream_vc. N=10 consecutive runs: min 55.85, median 56.05, max 56.20 MiB -- spread 0.35 MiB (0.6% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.80 MiB of headroom, about 14x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
       },
       "top_level_modules": [
         "__future__",
@@ -1836,11 +1788,6 @@
         "vspeech.stream_vc.jitter",
         "vspeech.stream_vc.wire"
       ],
-      "covers": "The streaming-VC consumer role (ADR-0055). The whole point of the role split is that a playback-only host stays light: it receives converted audio over UDP and plays it, and must never carry the conversion stack's weight. This path used to be asserted torch-free by name; ADR-0087 keeps the invariant and measures its cost instead.",
-      "reaches": [
-        "sounddevice",
-        "numpy"
-      ],
       "module_count": {
         "observed_max": 386,
         "observed_min": 386,
@@ -1849,12 +1796,12 @@
         "basis": "len(sys.modules) after importing vspeech.stream_vc.consumer, vspeech.stream_vc.udp, vspeech.stream_vc.jitter, vspeech.stream_vc.wire. N=10 consecutive runs: min 386, max 386 (spread 0). Budget = max + 16. ADR-0085 requires this indicator to catch pydantic_settings, measured at +31 modules on the entry point (N=10), so the slack is held below that signal -- slightly over half of it, not under -- while still absorbing the submodule shuffle of a routine dependency upgrade."
       },
       "resident_memory_mib": {
-        "observed_max": 53.71,
-        "observed_min": 53.45,
-        "observed_median": 53.59,
+        "observed_max": 53.65,
+        "observed_min": 53.36,
+        "observed_median": 53.45,
         "runs": 10,
         "budget": 58.0,
-        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.stream_vc.consumer, vspeech.stream_vc.udp, vspeech.stream_vc.jitter, vspeech.stream_vc.wire. N=10 consecutive runs: min 53.45, median 53.59, max 53.71 MiB -- spread 0.26 MiB (0.5% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.29 MiB of headroom, about 17x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
+        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.stream_vc.consumer, vspeech.stream_vc.udp, vspeech.stream_vc.jitter, vspeech.stream_vc.wire. N=10 consecutive runs: min 53.36, median 53.45, max 53.65 MiB -- spread 0.29 MiB (0.5% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.35 MiB of headroom, about 15x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
       },
       "top_level_modules": [
         "__future__",
@@ -2021,11 +1968,6 @@
         "vspeech.lib.cuda_util",
         "vspeech.lib.onnx_session"
       ],
-      "covers": "Resolving a GPU and opening an ONNX session (ADR-0078/0024). Deciding which device to use must not drag an inference framework in for one integer: while this layer spoke `torch.device`, the whisper pipeline paid 477MB of RSS and 3.2s of startup for it. This path used to be asserted torch-free by name; ADR-0087 keeps the invariant and measures its cost instead.",
-      "reaches": [
-        "onnxruntime",
-        "numpy"
-      ],
       "module_count": {
         "observed_max": 376,
         "observed_min": 376,
@@ -2034,12 +1976,12 @@
         "basis": "len(sys.modules) after importing vspeech.lib.cuda_driver, vspeech.lib.cuda_util, vspeech.lib.onnx_session. N=10 consecutive runs: min 376, max 376 (spread 0). Budget = max + 16. ADR-0085 requires this indicator to catch pydantic_settings, measured at +31 modules on the entry point (N=10), so the slack is held below that signal -- slightly over half of it, not under -- while still absorbing the submodule shuffle of a routine dependency upgrade."
       },
       "resident_memory_mib": {
-        "observed_max": 64.5,
-        "observed_min": 63.99,
-        "observed_median": 64.16,
+        "observed_max": 64.4,
+        "observed_min": 63.98,
+        "observed_median": 64.23,
         "runs": 10,
         "budget": 69.0,
-        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.lib.cuda_driver, vspeech.lib.cuda_util, vspeech.lib.onnx_session. N=10 consecutive runs: min 63.99, median 64.16, max 64.50 MiB -- spread 0.51 MiB (0.8% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.50 MiB of headroom, about 9x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
+        "basis": "Working set (GetProcessMemoryInfo) of the child itself after importing vspeech.lib.cuda_driver, vspeech.lib.cuda_util, vspeech.lib.onnx_session. N=10 consecutive runs: min 63.98, median 64.23, max 64.40 MiB -- spread 0.42 MiB (0.7% of the median). Budget = max + 4.0 MiB headroom rounded up, i.e. 4.60 MiB of headroom, about 11x the observed spread, so it does not flap. What this indicator deliberately does not catch is pydantic_settings' ~1.5 MiB of cost unique to the entry point (N=10; ADR-0085) -- the module indicators cover that, which is why there are two."
       },
       "top_level_modules": [
         "__future__",

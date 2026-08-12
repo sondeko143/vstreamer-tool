@@ -72,6 +72,21 @@ class MeasuredPath:
 # Every path the gate measures. To add a worker or a startup path, add it here and
 # re-record; the rule for what belongs is mechanical -- a chain a running pipeline
 # executes. `covers` is prose for whoever reads a failure; `reaches` is checked.
+#
+# [Open, accepted residual] **`imports` is a hand-copy of each worker's deferred-import
+# chain, and nothing ties it back to the worker.** A path whose worker switched back ends
+# would go on measuring the old chain, satisfy `reaches`, and pass -- while covering code
+# that no longer runs. Left as-is rather than fixed: deriving the chain automatically means
+# resolving imports out of function bodies across conditional branches, which is a static
+# analysis this gate would then depend on being right, and a wrong one fails silently in
+# the same direction. `reaches` narrows the blast radius but does not close it, because a
+# path may import a `reaches` name directly (`transcription` imports `av`,
+# `faster_whisper` and `onnxruntime` itself, so only `ctranslate2` and `numpy` are
+# substantive there). Every chain was traced to its worker and held on 2026-08-13:
+# worker/transcription.py:73,310 and its module-level vad import at 44; worker/vc.py:167-171;
+# worker/tts.py:52,115; worker/subtitle.py's dispatcher; recording.py/playback.py at module
+# level; stream_vc/subsystem.py:58-72. **Re-trace them when a worker changes back ends** --
+# that is the moment this residual bites, and it is the only moment.
 MEASURED_PATHS: tuple[MeasuredPath, ...] = (
     MeasuredPath(
         name="entry_point",
@@ -554,10 +569,17 @@ def _build_path_record(path: MeasuredPath, runs: list[Measurement]) -> dict:
         )
 
     count_spread = counts[-1] - counts[0]
+    # The record holds **measurements**, plus the `imports` that produced them. It
+    # deliberately does not copy `covers` or `reaches`: nothing reads those copies (the
+    # failure messages and both `reaches` checks read the dataclass), so they would be pure
+    # duplication of prose that can be edited without any measurement moving -- drift no
+    # gate could see. Worse, while they were recorded, editing a sentence of `covers`
+    # obliged a maintainer to re-record all eleven paths, which routinises the one
+    # operation that can quietly turn a red snapshot gate green (it happened once, and it
+    # moved a budget). `imports` stays because it is the provenance of these numbers and is
+    # self-enforcing: change it and the module set moves, which fires the gate.
     return {
         "imports": list(path.imports),
-        "covers": path.covers,
-        "reaches": list(path.reaches),
         "module_count": {
             "observed_max": counts[-1],
             "observed_min": counts[0],
@@ -605,7 +627,21 @@ def _build_baseline(
         for path in MEASURED_PATHS
         if path.name in runs_by_path
     }
-    calibration_budget = paths[CALIBRATION_PATH]["resident_memory_mib"]["budget"]
+    # `--only` can select a subset that excludes the calibration path, and then there is no
+    # budget for a calibration to be measured against -- so there is no calibration, rather
+    # than a KeyError on the way to saying so. (Measured before the guard existed: `--only
+    # vc --runs 1` did every measurement, then died with `KeyError: 'entry_point'` and a
+    # traceback, which is the form `poe_tasks.toml` advertises.) `--update` with `--only` is
+    # refused, so a subset build is only ever printed, never recorded -- but the read path
+    # has to work for the flow the task table documents.
+    calibrated_path = paths.get(CALIBRATION_PATH)
+    if calibrated_path is None:
+        calibration = None
+    # Only read when `calibration` is not None; both helpers below ignore this argument
+    # entirely for a `None` calibration, which is what a subset build always has.
+    calibration_budget = (
+        calibrated_path["resident_memory_mib"]["budget"] if calibrated_path else 0.0
+    )
     return {
         "what_this_is": (
             "The outcome gate of ADR-0085, widened to the paths that actually get heavy by "
