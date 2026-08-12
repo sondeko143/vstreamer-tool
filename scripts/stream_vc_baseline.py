@@ -630,7 +630,11 @@ def capture(args: argparse.Namespace) -> int:
                 ensure_ascii=False,
             )
         ),
-        config_path=np.str_(str(config_path)),
+        # The config path is deliberately NOT recorded. It is an absolute path on the
+        # capturing machine (`C:\\Users\\<name>\\...`), i.e. the environment PII this
+        # repo's secret-scanning gate exists to keep out, and nothing reads it: what
+        # decides whether two runs are comparable is the geometry and the provenance
+        # above, both of which are recorded by value rather than by reference.
         self_noise_max_abs_diff=np.int64(self_noise.max_abs_diff),
         self_noise_correlation=np.float64(self_noise.correlation),
         self_noise_snr_db=np.float64(self_noise.snr_db),
