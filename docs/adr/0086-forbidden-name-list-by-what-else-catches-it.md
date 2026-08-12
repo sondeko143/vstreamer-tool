@@ -35,12 +35,21 @@
 
 **どのゲートが捉えるのかの側。** 実際に混入させて確かめた。
 
-- `vspeech/lib/ami.py` に `import torch` を 1 行入れると、pytest は**収集段階で終了コード 2**
-  になる（`tests/test_transcription_helpers.py` と `tests/test_transcription_worker.py` が
-  `ModuleNotFoundError: No module named 'torch'` で collection error）。**名前ゲートは走りさえ
-  しない。**
-- テストが直接 import しない唯一の実モジュール `vspeech/__main__.py` に同じ 1 行を入れると
-  **6 件**が落ちる。名前ゲート 1 件と、`tests/test_main.py` のエントリポイント smoke 5 件である。
+`vspeech/` の 55 モジュールのうち、pytest の収集が終わった時点で `sys.modules` に載るのは
+**52 件**である（実測）。残る 3 件は `vspeech/__main__.py` / `vspeech/lib/voicevox.py` /
+`vspeech/worker/subtitle.py` で、後ろの 2 件はテストが**実行時に** import する
+（`tests/test_voicevox_lib.py:94` の `importlib.import_module`、
+`tests/test_subtitle_dispatch.py:40`）。この 3 分類すべてで混入させた。
+
+- 収集時に載る 52 件の側。`vspeech/lib/ami.py` に `import torch` を 1 行入れると、pytest は
+  **収集段階で終了コード 2** になる（`tests/test_transcription_helpers.py` と
+  `tests/test_transcription_worker.py` が `ModuleNotFoundError: No module named 'torch'` で
+  collection error）。**名前ゲートは走りさえしない。**
+- 実行時に import される 2 件の側。`vspeech/lib/voicevox.py` と `vspeech/worker/subtitle.py`
+  の両方に同じ 1 行を入れると **1 failed + 3 errors**（`test_subtitle_dispatch.py` 1 件と
+  `test_voicevox_lib.py` 3 件、いずれも `ModuleNotFoundError`）。どれも skip されない。
+- `vspeech/__main__.py` の側。同じ 1 行で **6 件**が落ちる。当時まだ載っていた名前ゲート 1 件と、
+  `tests/test_main.py` のエントリポイント smoke 5 件である。
 - 逆に `vspeech/lib/rvc.py` に `from transformers import HubertModel`、`vspeech/worker/vc.py`
   （遅延ロードされる worker）に `import pydantic_settings` を入れ、両者をインストールした状態で
   フルスイートを回すと、**落ちるのは名前ゲートの 2 件だけ**（2 failed, 1175 passed）。依存表
@@ -105,15 +114,33 @@ torch / torchaudio を import しない）は変わらない。** 変わるの�
 [ADR-0022](0022-hubert-onnx-runtime.md) / [ADR-0066](0066-config-input-file-only.md) を
 supersede すれば、テスト側を触らずに理由が更新される。
 
+**各エントリは ADR を 2 本持つ。** 1 本目は「ランタイムから外すと決めた ADR」、2 本目は常に
+本 ADR である。理由が 2 つに割れているためで、片方だけでは読者を誤らせる。とくに ADR-0022 は
+自身の根拠を「lock に載る勧告」と述べており、それは本 ADR が**バージョン依存**と実測した当の
+ものである。1 本目だけを指すと、読者は**このプロジェクトがもう依拠していない根拠**に着地し、
+「その根拠はもう無いのだから解禁してよい」と読める。2 本目が「他のどのゲートも捉えない」という
+現に効いている理由を運ぶ。
+
 外した 3 件について、代わりに守るゲートと残余リスクを
-`tests/test_forbidden_imports.py` の `FORBIDDEN` の直下にコメントとして残した。残余は 2 つある。
-**手で venv に入れた torch は [ADR-0084](0084-dependency-table-torch-gate.md) が意図的に
+`tests/test_forbidden_imports.py` の `FORBIDDEN` の直下にコメントとして残した。残余は 3 つある。
+
+**(1) 手で venv に入れた torch は [ADR-0084](0084-dependency-table-torch-gate.md) が意図的に
 見ていない**（オフラインの `uv run --with` オーバーレイが正当に torch を持つため）ので、その
-状態の venv でだけ `vspeech/` の `import torch` が緑になる。そして torch への辺は古い版まで
-遡ると切れる — `fairseq<0.12` は 0.11.1 に解決してなお torch を引くが、**`fairseq==0.6.2` は
-12 パッケージで解決し torch を要求しない**ので、明示的にピン止めすれば依存表ガードをすり抜ける
+状態の venv でだけ `vspeech/` の `import torch` が緑になる。
+
+**(2) torch への辺は古い版まで遡ると切れる。** `fairseq<0.12` は 0.11.1 に解決してなお torch を
+引くが、`fairseq==0.6.2` は torch を要求しない（本リポジトリで実測: lock 86 → 92 パッケージ、
+torch なし、ゲート 29 件すべて緑）ので、明示的にピン止めすれば依存表ガードをすり抜ける
 （ただし 2019 年のリリースで HuBERT を含まず、このリポジトリのオフライン変換器が指せる対象では
 ない）。
+
+**(3) 依存表ガードを「もっと硬く」しようとすると、fairseq の保護が消える。** `[tool.uv]` に
+`constraint-dependencies = ["torch<0"]` を置くのは自然な強化に見えるが、そうすると**バージョン
+指定なしの `uv add fairseq` が終了コード 0 で通り、torch を要求しない 0.6.2 へ黙って後退する**
+（本リポジトリで実測: fairseq 0.6.2 / torch なし / 92 パッケージ、ゲート 29 件すべて緑）。
+[ADR-0085](0085-gate-runtime-weight-on-outcome.md) が `constraint-dependencies` を ban として
+却下したのと同じ挙動が、ここでは**既存の保護を無効化する**形で出る。**誰もゲートに触らないまま
+fairseq の守りが消えるので、この強化を入れるなら fairseq を `FORBIDDEN` へ戻すこと。**
 
 この基準は将来 `FORBIDDEN` に名前を足すときの判定でもある。**足す前に、その名前が戻ってきた
 ときに他のゲートが緑のままかを実際に混入させて確かめること。** 緑にならないなら、そのゲートに

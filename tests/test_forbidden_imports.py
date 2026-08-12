@@ -6,12 +6,12 @@ three distributions from the dependency table and from uv.lock's resolved set, a
 different failure: a merely *installed* torch is picked up by ctranslate2 whether or not a
 line of this repo imports it.
 
-**No reason is written out in this file.** Each entry in `FORBIDDEN` carries the path of the
-ADR that holds its reason, every failure message prints that path, and a test below checks
-the path leads to a document that really discusses the name. Reasons used to be copied into
-this docstring, and that is exactly what failed: the world moved on and the gate went on
-enforcing grounds that had stopped describing anything true, for two entries at once
-(measured in ADR-0086).
+**No reason is written out in this file.** Each entry in `FORBIDDEN` carries the paths of the
+ADRs that hold its reason, every failure message prints them, and a test below checks each
+path leads to a document that really discusses the name. Reasons used to be copied into this
+docstring, and that is exactly what failed: the world moved on and the gate went on
+enforcing grounds that no longer held (`fairseq`), or that held only for whichever version a
+resolver happened to land on (`transformers`) -- both measured in ADR-0086.
 
 **A name belongs in `FORBIDDEN` only if its return would leave every other gate green.**
 That is the criterion ADR-0086 applied by injection, name by name:
@@ -41,11 +41,25 @@ VSPEECH_DIR = REPO_ROOT / "vspeech"
 PYPROJECT_TOML = REPO_ROOT / "pyproject.toml"
 UV_LOCK = REPO_ROOT / "uv.lock"
 
-# Module name -> the ADR that holds the reason it is banned. The reason lives there and
-# only there; printing this path is how a red gate leads a reader to it.
+# Module name -> the ADRs that hold the reason it is banned. The reason lives there and only
+# there; printing these paths is how a red gate leads a reader to it.
+#
+# Two each, because the reason has two halves and either alone misleads. The first is the
+# decision that took the module out of the runtime. The second is always ADR-0086, which is
+# where "and no other gate would catch it coming back" lives -- that is what keeps the name
+# on *this list* rather than leaving it to the dependency-table or outcome gates. ADR-0022 in
+# particular states its grounds as advisories in the lock, which ADR-0086 measured to be
+# version-dependent, so a reader sent only there would land on a rationale this project no
+# longer rests on.
 FORBIDDEN = {
-    "transformers": "docs/adr/0022-hubert-onnx-runtime.md",
-    "pydantic_settings": "docs/adr/0066-config-input-file-only.md",
+    "transformers": (
+        "docs/adr/0022-hubert-onnx-runtime.md",
+        "docs/adr/0086-forbidden-name-list-by-what-else-catches-it.md",
+    ),
+    "pydantic_settings": (
+        "docs/adr/0066-config-input-file-only.md",
+        "docs/adr/0086-forbidden-name-list-by-what-else-catches-it.md",
+    ),
 }
 
 # Taken off that list by ADR-0086's inventory. Recorded here rather than only in the ADR so
@@ -59,10 +73,14 @@ FORBIDDEN = {
 #     person to run the suite without it -- loudly, but later than this list would have.
 #   fairseq -- the same table gate, one edge away: `uv add fairseq` in this repo resolves
 #     0.12.2 and drags torch 2.13.0 and torchaudio 2.11.0 into uv.lock, which fires it
-#     (measured). Residual: the edge only goes back so far. `fairseq<0.12` still resolves
-#     onto torch (0.11.1, measured), but an explicit `fairseq==0.6.2` resolves to 12
-#     packages with no torch at all and would slip past -- though that is a 2019 release
-#     with no HuBERT in it, i.e. nothing the offline converter here could be pointed at.
+#     (measured). Two residuals. The edge only goes back so far: `fairseq<0.12` still
+#     resolves onto torch (0.11.1), but `fairseq==0.6.2` takes this repo's lock from 86 to
+#     92 packages with no torch in them and slips past -- though that is a 2019 release with
+#     no HuBERT in it, i.e. nothing the offline converter here could be pointed at. And the
+#     edge is *removable by hardening*: putting `constraint-dependencies = ["torch<0"]` in
+#     `[tool.uv]` makes a plain `uv add fairseq` backtrack silently to that same 0.6.2 and
+#     exit 0, with every gate green (both measured). If that constraint is ever added, put
+#     fairseq back on the list above -- ADR-0086 records why.
 
 # Distribution names, not import names -- what is gated below is what gets installed.
 # faiss-cpu is here although nothing ever imported it: it was in the rvc extra, so it was
@@ -101,11 +119,14 @@ def test_vspeech_never_imports(forbidden: str):
         f"{forbidden} import leaked back into the runtime:\n"
         + "\n".join(offenders)
         + "\nIt was taken out on purpose and no other gate catches it coming back; "
-        + f"the reason is in {FORBIDDEN[forbidden]}."
+        + f"the reasons are in {' and '.join(FORBIDDEN[forbidden])}."
     )
 
 
-@pytest.mark.parametrize(("forbidden", "adr"), sorted(FORBIDDEN.items()))
+@pytest.mark.parametrize(
+    ("forbidden", "adr"),
+    [(name, adr) for name, adrs in sorted(FORBIDDEN.items()) for adr in adrs],
+)
 def test_every_ban_points_at_a_reason_that_exists(forbidden: str, adr: str):
     """A rotted pointer is worse than no pointer at all.
 
@@ -356,5 +377,5 @@ def test_the_entry_point_never_loads_a_forbidden_module():
         "a module the runtime is not allowed to load reached the startup path.\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}\n"
         "Where each of these was decided: "
-        + ", ".join(f"{name} -> {FORBIDDEN[name]}" for name in names)
+        + "; ".join(f"{name} -> {' and '.join(FORBIDDEN[name])}" for name in names)
     )
