@@ -34,8 +34,8 @@ class ConfigProblem:
     detail: str
     # Dotted path of the offending setting (e.g. "rvc.model_file"). Names the bad
     # setting apart from the prose in `detail`. The only reader today is
-    # tests/test_preflight.py (the GUI used it to jump here: ADR-0045, removed by
-    # ADR-0061). Kept because it lets tests assert on the field instead of the prose.
+    # tests/test_preflight.py; kept because it lets tests assert on the field instead
+    # of the prose.
     field: str | None = None
 
     def __str__(self) -> str:

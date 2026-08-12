@@ -423,7 +423,7 @@ class StreamVcRole(Enum):
 class StreamVcConfig(BaseModel):
     enable: bool = False
     # Model settings independent of the utterance path [vc]/[rvc] (ADR-0054). Shared
-    # asset paths are propagated explicitly to each path (ADR-0046). Only the f0
+    # asset paths are written out per section rather than inherited. Only the f0
     # extractor overrides RvcConfig's default (rmvpe) with fcpe: streaming pulls f0 on
     # every block, so the lighter per-inference fcpe fits, and the on-hardware ear
     # check was done in that configuration (ADR-0053). [stream_vc] is disabled by

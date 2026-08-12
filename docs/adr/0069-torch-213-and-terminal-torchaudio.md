@@ -1,6 +1,6 @@
 # 0069. torch を 2.13.0 へ上げ、道連れで torchaudio を終端版 2.11.0 に固定する
 
-- Status: Accepted
+- Status: Superseded by [ADR-0080](0080-torch-free-rvc-runtime.md)
 - Date: 2026-08-09
 - Related: [0028](0028-migrate-to-cuda-13.md), [0036](0036-whisper-resample-via-pyav.md), [0039](0039-whisper-hosts-need-cuda12-toolkit.md)
 

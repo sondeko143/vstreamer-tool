@@ -644,9 +644,7 @@ def collect_problems(config: Config) -> list[ConfigProblem]:
 
     This module is the single authority on "what is required", and the startup
     fail-loud (ADR-0038) is its only reader. Do not duplicate that judgement outside
-    this module -- the GUI once reused it as a pre-launch readiness check precisely so
-    it could call instead of duplicate (ADR-0045; removed along with the GUI in
-    ADR-0061).
+    this module -- call it.
     """
     problems: list[ConfigProblem] = []
     for checker in _CHECKERS:

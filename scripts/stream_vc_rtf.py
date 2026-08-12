@@ -407,9 +407,8 @@ def main() -> None:
 def load_wav_16k(path: Path) -> NDArray[np.float32]:
     """Return the wav as 16kHz mono float32 in [-1,1].
 
-    Read with the stdlib `wave` module rather than `torchaudio.load`. torchaudio 2.11 --
-    the terminal release this project pins (ADR-0069) -- routes `load` through torchcodec,
-    which is not a dependency here, so `torchaudio.load` raises ImportError at runtime.
+    Read with the stdlib `wave` module: the runtime has no audio-loading library
+    (ADR-0080), so a third-party reader would raise ImportError on a real run.
     Only 16-bit PCM wav is handled: that is what both harnesses consume and what
     `write_wav` in the lookahead eval produces. Resampling goes through the in-house
     polyphase FIR (ADR-0082), the same filter the runtime uses.

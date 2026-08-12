@@ -173,7 +173,7 @@ def create_auth_channel(
     # A channel binds to the loop running at construction time (`get_working_loop()` in
     # `grpc/aio/_channel.py`). With no loop running this does not raise: a new,
     # not-running loop is silently bound and every later RPC hangs forever. Today the
-    # only callers are async functions, but preflight (ADR-0045) is synchronous, so
+    # only callers are async functions, but preflight is synchronous, so
     # whoever adds a GCP liveness check there could quietly step into this trap. Make it
     # speak up.
     get_running_loop()

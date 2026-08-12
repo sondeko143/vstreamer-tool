@@ -149,9 +149,9 @@ def test_write_wav_round_trips_samples(tmp_path):
 def test_load_wav_16k_reads_what_write_wav_produced(tmp_path):
     """The eval writes wavs and the RTF harness reads them; pin that they agree.
 
-    This broke in practice: torchaudio 2.11 (the terminal release pinned by ADR-0069)
-    routes `load` through torchcodec, which is not a dependency, so the reader raised
-    ImportError on a real run. Reading is stdlib now, and this keeps it that way.
+    This broke in practice: `torchaudio.load` routed through torchcodec, which was not a
+    dependency, so the reader raised ImportError on a real run. Reading is stdlib now --
+    the runtime has no audio-loading library at all (ADR-0080) -- and this keeps it so.
     """
     from scripts.stream_vc_rtf import load_wav_16k
 

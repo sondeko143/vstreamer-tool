@@ -267,7 +267,7 @@ def test_create_auth_channel_requires_a_running_loop():
 
     A grpc.aio channel binds to the loop at construction time, but with no loop running it
     does not raise: a new, not-running loop is silently bound and every later RPC hangs
-    forever. preflight (ADR-0045) is synchronous, so whoever adds a GCP liveness check
+    forever. preflight is synchronous, so whoever adds a GCP liveness check
     there could quietly step into it.
     """
     from google.auth.credentials import AnonymousCredentials
