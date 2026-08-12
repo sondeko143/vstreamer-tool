@@ -407,12 +407,10 @@ def load_wav_16k(path: Path) -> NDArray[np.float32]:
     the terminal release this project pins (ADR-0069) -- routes `load` through torchcodec,
     which is not a dependency here, so `torchaudio.load` raises ImportError at runtime.
     Only 16-bit PCM wav is handled: that is what both harnesses consume and what
-    `write_wav` in the lookahead eval produces. Resampling still goes through torchaudio's
-    Resample transform, which is a tensor op and unaffected.
+    `write_wav` in the lookahead eval produces. Resampling goes through the in-house
+    polyphase FIR (ADR-0082), the same filter the runtime uses.
     """
     import wave
-
-    import torch
 
     with wave.open(str(path), "rb") as w:
         channels = w.getnchannels()
@@ -426,14 +424,12 @@ def load_wav_16k(path: Path) -> NDArray[np.float32]:
     samples = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
     if channels > 1:
         samples = samples.reshape(-1, channels).mean(axis=1)
-    if rate == 16000:
-        return samples
-    from vspeech.lib.rvc import get_resampler
+    from vspeech.lib.resample import make_resampler
 
-    resampled = get_resampler(rate, 16000, torch.device("cpu"))(
-        torch.from_numpy(samples)
-    )
-    return resampled.numpy().astype(np.float32)
+    resampler = make_resampler(rate, 16000)
+    if resampler is None:
+        return samples
+    return resampler.resample_full(samples)
 
 
 if __name__ == "__main__":

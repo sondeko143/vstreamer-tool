@@ -9,8 +9,11 @@
   import in isolation — though only 32 modules / ~1.6 MB of that was unique to it on the real
   startup path, the rest being shared with grpc and google-cloud. Removed in ADR-0066 by
   taking configuration from the `--config` file only.
+- torchaudio: it pulls in torch, so keeping it is keeping torch's +476.7 MB RSS / +3.17 s
+  of startup. Its only use here was a resampler duplicating the in-house polyphase FIR
+  the device boundaries already run. Removed in ADR-0082.
 
-Both are fine in the offline tools (scripts/convert_hubert.py,
+They are all fine in the offline tools (scripts/convert_hubert.py,
 scripts/export_hubert_onnx.py). What is forbidden is only `vspeech/`, i.e. the runtime.
 """
 
@@ -23,7 +26,7 @@ import pytest
 
 VSPEECH_DIR = Path(__file__).resolve().parents[1] / "vspeech"
 
-FORBIDDEN = ("fairseq", "transformers", "pydantic_settings")
+FORBIDDEN = ("fairseq", "transformers", "pydantic_settings", "torchaudio")
 
 
 def _imported_modules(path: Path):
@@ -67,6 +70,11 @@ def test_vspeech_never_imports(forbidden: str):
         ("fairseq_utils", "fairseq", False),
         ("torch", "fairseq", False),
         ("torch", "transformers", False),
+        ("torchaudio", "torchaudio", True),
+        ("torchaudio.transforms", "torchaudio", True),
+        # `torch` is still allowed in the conversion path; only torchaudio is out.
+        # Without the dot in the submodule test this would false-positive.
+        ("torch", "torchaudio", False),
     ],
 )
 def test_is_forbidden_predicate(module: str, forbidden: str, expected: bool):

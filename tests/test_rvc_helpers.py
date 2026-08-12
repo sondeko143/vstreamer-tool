@@ -34,6 +34,52 @@ def test_pad_input_to_block_already_aligned_no_pad():
     np.testing.assert_allclose(out, np.ones(128, dtype=np.float32) / 32768.0, rtol=1e-6)
 
 
+def test_to_hubert_rate_passes_16k_through_untouched():
+    """16kHz in means no filtering at all -- the same pass-through torchaudio had.
+
+    Filtering a signal that is already at the model's rate would change every
+    utterance captured at 16kHz for no reason.
+    """
+    from vspeech.lib.rvc import _to_hubert_rate
+
+    rng = np.random.default_rng(0)
+    audio = rng.standard_normal(1024).astype(np.float32)
+    out = _to_hubert_rate(audio, 16000)
+    np.testing.assert_array_equal(out, audio)
+
+
+def test_to_hubert_rate_uses_the_shared_polyphase_resampler():
+    """Non-16k input goes through vspeech.lib.resample and nothing else (ADR-0082).
+
+    Asserted bit-exactly against that module rather than with a tolerance: a
+    tolerance would still pass if a second, differently-tuned resampler appeared.
+    """
+    from vspeech.lib.resample import PolyphaseResampler
+    from vspeech.lib.rvc import _to_hubert_rate
+
+    rng = np.random.default_rng(1)
+    audio = rng.standard_normal(48000).astype(np.float32)
+    out = _to_hubert_rate(audio, 48000)
+    expected = PolyphaseResampler(48000, 16000).resample_full(audio)
+    np.testing.assert_array_equal(out, expected)
+    assert out.shape[0] == 16000
+
+
+def test_to_hubert_rate_accepts_the_float64_of_a_padded_block():
+    """_pad_input_to_block returns float64 whenever it prepends zeros.
+
+    The resampler is a float32 pipeline, so the cast has to happen here; passing
+    float64 straight in would raise inside the strided matvec.
+    """
+    from vspeech.lib.rvc import _pad_input_to_block
+    from vspeech.lib.rvc import _to_hubert_rate
+
+    padded = _pad_input_to_block(np.ones(200, dtype=np.int16).tobytes())
+    out = _to_hubert_rate(padded, 48000)
+    assert out.dtype == np.float32
+    assert out.shape[0] == round(256 * 16000 / 48000)
+
+
 def test_quality_padding_zero_is_noop():
     audio = torch.arange(10, dtype=torch.float32).view(1, -1)
     cfg = RvcConfig(quality=RvcQuality.zero)

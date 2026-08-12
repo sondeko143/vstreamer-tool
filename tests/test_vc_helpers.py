@@ -163,3 +163,52 @@ def test_input_as_float32_16k_scales_int16_without_resample():
     res = _input_as_float32_16k(samples.tobytes(), 2, 16000)
     assert res.dtype == np.float32
     np.testing.assert_allclose(res, [0.0, 0.5, -0.5, 32767 / 32768], atol=1e-6)
+
+
+def test_input_as_float32_16k_resamples_through_the_shared_polyphase():
+    """A non-16k input goes through vspeech.lib.resample, not a second resampler.
+
+    The whole VAD preprocessing path must stay importable without the rvc extra
+    (ADR-0082), which is why this asserts against the in-house filter's own output
+    rather than against a tolerance.
+    """
+    from vspeech.lib.resample import PolyphaseResampler
+
+    rng = np.random.default_rng(0)
+    samples = (rng.standard_normal(4800) * 8000).astype(np.int16)
+    res = _input_as_float32_16k(samples.tobytes(), 2, 48000)
+    expected = PolyphaseResampler(48000, 16000).resample_full(
+        samples.astype(np.float32) / 32768.0
+    )
+    assert res.dtype == np.float32
+    assert res.shape[0] == 1600
+    np.testing.assert_array_equal(res, expected)
+
+
+def test_vad_preprocessing_needs_no_torch():
+    """The VAD preprocessing path runs in a venv without the rvc extra (ADR-0082).
+
+    A sys.modules check inside this process would be contaminated by test order, so
+    the check runs in a pristine child process. It covers the resample branch too --
+    that branch used to import torch lazily.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = (
+        "import sys\n"
+        "import numpy as np\n"
+        "from vspeech.worker.vc import _input_as_float32_16k\n"
+        "pcm = np.zeros(4800, dtype=np.int16).tobytes()\n"
+        "assert _input_as_float32_16k(pcm, 2, 48000).shape[0] == 1600\n"
+        "assert _input_as_float32_16k(pcm, 2, 16000).shape[0] == 4800\n"
+        "assert 'torch' not in sys.modules, sorted(sys.modules)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"

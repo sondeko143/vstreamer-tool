@@ -20,6 +20,7 @@ from vspeech.config import VcConfig
 from vspeech.config import get_sample_size
 from vspeech.exceptions import shutdown_worker
 from vspeech.exceptions import worker_startup
+from vspeech.lib.resample import make_resampler
 from vspeech.lib.telemetry import telemetry
 from vspeech.lib.vad import VAD_SAMPLE_RATE
 from vspeech.lib.vad import apply_vad_gate
@@ -143,23 +144,19 @@ def _input_as_float32_16k(
 ) -> NDArray[np.float32]:
     """Decode integer PCM to float32 in [-1, 1] at the VAD rate.
 
-    torch/torchaudio are imported only on the resample path so this stays
-    usable (and testable) in environments without the rvc extra when the
-    input is already 16kHz.
+    The resample goes through the in-house polyphase FIR (ADR-0082), which is numpy
+    only, so the whole function stays usable -- and testable -- in an environment
+    without the rvc extra, at any input rate rather than only at 16kHz.
     """
     scale = float(2 ** (8 * sample_width - 1))
     audio = (
         np.frombuffer(data, dtype=_dtype_for_width(sample_width)).astype(np.float32)
         / scale
     )
-    if rate == VAD_SAMPLE_RATE:
+    resampler = make_resampler(rate, VAD_SAMPLE_RATE)
+    if resampler is None:
         return audio
-    import torch
-
-    from vspeech.lib.rvc import get_resampler
-
-    resampler = get_resampler(rate, VAD_SAMPLE_RATE, torch.device("cpu"))
-    return resampler(torch.from_numpy(audio)).numpy()
+    return resampler.resample_full(audio)
 
 
 async def rvc_worker(

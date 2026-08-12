@@ -1,14 +1,12 @@
 import json
 import time
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from typing import cast
 
 import numpy as np
 import torch
-import torchaudio.transforms as T
 from numpy.typing import NDArray
 from onnxruntime import InferenceSession
 from torch.nn import functional
@@ -17,6 +15,7 @@ from vspeech.config import RvcConfig
 from vspeech.lib.cuda_util import Device
 from vspeech.lib.onnx_session import create_session
 from vspeech.lib.pitch_extract import pitch_extract
+from vspeech.lib.resample import make_resampler
 from vspeech.logger import logger
 
 # RVC runs HuBERT and pitch extraction on a fixed 16kHz mono signal; the input
@@ -115,11 +114,6 @@ def _torch_device(device: Device) -> torch.device:
     if device.type == "cuda":
         return torch.device("cuda", device.index if device.index is not None else 0)
     return torch.device("cpu")
-
-
-@lru_cache(maxsize=4)
-def get_resampler(orig_freq: int, new_freq: int, device: torch.device):
-    return T.Resample(orig_freq, new_freq, rolloff=0.99).to(device)
 
 
 _ORT_ELEMENT_TYPES: dict[torch.dtype, type] = {
@@ -329,6 +323,27 @@ def _pad_input_to_block(voice_frames: bytes) -> np.ndarray:
     return audio
 
 
+def _to_hubert_rate(audio: NDArray[np.floating], src_rate: int) -> NDArray[np.float32]:
+    """Bring one utterance to HUBERT_SAMPLE_RATE through the in-house polyphase FIR.
+
+    The same filter the device boundaries use (ADR-0073), reused here so the repo holds
+    one resampler instead of a second, weaker one from torchaudio (ADR-0082).
+
+    `resample_full`, not `process`: an utterance is a self-contained buffer, so the
+    filter tail is flushed and the group delay removed -- `process` would leave the last
+    few milliseconds inside the filter. `make_resampler` returns None when the rates
+    already match, and the buffer then passes through untouched, as it did before.
+
+    Takes any float width because `_pad_input_to_block` returns float64 whenever it
+    prepends zeros; the resampler is a float32 pipeline, so the cast happens here.
+    """
+    audio32 = np.ascontiguousarray(audio, dtype=np.float32)
+    resampler = make_resampler(src_rate, HUBERT_SAMPLE_RATE)
+    if resampler is None:
+        return audio32
+    return resampler.resample_full(audio32)
+
+
 def _quality_padding(
     audio: torch.Tensor,
     rvc_config: RvcConfig,
@@ -441,11 +456,12 @@ def change_voice(
 ) -> NDArray[np.int16]:
     vc_start_time = time.time()
     torch_dev = _torch_device(device)
-    audio_np = _pad_input_to_block(voice_frames)
-    audio = torch.from_numpy(audio_np).to(device=torch_dev, dtype=torch.float32)
-
-    resampler = get_resampler(voice_sample_rate, HUBERT_SAMPLE_RATE, torch_dev)
-    audio = resampler(audio).unsqueeze(0)
+    audio_np = _to_hubert_rate(_pad_input_to_block(voice_frames), voice_sample_rate)
+    audio = (
+        torch.from_numpy(audio_np)
+        .to(device=torch_dev, dtype=torch.float32)
+        .unsqueeze(0)
+    )
 
     audio_pad, t_pad_tgt = _quality_padding(audio, rvc_config, target_sample_rate)
     sid = torch.tensor(0, device=torch_dev).unsqueeze(0).long()
