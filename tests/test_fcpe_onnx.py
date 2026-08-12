@@ -3,7 +3,10 @@
 Skipped on a normal run, where the asset (fcpe.onnx) is absent. To run it:
 
     uv run poe export-fcpe-onnx --output ./fcpe.onnx
-    VSPEECH_FCPE_ONNX=./fcpe.onnx uv run --extra rvc --with torchfcpe pytest tests/test_fcpe_onnx.py -v
+    VSPEECH_FCPE_ONNX=./fcpe.onnx uv run --all-extras --with torch --with torchfcpe pytest tests/test_fcpe_onnx.py -v
+
+torch comes from the overlay: it left the dependency table with ADR-0080, and `--extra rvc`
+on its own would also deselect the other extras.
 
 The reference compared against is torchfcpe's forward (= __call__, the thing that was
 exported). Note that model.infer(...) adds post-processing such as the unvoiced mask from
@@ -27,7 +30,7 @@ _ASSET = os.environ.get("VSPEECH_FCPE_ONNX")
     reason="fcpe.onnx が無い (uv run poe export-fcpe-onnx で生成し VSPEECH_FCPE_ONNX で指す)",
 )
 def test_fcpe_onnx_matches_torch():
-    import torch
+    import torch  # ty: ignore[unresolved-import]  # overlay only (--with torch)
     import torchfcpe  # ty: ignore[unresolved-import]  # overlay only (--with torchfcpe)
 
     from vspeech.lib.onnx_session import create_session
@@ -62,7 +65,7 @@ def test_fcpe_onnx_generalizes_over_length_and_zeros_unvoiced():
     """The trace is fixed at N=16000, but this checks that it matches torch at several
     lengths (generalizes over N) and fabricates no pitch over unvoiced spans (every frame
     equals torch)."""
-    import torch
+    import torch  # ty: ignore[unresolved-import]  # overlay only (--with torch)
     import torchfcpe  # ty: ignore[unresolved-import]  # overlay only (--with torchfcpe)
 
     from vspeech.lib.onnx_session import create_session

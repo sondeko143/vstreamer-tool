@@ -116,7 +116,8 @@ def seed_runtime(seed: int, mode: str) -> None:
     ort.set_seed(seed)
     if mode == "both":
         try:
-            import torch
+            # Not a project dependency since ADR-0080 -- the except below is the contract.
+            import torch  # ty: ignore[unresolved-import]
         except ModuleNotFoundError as e:
             raise SystemExit(
                 "--seed-mode both needs torch, which is not installed in this "
