@@ -1,32 +1,29 @@
-"""A structural gate that keeps heavy ML frameworks out of the runtime for good.
+"""Two structural gates on what the runtime is allowed to re-acquire.
 
-- fairseq: the sole obstacle to raising requires-python (upstream is frozen at 0.12.2 and
-  the repository was archived on 2026-03-20). Removed in spec 1.
-- transformers: merely appearing in uv.lock brings three advisories into `uv audit`.
-  Removed in spec 2 by moving the content encoder to ONNX.
-- pydantic_settings: its provider barrel imports every backend (AWS / Azure / GCP Secret
-  Manager, CLI, dotenv, YAML) unconditionally, which costs +13.7 MB RSS / +176 modules to
-  import in isolation — though only 32 modules / ~1.6 MB of that was unique to it on the real
-  startup path, the rest being shared with grpc and google-cloud. Removed in ADR-0066 by
-  taking configuration from the `--config` file only.
-- torchaudio: it pulls in torch, so keeping it is keeping torch's +476.7 MB RSS / +3.17 s
-  of startup. Its only use here was a resampler duplicating the in-house polyphase FIR
-  the device boundaries already run. Removed in ADR-0082.
-- torch: the RVC conversion path (HuBERT features, f0, the RVC synthesizer's `infer`)
-  now binds `OrtValue`s directly and runs on numpy + onnxruntime-native, with no
-  framework tensor anywhere on the path. Removed in ADR-0081.
+The first half bans module names from `vspeech/`. The offline tools in `scripts/` may
+import whatever they need -- what is gated is the runtime. The second half (ADR-0084) bans
+three distributions from the dependency table and from uv.lock's resolved set, an entirely
+different failure: a merely *installed* torch is picked up by ctranslate2 whether or not a
+line of this repo imports it.
 
-They are all fine in the offline tools (scripts/convert_hubert.py,
-scripts/export_hubert_onnx.py, scripts/export_fcpe_onnx.py). What is forbidden there is
-only `vspeech/`, i.e. the runtime.
+**No reason is written out in this file.** Each entry in `FORBIDDEN` carries the path of the
+ADR that holds its reason, every failure message prints that path, and a test below checks
+the path leads to a document that really discusses the name. Reasons used to be copied into
+this docstring, and that is exactly what failed: the world moved on and the gate went on
+enforcing grounds that had stopped describing anything true, for two entries at once
+(measured in ADR-0086).
 
-For torch the import gate is not sufficient, which is why this file also gates the
-**dependency table** (the second half, below -- ADR-0084). `ctranslate2` is a core
-dependency and does `try: import torch`, so a torch that is merely *installed* is loaded
-into every pipeline whether or not any line of this repo imports it -- +476.7 MB RSS and
-+3.17 s of startup, i.e. the entire benefit of ADR-0080. One `uv add`, or one dependency
-that grows a transitive edge to torch, would restore that with every import gate still
-green.
+**A name belongs in `FORBIDDEN` only if its return would leave every other gate green.**
+That is the criterion ADR-0086 applied by injection, name by name:
+
+- If the package cannot be installed without ADR-0084's table gate below firing, then its
+  import into `vspeech/` cannot be made to work either, and a broken import announces
+  itself -- pytest aborts collection, or the entry-point smoke tests in `tests/test_main.py`
+  fail. Those names came off the list; there was nothing left for them to catch.
+- If the package installs with every table still green, its import into a lazily-loaded
+  module is silent. The outcome gate in `tests/test_runtime_footprint.py` cannot see it
+  either, since that measures only what `import vspeech.main` loads. Those names stayed:
+  this list is the only thing standing between the runtime and their return.
 """
 
 import ast
@@ -44,7 +41,28 @@ VSPEECH_DIR = REPO_ROOT / "vspeech"
 PYPROJECT_TOML = REPO_ROOT / "pyproject.toml"
 UV_LOCK = REPO_ROOT / "uv.lock"
 
-FORBIDDEN = ("fairseq", "transformers", "pydantic_settings", "torch", "torchaudio")
+# Module name -> the ADR that holds the reason it is banned. The reason lives there and
+# only there; printing this path is how a red gate leads a reader to it.
+FORBIDDEN = {
+    "transformers": "docs/adr/0022-hubert-onnx-runtime.md",
+    "pydantic_settings": "docs/adr/0066-config-input-file-only.md",
+}
+
+# Taken off that list by ADR-0086's inventory. Recorded here rather than only in the ADR so
+# that whoever next reaches for this list can see what guards these names now, and redo the
+# judgement instead of guessing at it:
+#   torch, torchaudio -- ADR-0084's table gate below, both halves proved by injecting each
+#     into pyproject.toml and into uv.lock. Residual it deliberately does not cover: a torch
+#     a developer installed by hand is not policed at all (ADR-0084 rejected reading the
+#     installed environment, because the offline `uv run --with` overlay legitimately has
+#     one). In such a venv an `import torch` under `vspeech/` is caught only by the next
+#     person to run the suite without it -- loudly, but later than this list would have.
+#   fairseq -- the same table gate, one edge away: `uv add fairseq` in this repo resolves
+#     0.12.2 and drags torch 2.13.0 and torchaudio 2.11.0 into uv.lock, which fires it
+#     (measured). Residual: the edge only goes back so far. `fairseq<0.12` still resolves
+#     onto torch (0.11.1, measured), but an explicit `fairseq==0.6.2` resolves to 12
+#     packages with no torch at all and would slip past -- though that is a 2019 release
+#     with no HuBERT in it, i.e. nothing the offline converter here could be pointed at.
 
 # Distribution names, not import names -- what is gated below is what gets installed.
 # faiss-cpu is here although nothing ever imported it: it was in the rvc extra, so it was
@@ -80,7 +98,32 @@ def test_vspeech_never_imports(forbidden: str):
             if _is_forbidden(module, forbidden):
                 offenders.append(f"{py_file.relative_to(VSPEECH_DIR.parent)}: {module}")
     assert not offenders, (
-        f"{forbidden} import leaked back into the runtime:\n" + "\n".join(offenders)
+        f"{forbidden} import leaked back into the runtime:\n"
+        + "\n".join(offenders)
+        + "\nIt was taken out on purpose and no other gate catches it coming back; "
+        + f"the reason is in {FORBIDDEN[forbidden]}."
+    )
+
+
+@pytest.mark.parametrize(("forbidden", "adr"), sorted(FORBIDDEN.items()))
+def test_every_ban_points_at_a_reason_that_exists(forbidden: str, adr: str):
+    """A rotted pointer is worse than no pointer at all.
+
+    Since nothing here says *why* a name is banned, a red gate is worth exactly as much as
+    this path. Requiring the document to mention the name as well catches a pointer aimed at
+    the wrong ADR, which a plain file-exists check would wave straight through.
+    """
+    document = REPO_ROOT / adr
+    assert document.is_file(), (
+        f"the ban on {forbidden} points at {adr}, which does not exist. The reason has to "
+        "stay reachable from the failure message; an ADR is never deleted, so find where it "
+        "moved (or which ADR superseded it) rather than dropping the pointer."
+    )
+    spellings = {forbidden, forbidden.replace("_", "-")}
+    text = document.read_text(encoding="utf-8")
+    assert any(spelling in text for spelling in spellings), (
+        f"the ban on {forbidden} points at {adr}, which never mentions it. A reader who "
+        "follows that path lands on the wrong decision."
     )
 
 
@@ -95,9 +138,10 @@ def test_vspeech_never_imports(forbidden: str):
         ("torch", "transformers", False),
         ("torchaudio", "torchaudio", True),
         ("torchaudio.transforms", "torchaudio", True),
-        # `torch` and `torchaudio` are both forbidden now, but as two separate
-        # entries in FORBIDDEN, and neither is a submodule of the other -- pin the
-        # dot boundary between the two similarly-named packages in both directions.
+        # Neither `torch` nor `torchaudio` is in FORBIDDEN any more (ADR-0086), and they
+        # stay here as data because they are the sharpest prefix collision available: one
+        # name is a prefix of the other without being its parent package. Pin the dot
+        # boundary between them in both directions.
         ("torch", "torchaudio", False),
         ("torchaudio", "torch", False),
         ("torch", "torch", True),
@@ -285,22 +329,32 @@ def test_the_declaration_gate_does_not_false_positive_on_a_similar_name():
     assert "torch" not in declared
 
 
-def test_the_entry_point_never_loads_pydantic_settings():
-    """Nothing on the startup path drags the env-config machinery back in (ADR-0066).
+def test_the_entry_point_never_loads_a_forbidden_module():
+    """Nothing on the startup path drags one back in through a dependency.
 
-    The AST gate above only sees `vspeech/`; this catches a transitive import
-    through a dependency. A sys.modules check inside the test process would be
+    The AST gate above reads `vspeech/` and nothing else, so an import arriving through a
+    dependency is invisible to it. `tests/test_runtime_footprint.py` would notice this one
+    too, but it reports whatever it finds as an unrecognised newcomer and offers to
+    re-record its baseline; for a module that was taken out on purpose, the answer is the
+    ADR, not a new baseline. A sys.modules check inside the test process would be
     contaminated by test order, so it runs in a pristine child process.
     """
+    names = sorted(FORBIDDEN)
     code = (
         "import sys\n"
         "import vspeech.main\n"
-        "assert 'pydantic_settings' not in sys.modules, sorted(sys.modules)\n"
+        f"leaked = [name for name in {names!r} if name in sys.modules]\n"
+        "assert not leaked, leaked\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", code],
-        cwd=Path(__file__).resolve().parents[1],
+        cwd=REPO_ROOT,
         capture_output=True,
         text=True,
     )
-    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert result.returncode == 0, (
+        "a module the runtime is not allowed to load reached the startup path.\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}\n"
+        "Where each of these was decided: "
+        + ", ".join(f"{name} -> {FORBIDDEN[name]}" for name in names)
+    )

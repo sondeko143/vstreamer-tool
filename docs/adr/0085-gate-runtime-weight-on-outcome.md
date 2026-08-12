@@ -13,10 +13,10 @@
 
 第二に、**根拠が消滅しても執行を続ける**。実測で実例が出た。
 
-- `transformers` の記録された根拠は「uv.lock に載るだけで `uv audit` に 3 件の勧告が入る」だが、3.14 のスクラッチプロジェクトに transformers 5.15.0 を入れて `uv audit` を回すと **「Found no known vulnerabilities」終了コード 0**。根拠は現時点で成立していない。
 - `fairseq` の記録された根拠は「requires-python を上げる際の障害」だが、**3.14 環境でも 0.12.2 が解決される**。追加不能ではない。ただし torch 2.13.0 / torchaudio 2.11.0 を道連れにするので、torch を締め出せば結果的に入らない。
+- `transformers` の記録された根拠は「uv.lock に載るだけで `uv audit` に 3 件の勧告が入る」だが、これは**どのバージョンに解決するかで反転する**。3.14 のスクラッチプロジェクトに transformers 5.15.0 を入れて `uv audit` を回すと「Found no known vulnerabilities」終了コード 0 で、本リポジトリで `uv add transformers` を打つと 4.57.6 に解決して**勧告 7 件・終了コード 1** になる。禁止の根拠としては安定していない。
 
-つまり名前ゲートは、誰も気づかないまま「もう理由のない規則」を執行していた。
+つまり名前ゲートは、誰も気づかないまま「もう理由の成立しない規則」を執行していた。個々の名前の棚卸しは [ADR-0086](0086-forbidden-name-list-by-what-else-catches-it.md) が実測で引き受ける。
 
 ## Decision
 

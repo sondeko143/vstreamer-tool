@@ -6,8 +6,8 @@
 
 さらに、名前ゲートは**根拠が消滅しても執行を続ける**。実測でその実例が出た。
 
-- `transformers` を除外する理由として記録されているのは「uv.lock に載るだけで `uv audit` に 3 件の勧告が入る」だが、Python 3.14 のスクラッチプロジェクトに transformers 5.15.0 を入れて `uv audit` を回すと **「Found no known vulnerabilities」で終了コード 0**。この根拠は現時点で成立していない。
 - `fairseq` は「requires-python を上げる際の障害」として記録されているが、**3.14 環境でも 0.12.2 が解決される**（28 パッケージ・18 インストール予定）。追加不能ではない。ただし torch 2.13.0 と torchaudio 2.11.0 を道連れにする。
+- `transformers` を除外する理由として記録されているのは「uv.lock に載るだけで `uv audit` に 3 件の勧告が入る」だが、これは**解決先のバージョンで反転する**。Python 3.14 のスクラッチプロジェクトの transformers 5.15.0 では「Found no known vulnerabilities」終了コード 0、本リポジトリで `uv add transformers` が選ぶ 4.57.6 では勧告 7 件・終了コード 1 になる。
 
 理由は docstring の散文に埋まっており、**いつその根拠が切れるか**はどこにも書かれていない。だから切れても誰も気づかない。
 
