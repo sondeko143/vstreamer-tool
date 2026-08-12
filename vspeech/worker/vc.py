@@ -96,14 +96,16 @@ def apply_input_envelope(
     """Modulate the RVC output by the input voice's relative loudness envelope.
 
     The input PCM is reduced to a per-frame RMS envelope normalized by its own
-    mean, so only the *relative* shape survives (mean 1, mic-gain independent).
+    mean, so only the *relative* shape survives (mean 1, mic-gain independent;
+    ADR-0017).
     That shape is interpolated to sample resolution and multiplied onto the RVC
     output as a clamped gain. It deliberately does NOT divide by the output's own
     envelope: that saturates the gain where the output is quiet (pumping the
     noise floor into "silent" sections) and inverse-weights by loudness (a
     compressor when max_gain > 1).
 
-    The RVC output is already full-level int16, so the gain is a downward *duck*:
+    The RVC output is already full-level int16, so the gain is a downward *duck*
+    (ADR-0018):
     max_gain <= 1 (the default) can only attenuate, which is clip-free
     (|out * gain| <= |out|); max_gain > 1 boosts loud parts past int16 range and
     hard-clips (audible distortion), so use it only if the output has headroom.

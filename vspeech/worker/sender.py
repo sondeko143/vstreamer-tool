@@ -41,7 +41,8 @@ from vspeech.shared_context import WorkerOutput
 # cached previous connection error (e.g. WSA 10060 Connection timed out). Channels are
 # reused permanently (ADR-0004), so no new channel comes along to reset the backoff. The
 # same error therefore keeps appearing for tens of seconds, up to two minutes, even after
-# the receiver is up. These bound that and speed up recovery from a cold start.
+# the receiver is up. These bound that and speed up recovery from a cold start
+# (ADR-0035).
 #  - initial: the wait before the first retry
 #  - min:     the lower bound on a single connection attempt's deadline (the ceiling on
 #             how long each attempt sticks when SYN is blackholed = 10060)

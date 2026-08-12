@@ -51,7 +51,7 @@
 | [0031](0031-audio-pyaudio-to-sounddevice.md) | audio extra を PyAudio から sounddevice へ移行する | Accepted | 2026-07-12 |
 | [0032](0032-gui-multi-pipeline-rewrite.md) | GUI を複数 pipeline マネージャへ全面書き直しする | Superseded by [0060](0060-gui-remote-control-panel.md) | 2026-07-12 |
 | [0033](0033-gui-manifest-versioning.md) | GUI の version/migration を専用マニフェストに隔離し config は純粋 Config 形状を保つ | Superseded by [0060](0060-gui-remote-control-panel.md) | 2026-07-12 |
-| [0034](0034-gui-corrupt-file-resilience.md) | 壊れた GUI 入力に対し対象別復旧＋非破壊退避で必ず起動する | Accepted | 2026-07-12 |
+| [0034](0034-gui-corrupt-file-resilience.md) | 壊れた GUI 入力に対し対象別復旧＋非破壊退避で必ず起動する | Superseded by [0061](0061-remote-control-as-cli.md) | 2026-07-12 |
 | [0035](0035-bound-sender-reconnect-backoff.md) | sender の永続チャネルの再接続バックオフを有界化する（0004 を refine） | Accepted | 2026-07-15 |
 | [0036](0036-whisper-resample-via-pyav.md) | whisper のリサンプルに PyAV(libswresample) を使い torchaudio/scipy を却下する | Accepted | 2026-07-16 |
 | [0037](0037-transcription-vad-skip-gate.md) | Silero VAD スキップゲートを transcription パスへ拡張する（独立ワーカーを却下、0019 を拡張） | Accepted (extends 0019) | 2026-07-16 |

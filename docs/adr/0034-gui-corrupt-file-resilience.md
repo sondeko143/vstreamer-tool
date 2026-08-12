@@ -1,6 +1,6 @@
 # 0034. 壊れた GUI 入力に対し対象別復旧＋非破壊退避で必ず起動する
 
-- Status: Accepted
+- Status: Superseded by [ADR-0061](0061-remote-control-as-cli.md)
 - Date: 2026-07-12
 - Related: spec [2026-07-12-gui-multi-pipeline-rewrite-design.md](../superpowers/specs/2026-07-12-gui-multi-pipeline-rewrite-design.md); [ADR-0032](0032-gui-multi-pipeline-rewrite.md)
 

@@ -20,7 +20,7 @@ from websockets.frames import Close
 
 RPC_VERSION = 1
 
-# The value put in Identify's eventSubscriptions (EventSubscription::None).
+# The value put in Identify's eventSubscriptions: EventSubscription::None (ADR-0047).
 #
 # This module uses no events at all (see the docstring at the top), but that only holds
 # once OBS is told we are not subscribing: obs-websocket treats an omitted key as

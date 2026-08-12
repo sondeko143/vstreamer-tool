@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 # Silero VAD v5/v6 share this contract: 16kHz mono, 512-sample (32ms) windows,
 # with a 64-sample context carried between windows and a (2, 1, 128) recurrent
-# state. This module pins the v6.2.1 model.
+# state. This module pins the v6.2.1 model (ADR-0020).
 VAD_SAMPLE_RATE = 16000
 VAD_WINDOW_SAMPLES = 512
 _CONTEXT_SAMPLES = 64

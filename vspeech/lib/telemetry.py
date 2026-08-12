@@ -1,3 +1,10 @@
+"""In-process latency aggregation and the per-utterance JSONL sink.
+
+One record per stage, appended opt-in and best-effort: a sink that cannot be opened or
+written is disabled instead of raising (ADR-0007). Why the consumption side aggregates
+in this process rather than shipping every sample somewhere: ADR-0005.
+"""
+
 import json
 import os
 from contextlib import contextmanager

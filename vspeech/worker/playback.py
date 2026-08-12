@@ -60,6 +60,7 @@ def record_playback_e2e(
     e2e = now - speech.origin_ts
     if e2e < 0.0 or e2e > cfg.skew_hard_ceiling_sec:
         # Negative (clock went backwards) or implausibly large: genuine skew.
+        # Dropped from the record, never corrected -- why not sync a clock: ADR-0006.
         logger.warning(
             "clock skew suspected: e2e=%.3fs trace=%s (NTP同期を確認)",
             e2e,
