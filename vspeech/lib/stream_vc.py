@@ -8,9 +8,9 @@ equal-power with SOLA off), and SOLA aligns the phase before mixing
 (`_emit_with_crossfade`).
 
 The pure helpers (next_context / crossfade_weights / overlap_add / sola_offset) are
-written in terms of `len(seq)` so they work on numpy arrays and torch tensors alike
-(sola_offset alone is numpy-only), and this module imports fine on a CPU machine with
-neither torch nor the rvc extra (the heavy imports happen inside StreamingVc's methods).
+written in terms of `len(seq)` so they stay agnostic about the sequence type, and this
+module imports fine on a CPU machine without the rvc extra (the heavy imports happen
+inside StreamingVc's methods).
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     # (next_context / crossfade_weights / overlap_add)
     # don't need these, so keeping the imports under TYPE_CHECKING (rather
     # than module-level) still lets this module import on a CPU machine
-    # without torch/onnxruntime/the rvc extra.
+    # without onnxruntime/the rvc extra.
     import numpy as np
     from numpy.typing import NDArray
     from onnxruntime import InferenceSession
@@ -169,8 +169,8 @@ class StreamingVc:
     block's worth of output and updates the context. Fixing block_len / context_len fixes
     the input shape, so a single warmup suffices (no re-autotune afterwards).
 
-    The heavy dependencies (torch, rvc internals) are imported here for the first time.
-    `rvc_config`'s f0_extractor_type must match the `f0_session` that is passed in.
+    The heavy dependencies (numpy, the rvc internals) are imported here for the first
+    time. `rvc_config`'s f0_extractor_type must match the `f0_session` that is passed in.
     """
 
     def __init__(
@@ -190,15 +190,15 @@ class StreamingVc:
         sola_search_len: int = 0,
         lookahead_len: int = 0,
     ) -> None:
-        import torch
+        import numpy as np
 
         from vspeech.lib.rvc import _is_model_half
-        from vspeech.lib.rvc import _torch_device
 
         self.rvc_config = rvc_config
-        # Converted once, here: everything below this line is torch, everything above it
-        # (device resolution, session creation) is torch-free (ADR-0078).
-        self.device = _torch_device(device)
+        # The device value travels unchanged all the way to onnxruntime: since ADR-0081
+        # the conversion path binds `OrtValue`s instead of framework tensors, so there is
+        # no framework device object to convert to.
+        self.device = device
         self.hubert_model = hubert_model
         self.session = session
         self.f0_session = f0_session
@@ -209,10 +209,8 @@ class StreamingVc:
         self.block_len = block_len
         self.context_len = context_len
         self._is_half = _is_model_half(session)
-        self._sid = torch.tensor(0, device=self.device).unsqueeze(0).long()
-        self._context = torch.zeros(
-            context_len, device=self.device, dtype=torch.float32
-        )
+        self._sid = np.zeros(1, dtype=np.int64)
+        self._context = np.zeros(context_len, dtype=np.float32)
 
         self.crossfade_len = crossfade_len
         # SOLA search half-width (in 16kHz input samples). 0 disables SOLA = the previous
@@ -266,11 +264,9 @@ class StreamingVc:
         self._reset_context()
 
     def _reset_context(self) -> None:
-        import torch
+        import numpy as np
 
-        self._context = torch.zeros(
-            self.context_len, device=self.device, dtype=torch.float32
-        )
+        self._context = np.zeros(self.context_len, dtype=np.float32)
         # The crossfade tail is rolling state too. Reset it so a stale tail left over from
         # warmup cannot leak into the seam of the first real block (the next emit
         # re-initializes it to zeros -> fade in from silence).
@@ -280,7 +276,6 @@ class StreamingVc:
     def process_block(self, block: NDArray[np.float32]) -> NDArray[np.int16]:
         """Convert block_len samples of 16kHz float32 [-1,1] and return an int16 block."""
         import numpy as np
-        import torch
 
         from vspeech.lib.rvc import _align_pitch_to_feats
         from vspeech.lib.rvc import _extract_hubert_feats
@@ -288,11 +283,9 @@ class StreamingVc:
         from vspeech.lib.rvc import _to_int16
         from vspeech.lib.rvc import infer
 
-        block_t = torch.from_numpy(np.ascontiguousarray(block)).to(
-            device=self.device, dtype=torch.float32
-        )
+        block_f = np.ascontiguousarray(block, dtype=np.float32)
         # fixed length L = context_len + block_len
-        seq = torch.cat([self._context, block_t])
+        seq = np.concatenate([self._context, block_f])
 
         feats = _extract_hubert_feats(
             hubert_model=self.hubert_model,
@@ -310,29 +303,29 @@ class StreamingVc:
             rvc_config=self.rvc_config,
             f0_enabled=self.f0_enabled,
             p_len=p_len,
-            device=self.device,
             f0_session=self.f0_session,
         )
 
         feats_len = feats.shape[1]
         pitch, pitchf = _align_pitch_to_feats(pitch, pitchf, feats_len)
-        p_len_tensor = torch.tensor([feats_len], device=self.device).long()
+        p_len_array = np.array([feats_len], dtype=np.int64)
 
-        with torch.inference_mode():
-            audio_i16 = _to_int16(
-                infer(
-                    is_half=self._is_half,
-                    session=self.session,
-                    feats=feats,
-                    pitch_length=p_len_tensor,
-                    pitch=pitch,
-                    pitchf=pitchf,
-                    sid=self._sid,
-                )[0]
-            )
+        out = _to_int16(
+            infer(
+                is_half=self._is_half,
+                session=self.session,
+                device=self.device,
+                feats=feats,
+                pitch_length=p_len_array,
+                pitch=pitch,
+                pitchf=pitchf,
+                sid=self._sid,
+            )[0]
+        )
 
-        out = audio_i16.detach().cpu().numpy()
-        self._context = next_context(seq, self.context_len).detach()
+        # A view into `seq`, which is rebuilt from scratch every tick and never mutated,
+        # so no copy is needed to keep the context stable.
+        self._context = next_context(seq, self.context_len)
         if self.crossfade_len > 0:
             return self._emit_with_crossfade(out)
         return self._emit_no_crossfade(out)

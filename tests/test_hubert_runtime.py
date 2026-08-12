@@ -10,7 +10,6 @@ import json
 import numpy as np
 import onnx
 import pytest
-import torch
 from onnx import TensorProto
 from onnx import helper
 
@@ -67,11 +66,9 @@ def asset_dir(tmp_path):
     return _write_asset(tmp_path)
 
 
-def _wav() -> torch.Tensor:
+def _wav() -> np.ndarray:
     t = np.arange(64, dtype=np.float32) / 16000.0
-    return torch.from_numpy(np.sin(2 * np.pi * 220.0 * t).astype(np.float32)).unsqueeze(
-        0
-    )
+    return np.sin(2 * np.pi * 220.0 * t).astype(np.float32).reshape(1, -1)
 
 
 def test_load_hubert_model_opens_the_fp32_graph(asset_dir):
@@ -127,10 +124,10 @@ def test_extract_features_picks_the_projected_output(asset_dir):
 
     model = load_hubert_model(asset_dir, Device("cpu"), is_half=False)
     out = extract_features(
-        model, _wav(), torch.device("cpu"), emb_output_layer=9, use_final_proj=True
+        model, _wav(), Device("cpu"), emb_output_layer=9, use_final_proj=True
     )
     assert out.shape == (1, 64, L9_DIM)
-    assert out.dtype == torch.float32
+    assert out.dtype == np.float32
 
 
 def test_extract_features_picks_the_raw_output(asset_dir):
@@ -139,7 +136,7 @@ def test_extract_features_picks_the_raw_output(asset_dir):
 
     model = load_hubert_model(asset_dir, Device("cpu"), is_half=False)
     out = extract_features(
-        model, _wav(), torch.device("cpu"), emb_output_layer=12, use_final_proj=False
+        model, _wav(), Device("cpu"), emb_output_layer=12, use_final_proj=False
     )
     assert out.shape == (1, 64, L12_DIM)
 
@@ -152,10 +149,32 @@ def test_extract_features_returns_the_graph_values(asset_dir):
     model = load_hubert_model(asset_dir, Device("cpu"), is_half=False)
     wav = _wav()
     out = extract_features(
-        model, wav, torch.device("cpu"), emb_output_layer=9, use_final_proj=True
+        model, wav, Device("cpu"), emb_output_layer=9, use_final_proj=True
     )
-    expected = wav.unsqueeze(-1).expand(1, 64, L9_DIM)
-    assert torch.allclose(out, expected, atol=1e-6)
+    expected = np.repeat(wav[..., np.newaxis], L9_DIM, axis=-1)
+    np.testing.assert_allclose(out, expected, atol=1e-6)
+
+
+def test_extract_hubert_feats_duplicates_every_frame(asset_dir):
+    """The 2x time upsample repeats each frame, and repeats it in place.
+
+    It used to be `functional.interpolate(..., scale_factor=2)` in nearest mode, which is
+    elementwise duplication by definition; `np.repeat(..., 2, axis=1)` replaced it
+    (ADR-0081). Interleaving (`np.tile`) would produce the same shape and the same
+    multiset of frames while destroying the time alignment against pitch/pitchf, so pin
+    the interleaving, not just the length.
+    """
+    from vspeech.lib.rvc import _extract_hubert_feats
+    from vspeech.lib.rvc import extract_features
+    from vspeech.lib.rvc import load_hubert_model
+
+    model = load_hubert_model(asset_dir, Device("cpu"), is_half=False)
+    audio = _wav().reshape(-1)
+    out = _extract_hubert_feats(model, audio, Device("cpu"), 9, True)
+    assert out.shape == (1, 128, L9_DIM)
+    np.testing.assert_array_equal(out[0, 0::2], out[0, 1::2])
+    base = extract_features(model, audio.reshape(1, -1), Device("cpu"), 9, True)
+    np.testing.assert_array_equal(out[0, 0::2], base[0])
 
 
 def test_extract_features_rejects_an_unsupported_combination(asset_dir):
@@ -167,7 +186,7 @@ def test_extract_features_rejects_an_unsupported_combination(asset_dir):
     model = load_hubert_model(asset_dir, Device("cpu"), is_half=False)
     with pytest.raises(RuntimeError) as excinfo:
         extract_features(
-            model, _wav(), torch.device("cpu"), emb_output_layer=9, use_final_proj=False
+            model, _wav(), Device("cpu"), emb_output_layer=9, use_final_proj=False
         )
     message = str(excinfo.value)
     assert "(9, False)" in message

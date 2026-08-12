@@ -1,9 +1,7 @@
 from typing import cast
 
 import numpy as np
-import torch
 from onnxruntime import InferenceSession
-from torch.nn import functional
 
 from vspeech.config import RvcConfig
 from vspeech.config import RvcQuality
@@ -89,23 +87,28 @@ def test_to_hubert_rate_normalises_the_float64_of_a_padded_block():
 
 
 def test_quality_padding_zero_is_noop():
-    audio = torch.arange(10, dtype=torch.float32).view(1, -1)
+    audio = np.arange(10, dtype=np.float32)
     cfg = RvcConfig(quality=RvcQuality.zero)
     audio_pad, t_pad_tgt = _quality_padding(audio, cfg, 40000)
     assert t_pad_tgt == 0
     assert audio_pad.shape == (10,)
-    np.testing.assert_array_equal(audio_pad.numpy(), audio.squeeze(0).numpy())
+    np.testing.assert_array_equal(audio_pad, audio)
 
 
 def test_quality_padding_positive_reflects():
-    audio = torch.arange(10, dtype=torch.float32).view(1, -1)
+    audio = np.arange(10, dtype=np.float32)
     cfg = RvcConfig(quality=RvcQuality.one)
     tsr = 40000
     audio_pad, t_pad_tgt = _quality_padding(audio, cfg, tsr)
     # input pad is repeat*(N-1) samples at the 16k internal rate
     assert t_pad_tgt == round(9 * tsr / 16000)
-    expected = functional.pad(audio, (9, 9), mode="reflect").squeeze(0)
-    np.testing.assert_array_equal(audio_pad.numpy(), expected.numpy())
+    # The reflection itself, spelled out rather than delegated to np.pad, so this also
+    # pins that the edge sample is NOT repeated -- the one way numpy's "reflect" could
+    # have differed from the torch pad it replaced (ADR-0081).
+    expected = np.concatenate(
+        [audio[1:][::-1], audio, audio[:-1][::-1]], dtype=np.float32
+    )
+    np.testing.assert_array_equal(audio_pad, expected)
     assert audio_pad.shape[0] == 10 + 2 * 9
 
 
@@ -113,7 +116,7 @@ def test_quality_padding_output_pad_independent_of_original_rate():
     # The audio reaching _quality_padding is already resampled to the 16k
     # internal rate, so the output-side pad must scale by target_sr / 16000 --
     # the remote's original capture rate must not change it.
-    audio = torch.arange(10, dtype=torch.float32).view(1, -1)
+    audio = np.arange(10, dtype=np.float32)
     cfg = RvcConfig(quality=RvcQuality.one)
     _, t_pad_tgt = _quality_padding(audio, cfg, 48000)
     assert t_pad_tgt == round(9 * 48000 / 16000)  # 27, not 54
@@ -143,14 +146,12 @@ def test_is_model_half_float16_is_true():
 
 
 def test_align_pitch_to_feats_trims_tail():
-    pitch = torch.arange(10).view(1, -1)
-    pitchf = torch.arange(10).view(1, -1).float()
+    pitch = np.arange(10, dtype=np.int64).reshape(1, -1)
+    pitchf = np.arange(10, dtype=np.float32).reshape(1, -1)
     p, pf = _align_pitch_to_feats(pitch, pitchf, 4)
     assert p is not None and pf is not None
-    np.testing.assert_array_equal(p.numpy(), np.array([[6, 7, 8, 9]]))
-    np.testing.assert_array_equal(
-        pf.numpy(), np.array([[6, 7, 8, 9]], dtype=np.float32)
-    )
+    np.testing.assert_array_equal(p, np.array([[6, 7, 8, 9]]))
+    np.testing.assert_array_equal(pf, np.array([[6, 7, 8, 9]], dtype=np.float32))
 
 
 def test_align_pitch_to_feats_none_passthrough():
@@ -158,87 +159,62 @@ def test_align_pitch_to_feats_none_passthrough():
 
 
 def test_postprocess_no_trim_when_zero():
-    audio1 = torch.arange(6, dtype=torch.int16)
+    audio1 = np.arange(6, dtype=np.int16)
     out = _postprocess(audio1, 0)
     np.testing.assert_array_equal(out, np.arange(6, dtype=np.int16))
 
 
 def test_postprocess_trims_both_ends():
-    audio1 = torch.arange(10, dtype=torch.int16)
+    audio1 = np.arange(10, dtype=np.int16)
     out = _postprocess(audio1, 2)
     np.testing.assert_array_equal(out, np.arange(10, dtype=np.int16)[2:-2])
 
 
 def test_to_int16_saturates_out_of_range():
-    # RVC/vocoder output can overshoot +-1.0; the int16 cast MUST clamp first.
-    # An unclamped cast wraps modulo 2**16 (e.g. 1.05 -> -31131), flipping a
-    # peak's sign into a loud click. Clamping saturates to the rail instead.
-    vals = torch.tensor([-1.5, -1.0, 0.0, 1.0, 1.05, 1.5])
+    # RVC/vocoder output can overshoot +-1.0; the int16 cast MUST clip first.
+    # An unclipped cast wraps modulo 2**16 (e.g. 1.05 -> -31131), flipping a
+    # peak's sign into a loud click. Clipping saturates to the rail instead.
+    vals = np.array([-1.5, -1.0, 0.0, 1.0, 1.05, 1.5], dtype=np.float32)
     out = _to_int16(vals)
-    assert out.dtype == torch.int16
-    assert out[2].item() == 0
-    assert out[3].item() == 32767  # 1.0 * 32767.5 -> clamp 32767
-    assert out[4].item() == 32767  # 1.05 would WRAP to -31131 unclamped
-    assert out[5].item() == 32767  # 1.5 saturates high
-    assert out[0].item() == -32768  # -1.5 saturates low
+    assert out.dtype == np.int16
+    assert out[2] == 0
+    assert out[3] == 32767  # 1.0 * 32767.5 -> clip 32767
+    assert out[4] == 32767  # 1.05 would WRAP to -31131 unclipped
+    assert out[5] == 32767  # 1.5 saturates high
+    assert out[0] == -32768  # -1.5 saturates low
     # a full block of overshoot must all saturate high, never sign-flip negative
-    assert int(_to_int16(torch.full((64,), 1.3)).min().item()) == 32767
+    assert int(_to_int16(np.full(64, 1.3, dtype=np.float32)).min()) == 32767
+
+
+def test_to_int16_does_not_saturate_a_float16_decoder_output():
+    """Characterization of the defect recorded in `_to_int16`'s docstring.
+
+    Every fp16 RVC decoder emits float16, and 32767.0 is not representable there: it
+    rounds to 32768.0, so the upper bound of the clip *is* 32768.0 and a full-scale
+    sample casts to -32768. This is what the torch implementation did too (measured bit
+    for bit over 2M samples), so it is pinned rather than fixed here -- fixing it moves
+    in-range samples by up to 1 LSB and so cannot ride along with a bit-exactness gate.
+    Delete this test when that fix lands.
+    """
+    with np.errstate(over="ignore"):
+        out = _to_int16(np.array([1.0, 1.5, -1.5], dtype=np.float16))
+    assert out[0] == -32768  # NOT 32767: the clip did not saturate
+    assert out[1] == -32768
+    assert out[2] == -32768  # the low rail is exact, so this one is genuinely clipped
+    # ... while one LSB below full scale still behaves.
+    assert _to_int16(np.array([0.999, -0.999], dtype=np.float16))[0] > 0
 
 
 def test_select_pitch_disabled_returns_none():
-    audio_pad = torch.zeros(16000, dtype=torch.float32)
+    audio_pad = np.zeros(16000, dtype=np.float32)
     result = _select_pitch(
         audio_pad=audio_pad,
         rvc_config=RvcConfig(),
         f0_enabled=False,
         p_len=10,
-        device=torch.device("cpu"),
         f0_session=None,
     )
     assert result == (None, None)
-
-
-def test_element_type_maps_supported_dtypes():
-    import numpy as np
-    import torch
-
-    from vspeech.lib.rvc import _element_type
-
-    assert _element_type(torch.float16) is np.float16
-    assert _element_type(torch.float32) is np.float32
-    assert _element_type(torch.int64) is np.int64
-
-
-def test_element_type_rejects_unsupported_dtype():
-    import pytest
-    import torch
-
-    from vspeech.lib.rvc import _element_type
-
-    with pytest.raises(ValueError, match="Unsupported dtype"):
-        _element_type(torch.bfloat16)
-
-
-def test_ort_output_to_torch_falls_back_to_numpy():
-    """Even for an ORT value without dlpack, a torch tensor comes back via numpy."""
-    import numpy as np
-    import torch
-
-    from vspeech.lib.rvc import _ort_output_to_torch
-
-    # Deferred: this stub has neither _ortvalue nor to_dlpack, so an unexpected
-    # AttributeError from the inner `except AttributeError` falls through to the outer
-    # `except Exception` and reaches the numpy fallback. This test cannot tell "dlpack is
-    # absent" apart from "dlpack is broken".
-    class _NoDlpack:
-        def numpy(self):
-            return np.arange(6, dtype=np.float32).reshape(1, 2, 3)
-
-    out = _ort_output_to_torch(_NoDlpack(), torch.device("cpu"))
-    assert isinstance(out, torch.Tensor)
-    assert out.shape == (1, 2, 3)
-    assert out.dtype == torch.float32
-    assert out[0, 1, 2].item() == 5.0
 
 
 # Device resolution moved to tests/test_cuda_util.py along with the code (ADR-0078).
@@ -246,30 +222,17 @@ def test_ort_output_to_torch_falls_back_to_numpy():
 # setting means CPU -- are covered there, without torch.
 
 
-def test_the_torch_boundary_converts_the_device_value():
-    """RVC is where the torch-free `Device` becomes a real `torch.device` (ADR-0078).
+def test_ort_device_id_defaults_a_bare_cuda_device_to_zero():
+    """`Device("cuda")` has index None, and ORT needs a concrete ordinal.
 
-    This is the only conversion point, so a mistake here would silently move every
-    tensor to the wrong GPU.
+    Passing None through would bind the inputs and the output on a device id ORT cannot
+    resolve; 0 is the same default `create_session` picks, so the values land on the card
+    the session runs on.
     """
-    import torch
-
     from vspeech.lib.cuda_util import Device
-    from vspeech.lib.rvc import _torch_device
+    from vspeech.lib.rvc import _ort_device_id
 
-    assert _torch_device(Device("cpu")) == torch.device("cpu")
-    assert _torch_device(Device("cuda", 1)) == torch.device("cuda", 1)
-
-
-def test_the_torch_boundary_maps_a_bare_cuda_device_to_index_zero():
-    """`Device("cuda")` has index None; torch tensors need a concrete ordinal.
-
-    Leaving it as None would give `torch.device("cuda")`, whose index is None, and the
-    io_binding path would then pass None where ORT wants a device id.
-    """
-    import torch
-
-    from vspeech.lib.cuda_util import Device
-    from vspeech.lib.rvc import _torch_device
-
-    assert _torch_device(Device("cuda")) == torch.device("cuda", 0)
+    assert _ort_device_id(Device("cuda")) == 0
+    assert _ort_device_id(Device("cuda", 0)) == 0
+    assert _ort_device_id(Device("cuda", 1)) == 1
+    assert _ort_device_id(Device("cpu")) == 0

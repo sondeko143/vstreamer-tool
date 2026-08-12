@@ -1,8 +1,10 @@
 """Which device to run on, and whether fp16 is usable there (ADR-0078 / ADR-0079).
 
-torch-free on purpose. `Device` mirrors `torch.device`'s `type` / `index` attributes and
-its `str()`, so the conversion paths that still use torch (RVC) can build a real
-`torch.device` at their boundary, and the startup log line is unchanged.
+torch-free on purpose. `Device` keeps the `type` / `index` attributes and the `str()`
+that `torch.device` presented, which is what let the RVC conversion path convert to a
+real `torch.device` at its boundary while it still needed one (ADR-0081 removed that
+last conversion) and what keeps the startup log line unchanged. `Device` is now what
+`create_session` and the conversion path both speak end to end.
 """
 
 from dataclasses import dataclass

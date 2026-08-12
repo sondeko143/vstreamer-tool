@@ -120,7 +120,7 @@ def test_fcpe_onnx_generalizes_over_length_and_zeros_unvoiced():
     np.testing.assert_allclose(got[:m], ref[:m], atol=1.0)
 
     # The runtime helper also leaves no NaN and brings the silent span to about 0
-    f0 = pitch_extract_fcpe(torch.from_numpy(wav), sess)
+    f0 = pitch_extract_fcpe(wav, sess)
     assert not np.isnan(f0).any()
     silent = f0[len(f0) * 6 // 10 :]
     assert float(np.max(np.abs(silent))) < 5.0

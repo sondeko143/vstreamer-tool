@@ -4,7 +4,6 @@ from typing import cast
 import numpy as np
 from numpy.typing import NDArray
 from onnxruntime import InferenceSession
-from torch import Tensor
 
 from vspeech.config import F0ExtractorType
 
@@ -111,7 +110,7 @@ def pitch_extract_dio(
 
 
 def pitch_extract_rmvpe(
-    audio: Tensor,
+    audio: NDArray[np.floating[Any]],
     session: InferenceSession,
     threshold: float = RMVPE_THRESHOLD,
 ) -> NDArray[np.double]:
@@ -127,8 +126,7 @@ def pitch_extract_rmvpe(
     outputs and read index 0 instead of hard-coding a name. The yxlllc export's
     second ``uv`` output is unused — index 0 is already threshold-masked.
     """
-    audio_num = audio.detach().cpu().numpy().astype(np.float32)
-    audio_num = np.expand_dims(audio_num, axis=0)
+    audio_num = np.expand_dims(np.asarray(audio, dtype=np.float32), axis=0)
     onnx_f0 = cast(
         NDArray[np.float32],
         session.run(
@@ -152,7 +150,7 @@ FCPE_MIN_SAMPLES = 433
 
 
 def pitch_extract_fcpe(
-    audio: Tensor,
+    audio: NDArray[np.floating[Any]],
     session: InferenceSession,
 ) -> NDArray[np.double]:
     """Extract f0 from the FCPE onnx.
@@ -171,7 +169,7 @@ def pitch_extract_fcpe(
     and would crash onnx, so pad it up with left zeros (a defence that normally never
     fires: the real vc path is long enough thanks to _quality_padding).
     """
-    audio_np = audio.detach().cpu().numpy().astype(np.float32)
+    audio_np = np.asarray(audio, dtype=np.float32)
     if audio_np.shape[-1] < FCPE_MIN_SAMPLES:
         audio_np = np.pad(audio_np, (FCPE_MIN_SAMPLES - audio_np.shape[-1], 0))
     audio_num = np.expand_dims(audio_np, axis=0)
@@ -190,7 +188,7 @@ def pitch_extract_fcpe(
 
 
 def pitch_extract(
-    audio: Tensor,
+    audio: NDArray[np.floating[Any]],
     f0_up_key: int,
     sr: int,
     window: int,
@@ -212,11 +210,14 @@ def pitch_extract(
 
     if f0_extractor == F0ExtractorType.dio:
         f0 = pitch_extract_dio(
-            audio=audio.detach().cpu().numpy(), f0_max=f0_max, f0_min=f0_min, sr=sr
+            audio=np.asarray(audio, dtype=np.float32),
+            f0_max=f0_max,
+            f0_min=f0_min,
+            sr=sr,
         )
     elif f0_extractor == F0ExtractorType.harvest:
         f0 = pitch_extract_harvest(
-            audio=audio.detach().cpu().numpy(), f0_max=f0_max, sr=sr
+            audio=np.asarray(audio, dtype=np.float32), f0_max=f0_max, sr=sr
         )
     elif f0_extractor == F0ExtractorType.rmvpe:
         if not f0_session:

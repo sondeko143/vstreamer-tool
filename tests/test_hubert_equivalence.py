@@ -59,7 +59,6 @@ CASES = [(9, True, "l9_proj"), (12, False, "l12_raw")]
 def _compare(device: Device, is_half: bool, case) -> tuple[float, float]:
     """`is_half` also selects the reference npz used for the check. The fp16 reference is
     torch fp16."""
-    from vspeech.lib.rvc import _torch_device
     from vspeech.lib.rvc import extract_features
     from vspeech.lib.rvc import load_hubert_model
 
@@ -76,12 +75,12 @@ def _compare(device: Device, is_half: bool, case) -> tuple[float, float]:
 
     out = extract_features(
         model,
-        torch.from_numpy(wav).unsqueeze(0),
-        _torch_device(device),
+        wav.reshape(1, -1),
+        device,
         emb_output_layer=emb_output_layer,
         use_final_proj=use_final_proj,
     )
-    candidate = out.squeeze(0).float().cpu().numpy()
+    candidate = out[0].astype(np.float32)
     assert candidate.shape == reference.shape, f"{candidate.shape} vs {reference.shape}"
     return feature_cosine(candidate, reference), feature_max_abs_diff(
         candidate, reference

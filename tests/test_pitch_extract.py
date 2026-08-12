@@ -2,7 +2,6 @@ from typing import cast
 
 import numpy as np
 import pytest
-import torch
 from onnxruntime import InferenceSession
 from scipy import signal
 
@@ -34,7 +33,7 @@ class FakeRmvpeSession:
 def test_pitch_extract_rmvpe_routes_to_session_and_returns_aligned_pitch():
     sr = 16000
     window = 160
-    audio = torch.zeros(sr, dtype=torch.float32)
+    audio = np.zeros(sr, dtype=np.float32)
     p_len = sr // window  # 100 frames at a 10ms hop
     # rmvpe.onnx emits f0 in Hz with unvoiced frames already zeroed; shape (1, N).
     fake_f0 = np.full((1, p_len), 220.0, dtype=np.float32)
@@ -75,7 +74,7 @@ def test_pitch_extract_rmvpe_routes_to_session_and_returns_aligned_pitch():
 def test_pitch_extract_rmvpe_requires_session():
     with pytest.raises(ValueError):
         pitch_extract(
-            torch.zeros(16000, dtype=torch.float32),
+            np.zeros(16000, dtype=np.float32),
             f0_up_key=0,
             sr=16000,
             window=160,
@@ -107,7 +106,7 @@ class FakeFcpeSession:
 def test_pitch_extract_fcpe_routes_to_session_waveform_only():
     sr = 16000
     window = 160
-    audio = torch.zeros(sr, dtype=torch.float32)
+    audio = np.zeros(sr, dtype=np.float32)
     p_len = sr // window
     # The real fcpe.onnx returns at least p_len frames (baked hop=160 == window). +2 to
     # stay realistic.
@@ -146,7 +145,7 @@ def test_pitch_extract_fcpe_single_frame_does_not_collapse_to_0d():
     # This pins that atleast_1d guarantees 1-D.
     session = FakeFcpeSession(np.array([220.0], dtype=np.float32))
     _coarse, f0bak = pitch_extract(
-        torch.zeros(16000, dtype=torch.float32),
+        np.zeros(16000, dtype=np.float32),
         f0_up_key=0,
         sr=16000,
         window=160,
@@ -166,7 +165,7 @@ def test_pitch_extract_fcpe_pads_short_input_to_min_samples():
 
     session = FakeFcpeSession(np.full(3, 220.0, dtype=np.float32))
     pitch_extract(
-        torch.zeros(100, dtype=torch.float32),
+        np.zeros(100, dtype=np.float32),
         f0_up_key=0,
         sr=16000,
         window=160,
@@ -181,7 +180,7 @@ def test_pitch_extract_fcpe_pads_short_input_to_min_samples():
 def test_pitch_extract_fcpe_requires_session():
     with pytest.raises(ValueError):
         pitch_extract(
-            torch.zeros(16000, dtype=torch.float32),
+            np.zeros(16000, dtype=np.float32),
             f0_up_key=0,
             sr=16000,
             window=160,
@@ -255,7 +254,7 @@ def _spiked_rmvpe_session(p_len: int = 100) -> FakeRmvpeSession:
 
 def test_pitch_extract_applies_the_median_filter_to_the_extractor_output():
     _coarse, f0bak = pitch_extract(
-        torch.zeros(16000, dtype=torch.float32),
+        np.zeros(16000, dtype=np.float32),
         f0_up_key=0,
         sr=16000,
         window=160,
@@ -269,7 +268,7 @@ def test_pitch_extract_applies_the_median_filter_to_the_extractor_output():
 
 def test_pitch_extract_radius_zero_leaves_the_extractor_output_alone():
     _coarse, f0bak = pitch_extract(
-        torch.zeros(16000, dtype=torch.float32),
+        np.zeros(16000, dtype=np.float32),
         f0_up_key=0,
         sr=16000,
         window=160,

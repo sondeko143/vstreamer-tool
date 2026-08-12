@@ -6,10 +6,9 @@ from typing import Any
 from typing import cast
 
 import numpy as np
-import torch
 from numpy.typing import NDArray
 from onnxruntime import InferenceSession
-from torch.nn import functional
+from onnxruntime import OrtValue
 
 from vspeech.config import RvcConfig
 from vspeech.lib.cuda_util import Device
@@ -103,81 +102,57 @@ class HubertSession:
     is_half: bool
 
 
-def _torch_device(device: Device) -> torch.device:
-    """The one place the torch-free `Device` becomes a `torch.device` (ADR-0078).
+def _ort_device_id(device: Device) -> int:
+    """The ordinal onnxruntime wants for `device`.
 
-    torch lives inside the conversion path only; everything upstream of here -- device
-    resolution, session creation, the whisper worker -- speaks `Device` and never
-    imports torch. `Device("cuda")` has an index of None, which torch would keep as an
-    unindexed device; pin it to 0 so the io_binding path always has a real ordinal.
+    `Device("cuda")` has an `index` of None, and ORT needs a real ordinal; 0 is the same
+    default `create_session` applies, so the values land on the card the session runs on.
     """
-    if device.type == "cuda":
-        return torch.device("cuda", device.index if device.index is not None else 0)
-    return torch.device("cpu")
+    return device.index if device.index is not None else 0
 
 
-_ORT_ELEMENT_TYPES: dict[torch.dtype, type] = {
-    torch.float16: np.float16,
-    torch.float32: np.float32,
-    torch.int64: np.int64,
-}
+def _run_on_device(
+    session: InferenceSession,
+    device: Device,
+    input_feed: dict[str, NDArray[Any]],
+    output_name: str,
+) -> NDArray[Any]:
+    """Run `session` for a single output, binding values with onnxruntime's own OrtValue.
 
+    On CUDA each input is copied into device memory as an `OrtValue` and attached with
+    `bind_ortvalue_input`, and the output is allocated on the device and read back once
+    (ADR-0081). `bound` keeps every input alive until the run returns: onnxruntime does
+    not document whether the binding owns the value it is handed, and the cost of one
+    list is nothing next to a use-after-free on device memory. Do not "simplify" it into
+    a temporary inside the `bind_ortvalue_input` call.
 
-def _element_type(dtype: torch.dtype) -> type:
-    try:
-        return _ORT_ELEMENT_TYPES[dtype]
-    except KeyError:
-        raise ValueError(f"Unsupported dtype: {dtype}") from None
-
-
-def _bind_torch_input(io_binding: Any, name: str, tensor: torch.Tensor) -> torch.Tensor:
-    """Bind a torch CUDA buffer to an ORT input with zero copy.
-
-    The caller **must keep a reference** to the return value: making the tensor
-    contiguous may produce a new tensor, and the lifetime of the bound pointer depends
-    on it.
+    Everything that is not CUDA takes the plain numpy `session.run` the CPU path always
+    took.
     """
-    tensor = tensor.contiguous()
-    device = tensor.device
-    # `device.index` is None for a bare torch.device("cuda"), so `else 0` is a
-    # real branch, though ty narrows index to non-optional and marks it
-    # unreachable (ty check still exits 0). Keep it. (Same in extract_features
-    # / infer.)
-    io_binding.bind_input(
-        name=name,
-        device_type="cuda",
-        device_id=device.index if device.index is not None else 0,
-        element_type=_element_type(tensor.dtype),
-        shape=tuple(tensor.shape),
-        buffer_ptr=tensor.data_ptr(),
-    )
-    return tensor
-
-
-def _ort_output_to_torch(ort_output: Any, device: torch.device) -> torch.Tensor:
-    try:
-        from torch.utils import dlpack
-
-        try:
-            dlp = ort_output._ortvalue.to_dlpack()
-        except AttributeError:
-            dlp = ort_output.to_dlpack()
-        return dlpack.from_dlpack(dlp).clone()
-    except Exception as e:  # noqa: BLE001 - any failure must still return output
-        # dlpack zero-copy is the fast path; on any failure fall back to a numpy
-        # copy so inference still returns. Warn, so a broad except here can't turn
-        # a real dlpack bug into a silent slow path.
-        logger.warning("dlpack transfer failed; using numpy fallback: %s", e)
-        return torch.tensor(ort_output.numpy(), device=device)
+    if device.type != "cuda":
+        result = cast(
+            list, session.run(output_names=[output_name], input_feed=input_feed)
+        )
+        return np.asarray(result[0])
+    io_binding = session.io_binding()
+    device_id = _ort_device_id(device)
+    bound: list[OrtValue] = []
+    for name, value in input_feed.items():
+        ort_value = OrtValue.ortvalue_from_numpy(value, "cuda", device_id)
+        io_binding.bind_ortvalue_input(name, ort_value)
+        bound.append(ort_value)
+    io_binding.bind_output(output_name, "cuda", device_id=device_id)
+    session.run_with_iobinding(io_binding)
+    return io_binding.get_outputs()[0].numpy()
 
 
 def extract_features(
     model: HubertSession,
-    feats: torch.Tensor,
-    dev: torch.device,
+    feats: NDArray[np.floating[Any]],
+    device: Device,
     emb_output_layer: int = 9,
     use_final_proj: bool = True,
-) -> torch.Tensor:
+) -> NDArray[np.floating[Any]]:
     key = (emb_output_layer, use_final_proj)
     try:
         output_name = model.output_names[key]
@@ -191,89 +166,35 @@ def extract_features(
             " scripts/export_hubert_onnx.py で再 export してください。"
         ) from None
 
-    source = feats.to(
-        device=dev, dtype=torch.float16 if model.is_half else torch.float32
+    source = np.ascontiguousarray(
+        feats, dtype=np.float16 if model.is_half else np.float32
     )
-    if dev.type == "cuda":
-        io_binding = model.session.io_binding()
-        # `bound` owns the lifetime of the bound pointer. Do not drop it before run
-        # returns.
-        bound = _bind_torch_input(io_binding, "source", source)
-        io_binding.bind_output(
-            output_name, "cuda", device_id=dev.index if dev.index is not None else 0
-        )
-        model.session.run_with_iobinding(io_binding)
-        out = _ort_output_to_torch(io_binding.get_outputs()[0], dev)
-        del bound
-        return out
-
-    result = cast(
-        list,
-        model.session.run(
-            output_names=[output_name], input_feed={"source": source.cpu().numpy()}
-        ),
-    )
-    return torch.from_numpy(np.asarray(result[0])).to(dev)
+    return _run_on_device(model.session, device, {"source": source}, output_name)
 
 
 def infer(
     is_half: bool,
     session: InferenceSession,
-    feats: torch.Tensor,
-    pitch_length: torch.Tensor,
-    pitch: torch.Tensor | None,
-    pitchf: torch.Tensor | None,
-    sid: torch.Tensor,
-):
-    device = feats.device
-    if device.type == "cuda":
-        io_binding = session.io_binding()
-        tensors = [
-            _bind_torch_input(
-                io_binding, "feats", feats.half() if is_half else feats.float()
-            ),
-            _bind_torch_input(io_binding, "p_len", pitch_length),
-            _bind_torch_input(io_binding, "sid", sid),
-        ]
-        if pitch is not None and pitchf is not None:
-            tensors.append(_bind_torch_input(io_binding, "pitch", pitch))
-            tensors.append(_bind_torch_input(io_binding, "pitchf", pitchf))
-
-        io_binding.bind_output(
-            "audio", "cuda", device_id=device.index if device.index is not None else 0
-        )
-        session.run_with_iobinding(io_binding)
-        audio1 = _ort_output_to_torch(io_binding.get_outputs()[0], device)
-        del tensors
-        return audio1.unsqueeze(0)
-
-    if is_half:
-        input_feed = {
-            "feats": feats.cpu().numpy().astype(np.float16),
-            "p_len": pitch_length.cpu().numpy().astype(np.int64),
-            "sid": sid.cpu().numpy().astype(np.int64),
-        }
-    else:
-        input_feed = {
-            "feats": feats.cpu().numpy().astype(np.float32),
-            "p_len": pitch_length.cpu().numpy().astype(np.int64),
-            "sid": sid.cpu().numpy().astype(np.int64),
-        }
-    if pitch is not None and pitchf is not None:
-        input_feed.update(
-            {
-                "pitch": pitch.cpu().numpy().astype(np.int64),
-                "pitchf": pitchf.cpu().numpy().astype(np.float32),
-            }
-        )
-    audio1 = cast(
-        list,
-        session.run(
-            output_names=["audio"],
-            input_feed=input_feed,
+    device: Device,
+    feats: NDArray[np.floating[Any]],
+    pitch_length: NDArray[np.int64],
+    pitch: NDArray[np.int64] | None,
+    pitchf: NDArray[np.float32] | None,
+    sid: NDArray[np.int64],
+) -> NDArray[np.floating[Any]]:
+    """Run the RVC decoder once and return its waveform batched as `(1, N)`."""
+    input_feed: dict[str, NDArray[Any]] = {
+        "feats": np.ascontiguousarray(
+            feats, dtype=np.float16 if is_half else np.float32
         ),
-    )
-    return torch.tensor(np.array(audio1), device=device)
+        "p_len": np.ascontiguousarray(pitch_length, dtype=np.int64),
+        "sid": np.ascontiguousarray(sid, dtype=np.int64),
+    }
+    if pitch is not None and pitchf is not None:
+        input_feed["pitch"] = np.ascontiguousarray(pitch, dtype=np.int64)
+        input_feed["pitchf"] = np.ascontiguousarray(pitchf, dtype=np.float32)
+    audio1 = _run_on_device(session, device, input_feed, "audio")
+    return audio1[np.newaxis, ...]
 
 
 def _select_onnx_file(
@@ -348,52 +269,62 @@ def _to_hubert_rate(audio: NDArray[np.floating], src_rate: int) -> NDArray[np.fl
 
 
 def _quality_padding(
-    audio: torch.Tensor,
+    audio: NDArray[np.float32],
     rvc_config: RvcConfig,
     target_sample_rate: int,
-) -> tuple[torch.Tensor, int]:
-    # `audio` is already at HUBERT_SAMPLE_RATE; pad each side by `repeat` whole
-    # reflections for extra model context and report the matching output-side
-    # pad (at target_sample_rate) for _postprocess to trim.
+) -> tuple[NDArray[np.float32], int]:
+    """Reflect-pad one utterance and report the matching output-side pad.
+
+    `audio` is already at HUBERT_SAMPLE_RATE; pad each side by `repeat` whole
+    reflections for extra model context and report the matching output-side pad (at
+    target_sample_rate) for _postprocess to trim.
+
+    numpy's `reflect` is the same reflection torch's `functional.pad(mode="reflect")`
+    applies -- neither repeats the edge sample -- and `RvcQuality` only takes 0 and 1, so
+    the pad width is either 0 or n-1 and never exceeds what either accepts (verified
+    element-wise for both widths at several lengths).
+    """
     repeat = rvc_config.quality.value
-    t_pad = repeat * (audio.shape[1] - 1)
+    t_pad = repeat * (audio.shape[0] - 1)
     t_pad_tgt = round(t_pad * target_sample_rate / HUBERT_SAMPLE_RATE)
-    audio_pad = functional.pad(audio, (t_pad, t_pad), mode="reflect").squeeze(0)
-    return audio_pad, t_pad_tgt
+    return np.pad(audio, (t_pad, t_pad), mode="reflect"), t_pad_tgt
 
 
 def _extract_hubert_feats(
     hubert_model: HubertSession,
-    audio_pad: torch.Tensor,
-    device: torch.device,
+    audio_pad: NDArray[np.float32],
+    device: Device,
     emb_output_layer: int,
     use_final_proj: bool,
-) -> torch.Tensor:
+) -> NDArray[np.floating[Any]]:
+    """HuBERT features for one analysis window, upsampled 2x along time.
+
+    The upsample used to be `functional.interpolate(..., scale_factor=2)` in nearest
+    mode, which is elementwise duplication by definition and produces exactly what
+    `np.repeat(..., 2)` does (verified element-wise on fp16 and fp32, CPU and CUDA).
+    """
     feats = audio_pad
-    if feats.dim() == 2:  # double channels
+    if feats.ndim == 2:  # double channels
         feats = feats.mean(-1)
-    assert feats.dim() == 1, feats.dim()  # nosec B101 - internal shape invariant
-    feats = feats.view(1, -1)
-    feats = extract_features(
+    assert feats.ndim == 1, feats.ndim  # nosec B101 - internal shape invariant
+    feats = feats.reshape(1, -1)
+    features = extract_features(
         model=hubert_model,
         feats=feats,
-        dev=device,
+        device=device,
         emb_output_layer=emb_output_layer,
         use_final_proj=use_final_proj,
     )
-    return functional.interpolate(feats.permute(0, 2, 1), scale_factor=2).permute(
-        0, 2, 1
-    )
+    return np.repeat(features, 2, axis=1)
 
 
 def _select_pitch(
-    audio_pad: torch.Tensor,
+    audio_pad: NDArray[np.float32],
     rvc_config: RvcConfig,
     f0_enabled: bool,
     p_len: int,
-    device: torch.device,
     f0_session: InferenceSession | None,
-) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+) -> tuple[NDArray[np.int64] | None, NDArray[np.float32] | None]:
     if not f0_enabled:
         return None, None
     pitch, pitchf = pitch_extract(
@@ -406,11 +337,10 @@ def _select_pitch(
         f0_session=f0_session,
         silence_front=0,
     )
-    pitch = pitch[:p_len]
-    pitchf = pitchf[:p_len]
-    pitch_t = torch.tensor(pitch, device=device).unsqueeze(0).long()
-    pitchf_t = torch.tensor(pitchf, device=device, dtype=torch.float).unsqueeze(0)
-    return pitch_t, pitchf_t
+    return (
+        pitch[:p_len].astype(np.int64)[np.newaxis, :],
+        pitchf[:p_len].astype(np.float32)[np.newaxis, :],
+    )
 
 
 def _is_model_half(session: InferenceSession) -> bool:
@@ -418,30 +348,45 @@ def _is_model_half(session: InferenceSession) -> bool:
 
 
 def _align_pitch_to_feats(
-    pitch: torch.Tensor | None,
-    pitchf: torch.Tensor | None,
+    pitch: NDArray[np.int64] | None,
+    pitchf: NDArray[np.float32] | None,
     feats_len: int,
-) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+) -> tuple[NDArray[np.int64] | None, NDArray[np.float32] | None]:
     if pitch is not None and pitchf is not None:
         return pitch[:, -feats_len:], pitchf[:, -feats_len:]
     return pitch, pitchf
 
 
-def _to_int16(audio: torch.Tensor) -> torch.Tensor:
-    """Scale a decoder waveform (~[-1, 1]) to int16, saturating out of range.
+def _to_int16(audio: NDArray[np.floating[Any]]) -> NDArray[np.int16]:
+    """Scale a decoder waveform (~[-1, 1]) to int16, clipping out of range.
 
-    RVC/vocoder output is not guaranteed to stay within [-1, 1] (pitch-shifted
-    or loud segments overshoot). Clamp BEFORE the int16 cast: an unclamped cast
-    wraps modulo 2**16, turning a >+1.0 peak into a large negative sample -- a
-    loud click. Clamping saturates to the rail instead.
+    RVC/vocoder output is not guaranteed to stay within [-1, 1] (pitch-shifted or loud
+    segments overshoot). Clip BEFORE the int16 cast: an unclipped cast wraps modulo
+    2**16, turning a >+1.0 peak into a large negative sample -- a loud click.
+
+    The arithmetic stays in the decoder output's own dtype, which is what the torch
+    version did (`torch.clamp(x * 32767.5, ...).to(torch.int16)` on a half tensor
+    computes and clamps in half). Both were measured to agree bit for bit on 2M samples,
+    on CPU and CUDA, which is what keeps the ADR-0080 bit-exactness gate meaningful.
+
+    [Open, deferred 2026-08-12 -- pre-existing, NOT introduced by ADR-0081] The clip does
+    not actually saturate when the decoder emits float16, which every fp16 RVC model
+    does. 32767.0 is not representable in float16 and rounds to 32768.0, so the upper
+    bound is 32768.0 and a sample at or above +1.0 casts to **-32768** -- the very
+    sign-flipped click this function exists to prevent. Measured: torch and numpy do this
+    identically, so it is not a regression, and neither the streaming baseline (peak
+    24288) nor the utterance golden (peak 18128) reaches the rail. Fixing it means
+    computing in float32, which shifts in-range samples by up to 1 LSB and therefore
+    cannot ride along with a change whose acceptance criterion is bit equality; it needs
+    its own baseline re-capture and ear check.
     """
-    return torch.clamp(audio * 32767.5, -32768.0, 32767.0).to(dtype=torch.int16)
+    return np.clip(audio * 32767.5, -32768.0, 32767.0).astype(np.int16)
 
 
-def _postprocess(audio1: torch.Tensor, t_pad_tgt: int) -> NDArray[np.int16]:
+def _postprocess(audio1: NDArray[np.int16], t_pad_tgt: int) -> NDArray[np.int16]:
     if t_pad_tgt != 0:
         audio1 = audio1[t_pad_tgt : -1 * t_pad_tgt]
-    return audio1.detach().cpu().numpy()
+    return audio1
 
 
 def change_voice(
@@ -458,21 +403,15 @@ def change_voice(
     f0_session: InferenceSession | None,
 ) -> NDArray[np.int16]:
     vc_start_time = time.time()
-    torch_dev = _torch_device(device)
-    audio_np = _to_hubert_rate(_pad_input_to_block(voice_frames), voice_sample_rate)
-    audio = (
-        torch.from_numpy(audio_np)
-        .to(device=torch_dev, dtype=torch.float32)
-        .unsqueeze(0)
-    )
+    audio = _to_hubert_rate(_pad_input_to_block(voice_frames), voice_sample_rate)
 
     audio_pad, t_pad_tgt = _quality_padding(audio, rvc_config, target_sample_rate)
-    sid = torch.tensor(0, device=torch_dev).unsqueeze(0).long()
+    sid = np.zeros(1, dtype=np.int64)
 
     feats = _extract_hubert_feats(
         hubert_model=hubert_model,
         audio_pad=audio_pad,
-        device=torch_dev,
+        device=device,
         emb_output_layer=emb_output_layer,
         use_final_proj=use_final_proj,
     )
@@ -485,7 +424,6 @@ def change_voice(
         rvc_config=rvc_config,
         f0_enabled=f0_enabled,
         p_len=p_len,
-        device=torch_dev,
         f0_session=f0_session,
     )
 
@@ -497,26 +435,22 @@ def change_voice(
     is_model_half = _is_model_half(session)
     feats_len = feats.shape[1]
     pitch, pitchf = _align_pitch_to_feats(pitch, pitchf, feats_len)
-    p_len_tensor = torch.tensor([feats_len], device=torch_dev).long()
+    p_len_array = np.array([feats_len], dtype=np.int64)
 
-    with torch.inference_mode():
-        audio1 = _to_int16(
-            infer(
-                session=session,
-                is_half=is_model_half,
-                feats=feats,
-                pitch_length=p_len_tensor,
-                pitch=pitch,
-                pitchf=pitchf,
-                sid=sid,
-            )[0]
-        )
-
-    del feats, p_len_tensor
+    audio1 = _to_int16(
+        infer(
+            session=session,
+            is_half=is_model_half,
+            device=device,
+            feats=feats,
+            pitch_length=p_len_array,
+            pitch=pitch,
+            pitchf=pitchf,
+            sid=sid,
+        )[0]
+    )
 
     vc_end_time = time.time()
     logger.info("rvc: inferred: elapsed time: %s", vc_end_time - vc_start_time)
 
-    result = _postprocess(audio1, t_pad_tgt)
-    del pitch, pitchf, sid
-    return result
+    return _postprocess(audio1, t_pad_tgt)

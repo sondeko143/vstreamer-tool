@@ -378,8 +378,15 @@ async def vc_loop(
                 )
             block = apply_input_boost(raw_block, sv_config.rvc.input_boost)
             t0 = perf_counter()
-            # Transient GPU errors (CUDA errors, OOM, ...) surface as a RuntimeError from
-            # torch/CUDA (torch.cuda.OutOfMemoryError also derives from RuntimeError).
+            # Transient GPU errors (CUDA errors, OOM, ...) surface as a plain
+            # RuntimeError from onnxruntime. Measured on this hardware after ADR-0081
+            # moved the conversion path onto OrtValue: exhausting device memory raises
+            # `builtins.RuntimeError` both from `OrtValue.ortvalue_from_numpy` ("BFCArena
+            # ... Failed to allocate memory for requested buffer") and from
+            # `run_with_iobinding` ("Non-zero status code returned while running Conv
+            # node ... Failed to allocate"). It used to arrive as torch's
+            # OutOfMemoryError, which is also a RuntimeError, so this clause keeps
+            # catching exactly what it was written for.
             # **Do not tear down: drop one block and carry on**:
             #   - Retrying CUDA OOM in a tight loop thrashes.
             #   - A one-off is recoverable, so dropping one block is enough. Tearing down
