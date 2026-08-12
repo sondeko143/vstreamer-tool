@@ -1,9 +1,19 @@
+"""The f0 extractors and the voiced-run median filter (`vspeech/lib/pitch_extract.py`).
+
+`scipy` is imported inside the single test that uses it, not at module scope. Importing a
+test module happens at *collection* time, so a module-scope import is paid by every run
+that collects the file -- including one that selects a single test elsewhere. Measured on
+this machine, `scipy.signal` costs 7.8s to import, and this one line was 6.0s of the 14.8s
+`tests/lib/` took to collect. It is worth singling out because scipy is a **test-only**
+dependency: nothing under `vspeech/` imports it (ADR-0090). Everything else this file
+loads arrives through the module under test anyway, so moving those would buy nothing.
+"""
+
 from typing import cast
 
 import numpy as np
 import pytest
 from onnxruntime import InferenceSession
-from scipy import signal
 
 from vspeech.config import F0ExtractorType
 from vspeech.lib.pitch_extract import median_filter_f0
@@ -213,6 +223,8 @@ def test_median_filter_f0_does_not_pull_voiced_run_edges_toward_unvoiced():
     # window spanning the 0 boundary would drag the run's first frame to min().
     f0 = np.array([0.0, 300.0, 200.0, 210.0, 0.0])
     out = median_filter_f0(f0, 1)
+    from scipy import signal  # module scope costs 7.8s at collection; see the docstring
+
     naive = signal.medfilt(f0, 3)
     assert out[1] == pytest.approx(300.0)
     assert naive[1] == pytest.approx(200.0)

@@ -106,3 +106,4 @@
 | [0087](0087-weight-guarded-by-measurement-not-named-bans.md) | 依存の重さは名指しの禁止ではなく計測だけで守る（0084 と 0086 を supersede） | Accepted | 2026-08-12 |
 | [0088](0088-mirror-test-layout-on-package-tree.md) | テストの配置をプロダクションのパッケージ木に写し、共有フィクスチャを conftest に集める | Accepted | 2026-08-13 |
 | [0089](0089-runtime-asset-gates-as-registered-markers.md) | GPU・実行時資産に依存するテストのゲートを登録済みマーカーで宣言する | Accepted | 2026-08-13 |
+| [0090](0090-test-runtime-collection-and-parallelism.md) | テストの実行時間は収集 import の削減と既定の並列実行で詰める | Accepted | 2026-08-13 |

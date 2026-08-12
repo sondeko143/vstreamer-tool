@@ -112,6 +112,7 @@ dev = [
     "poethepoet>=0.46.0",
     "beniget>=0.5.0",
     "onnx>=1.19,<2",
+    "pytest-xdist>=3.8,<4",
 ]
 
 [tool.uv]
@@ -148,7 +149,10 @@ build-backend = "uv_build"
 testpaths = ["tests"]
 pythonpath = "."
 asyncio_mode = "auto"
-addopts = "-m 'not voicevox_e2e'"
+# `-n auto` は既定で並列実行する (ADR-0090)。交互 A/B 3 組でウォーム時 37.1s -> 20.1s、
+# しかも分散が 43% -> 7% に縮む。速さより「毎回だいたい同じ時間で終わる」ほうが効く。
+# デバッグ時は `-n0` を足すとプロセス内直列に戻る (pdb / -s が使える)。
+addopts = "-m 'not voicevox_e2e' -n auto"
 # GPU・実行時資産への依存はここに登録した requires_* マーカーで宣言し、条件の評価は
 # tests/conftest.py の pytest_runtest_setup 1 箇所で行う (ADR-0089)。登録してあるので
 # `uv run pytest --markers` がそのまま「skip を解くには何が要るか」の一覧になり、
