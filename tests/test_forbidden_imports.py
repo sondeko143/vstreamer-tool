@@ -1,4 +1,4 @@
-"""Two structural gates on what the runtime is allowed to re-acquire.
+"""Structural gates on what the runtime is allowed to re-acquire.
 
 The first half bans module names from `vspeech/`. The offline tools in `scripts/` may
 import whatever they need -- what is gated is the runtime. The second half (ADR-0084) bans
@@ -24,6 +24,12 @@ That is the criterion ADR-0086 applied by injection, name by name:
   module is silent. The outcome gate in `tests/test_runtime_footprint.py` cannot see it
   either, since that measures only what `import vspeech.main` loads. Those names stayed:
   this list is the only thing standing between the runtime and their return.
+
+A third, much smaller check pins the backstop for the names this list no longer carries:
+`poe check` has to keep running `ty`, which is what catches the guarded and function-body
+import shapes the suite walks straight past. The residual comment under `FORBIDDEN` has
+the measurements; `test_the_health_gate_still_runs_the_type_checker` keeps it from being
+only prose.
 """
 
 import ast
@@ -40,6 +46,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 VSPEECH_DIR = REPO_ROOT / "vspeech"
 PYPROJECT_TOML = REPO_ROOT / "pyproject.toml"
 UV_LOCK = REPO_ROOT / "uv.lock"
+POE_TASKS_TOML = REPO_ROOT / "poe_tasks.toml"
+
+# The executable whose presence in the health gate is pinned below. Not a package name and
+# not a module: what matters is that this *runs*, wherever the task table puts it.
+TYPE_CHECKER = "ty"
 
 # Module name -> the ADRs that hold the reason it is banned. The reason lives there and only
 # there; printing these paths is how a red gate leads a reader to it.
@@ -170,6 +181,121 @@ def test_every_ban_points_at_a_reason_that_exists(forbidden: str, adr: str):
     assert any(spelling in text for spelling in spellings), (
         f"the ban on {forbidden} points at {adr}, which never mentions it. A reader who "
         "follows that path lands on the wrong decision."
+    )
+
+
+def _poe_tasks() -> dict[str, Any]:
+    """Every task `poe` would load, read straight from the TOML.
+
+    Shelling out to `poe` would answer the same question and cost seconds; the fact being
+    pinned below is a line in a config file. But reading the wrong file would make the
+    check vacuous, so the include that makes poe read this one is checked first: tasks
+    live in `poe_tasks.toml` only because `pyproject.toml`'s `[tool.poe] include` pulls
+    them in, and if that ever stops naming the file, everything below is about a document
+    poe ignores.
+    """
+    with open(PYPROJECT_TOML, "rb") as f:
+        pyproject = tomllib.load(f)
+    included = pyproject.get("tool", {}).get("poe", {}).get("include", [])
+    assert POE_TASKS_TOML.name in included, (
+        f"pyproject.toml's [tool.poe] include no longer names {POE_TASKS_TOML.name} "
+        f"(it names {included!r}), so poe does not read the tasks this file inspects. "
+        "Point the reader at wherever the tasks moved."
+    )
+    with open(POE_TASKS_TOML, "rb") as f:
+        return tomllib.load(f).get("tool", {}).get("poe", {}).get("tasks", {})
+
+
+def _command_words(task: Any) -> list[str]:
+    """The words a single task would execute.
+
+    Whitespace-split rather than shlex: this only ever asks whether a bare word is
+    present, and shlex's backslash handling mangles the Windows paths in this table.
+    """
+    if isinstance(task, str):
+        return task.split()
+    if not isinstance(task, dict):
+        return []
+    words: list[str] = []
+    for key in ("cmd", "shell", "script"):
+        value = task.get(key)
+        if isinstance(value, str):
+            words += value.split()
+    return words
+
+
+def _words_run_by(
+    name: str, tasks: dict[str, Any], seen: frozenset[str] = frozenset()
+) -> list[str]:
+    """Every word `poe <name>` would run, following `sequence` refs into other tasks.
+
+    Resolving the refs is the point: `check` runs nothing itself, and asserting on the
+    literal string "type" would pass for a task that had been gutted into an `echo`.
+    `seen` stops a cyclic table from recursing forever rather than failing an assertion.
+    """
+    if name in seen or name not in tasks:
+        return []
+    task = tasks[name]
+    words = _command_words(task)
+    sequence = task.get("sequence") if isinstance(task, dict) else None
+    if not isinstance(sequence, list):
+        return words
+    # poe reads a bare string item as a ref unless the task says otherwise.
+    item_type = task.get("default_item_type", "ref")
+    for item in sequence:
+        ref = (
+            item.get("ref")
+            if isinstance(item, dict)
+            else item
+            if item_type == "ref"
+            else None
+        )
+        if isinstance(ref, str) and ref.split():
+            # A ref may carry arguments; the task name is the first word.
+            words += _words_run_by(ref.split()[0], tasks, seen | {name})
+        else:
+            words += _command_words(item)
+    return words
+
+
+def test_the_health_gate_still_runs_the_type_checker():
+    """`poe check` must keep running ty, because ty is the backstop for this whole file.
+
+    The residual comment under `FORBIDDEN` records what replaced the import ban on
+    torch/torchaudio, and the honest answer is not "the suite". A *guarded* import
+    (`try: import torch / except ImportError: torch = None`, ctranslate2's own idiom), an
+    import in a function body no test executes, and an import in a `vspeech/` module no
+    test imports each leave the full suite at exit 0 -- all three measured. `ty check` is
+    what returns 1 on them, and it runs from `poe check`, not from pytest.
+
+    So the guard is one line of `poe_tasks.toml` away from disappearing while every test
+    here stays green. That is the exact failure ADR-0085 and ADR-0086 were written about:
+    a guard whose justification lived in prose, quietly stopped holding, and nobody
+    noticed. This test is the one thing standing between that line and prose.
+    """
+    tasks = _poe_tasks()
+    assert "check" in tasks, (
+        "poe_tasks.toml no longer defines a `check` task, so this repo's health gate has "
+        "moved or gone. Whatever replaced it has to keep running "
+        f"`{TYPE_CHECKER}` -- see this test's docstring for why -- and this test has to be "
+        "pointed at it."
+    )
+    words = _words_run_by("check", tasks)
+    assert words, (
+        "`poe check` resolved to no commands at all, which means the reader above has "
+        "gone stale against the shape of poe_tasks.toml rather than that a gate was "
+        "dropped. Fix the reader, then re-read the verdict."
+    )
+    assert TYPE_CHECKER in words, (
+        f"`poe check` no longer runs `{TYPE_CHECKER}`. It resolved to: "
+        f"{' '.join(words)}\n"
+        f"`{TYPE_CHECKER} check` is the only gate this project has against a *guarded* or "
+        "function-body import of a package the runtime is not allowed to import: the test "
+        "suite exits 0 on every one of those shapes (measured -- see the residual comment "
+        "under FORBIDDEN in this file), and it is `unresolved-import` that catches them. "
+        "Dropping it from the health gate leaves that with nothing. Put it back rather "
+        "than relaxing this test; if the gate genuinely moved, move this assertion with "
+        "it."
     )
 
 
