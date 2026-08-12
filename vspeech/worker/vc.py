@@ -51,7 +51,7 @@ def check_cuda_provider(providers: Sequence[str]) -> None:
         raise RuntimeError(
             "RVC onnxruntime session has no CUDAExecutionProvider "
             f"(active providers: {providers}). Install the GPU runtime with "
-            "`uv sync --extra rvc` (onnxruntime-gpu); running RVC on CPU is "
+            "`uv sync --all-extras` (onnxruntime-gpu); running RVC on CPU is "
             "unusably slow."
         )
 
