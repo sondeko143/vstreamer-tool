@@ -180,6 +180,14 @@ def test_provenance_records_where_the_cuda_libraries_came_from():
     assert set(prov["cuda_libraries"]) == {"suppliers", "versions"}
     assert isinstance(prov["cuda_libraries"]["suppliers"], dict)
     assert isinstance(prov["cuda_libraries"]["versions"], dict)
+    # Only the shape is asserted here, never the values: this is the one test that reads
+    # the live process, and which CUDA libraries are loaded depends on what ran earlier
+    # in the session. The tokens are a closed set, so that much is safe to pin.
+    assert set(prov["cuda_libraries"]["suppliers"].values()) <= {
+        "torch",
+        "nvidia-wheel",
+        "system",
+    }
 
 
 def test_provenance_ignores_which_gpu_was_used():
@@ -229,22 +237,69 @@ def test_cuda_library_suppliers_picks_only_the_math_libraries():
     }
 
 
+def _prov_with_cuda(suppliers: dict[str, str], versions: dict[str, str] | None = None):
+    """A provenance record whose `cuda_libraries` section is chosen, not observed.
+
+    `provenance()` reads the **live process's** loaded CUDA DLLs, which is right in
+    production (it is called once, after the sessions are open) but makes any test that
+    reasons about the recorded values depend on what ran earlier in the session. Injecting
+    a value on top of a real reading is worse than useless: run alone nothing has loaded
+    those DLLs and the injected value differs from the empty reading, but inside the full
+    suite an earlier test has already pulled torch's CUDA libraries in, the injected
+    "torch" then *matches reality*, and the assertion that a supplier change is reported
+    silently stops testing anything. That is not a hypothesis -- it is how
+    `test_provenance_mismatch_names_a_changed_cuda_supplier` came to pass alone and fail
+    in the suite. So both sides are built here instead of read.
+    """
+    prov = provenance(_config(), 48000)
+    prov["cuda_libraries"] = {
+        "suppliers": dict(suppliers),
+        "versions": dict(versions or {}),
+    }
+    return prov
+
+
+_NVIDIA_LIBS = {"cublaslt64_13.dll": "nvidia-wheel", "cudnn64_9.dll": "nvidia-wheel"}
+_NVIDIA_VERSIONS = {"nvidia-cublas": "13.6.0.2", "nvidia-cudnn-cu13": "9.24.0.43"}
+
+
+def test_provenance_mismatch_is_silent_when_the_cuda_libraries_match():
+    """The positive control: a gate that fires on everything is not a gate.
+
+    Without this, every assertion below would still pass if `provenance_mismatches`
+    started reporting the section unconditionally.
+    """
+    a = _prov_with_cuda(_NVIDIA_LIBS, _NVIDIA_VERSIONS)
+    b = _prov_with_cuda(_NVIDIA_LIBS, _NVIDIA_VERSIONS)
+    assert provenance_mismatches(a, b) == []
+
+
 def test_provenance_mismatch_names_a_changed_cuda_supplier():
-    """A supplier swap must stop the comparison, not be blamed on the code under test."""
-    a = provenance(_config(), 48000)
-    b = json.loads(json.dumps(a))
-    b["cuda_libraries"]["suppliers"] = {"cublaslt64_13.dll": "torch"}
+    """A supplier swap must stop the comparison, not be blamed on the code under test.
+
+    The two sides differ in exactly one DLL's supplier, so `lines` collapsing to empty
+    (the function no longer looking at the section at all) fails the length assertion.
+    """
+    a = _prov_with_cuda(_NVIDIA_LIBS, _NVIDIA_VERSIONS)
+    b = _prov_with_cuda(
+        {**_NVIDIA_LIBS, "cublaslt64_13.dll": "torch"}, _NVIDIA_VERSIONS
+    )
     lines = provenance_mismatches(a, b)
-    assert lines, "a supplier swap went unnoticed"
-    assert any("cuda_libraries.suppliers.cublaslt64_13.dll" in line for line in lines)
+    assert len(lines) == 1, lines
+    assert "cuda_libraries.suppliers.cublaslt64_13.dll" in lines[0]
+    assert "nvidia-wheel" in lines[0]
+    assert "torch" in lines[0]
 
 
 def test_provenance_mismatch_names_a_bumped_cuda_library_version():
-    a = provenance(_config(), 48000)
-    b = json.loads(json.dumps(a))
-    b["cuda_libraries"]["versions"] = {"nvidia-cublas": "0.0.0"}
+    """Same supplier, newer wheel: the kernels can still change, so it must be caught."""
+    a = _prov_with_cuda(_NVIDIA_LIBS, _NVIDIA_VERSIONS)
+    b = _prov_with_cuda(_NVIDIA_LIBS, {**_NVIDIA_VERSIONS, "nvidia-cublas": "13.7.0.0"})
     lines = provenance_mismatches(a, b)
-    assert any("cuda_libraries.versions.nvidia-cublas" in line for line in lines)
+    assert len(lines) == 1, lines
+    assert "cuda_libraries.versions.nvidia-cublas" in lines[0]
+    assert "13.6.0.2" in lines[0]
+    assert "13.7.0.0" in lines[0]
 
 
 def test_provenance_mismatch_rejects_a_baseline_that_predates_the_supplier_record():
@@ -253,9 +308,24 @@ def test_provenance_mismatch_rejects_a_baseline_that_predates_the_supplier_recor
     It is exactly the artifact whose supplier is unknown, which is the situation that
     caused the confusion in the first place -- so it must refuse rather than compare.
     """
-    current = provenance(_config(), 48000)
+    current = _prov_with_cuda(_NVIDIA_LIBS, _NVIDIA_VERSIONS)
     old = {k: v for k, v in current.items() if k != "cuda_libraries"}
-    assert provenance_mismatches(old, current)
+    lines = provenance_mismatches(old, current)
+    assert lines
+    assert all(line.startswith("cuda_libraries") for line in lines), lines
+
+
+def test_an_unrecorded_cuda_section_is_not_the_same_as_an_empty_one():
+    """A CPU-only capture records an empty section; an old npz records none at all.
+
+    Collapsing the two would let the pre-provenance artifact be judged against, so
+    `_flatten` keeps an empty dict as a leaf. Pinned synthetically because the live
+    reading is only empty when nothing has loaded CUDA yet -- inside the full suite it
+    is not, and this guard would then never be exercised.
+    """
+    empty = _prov_with_cuda({}, {})
+    old = {k: v for k, v in empty.items() if k != "cuda_libraries"}
+    assert provenance_mismatches(old, empty)
 
 
 def test_provenance_mismatch_names_the_changed_field():
