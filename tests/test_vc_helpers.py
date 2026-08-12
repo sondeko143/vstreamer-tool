@@ -185,25 +185,31 @@ def test_input_as_float32_16k_resamples_through_the_shared_polyphase():
     np.testing.assert_array_equal(res, expected)
 
 
-def test_vad_preprocessing_needs_no_torch():
-    """The VAD preprocessing path runs in a venv without the rvc extra (ADR-0082).
+def test_vad_preprocessing_runs_from_a_bare_import():
+    """Both branches work with nothing but `vspeech.worker.vc` imported (ADR-0082).
 
-    A sys.modules check inside this process would be contaminated by test order, so
-    the check runs in a pristine child process. It covers the resample branch too --
-    that branch used to import torch lazily.
+    The resample branch used to reach for an inference framework lazily, so the point of
+    the child process is that it starts with an empty `sys.modules`: whatever this path
+    needs, it has to import for itself. Running it in-process would let another test's
+    imports satisfy the dependency and hide that.
+
+    This used to assert by name that one particular framework was absent from
+    `sys.modules` afterwards. ADR-0087 took that claim off every test in this repo and
+    moved it to measurement: `tests/test_runtime_footprint.py` measures the `vc` path --
+    `vspeech.worker.vc` plus the modules its worker defers to -- against a recorded module
+    set and working-set budget, so anything heavy arriving here is caught by what it costs
+    rather than by whether someone thought to name it.
     """
     import subprocess
     import sys
     from pathlib import Path
 
     code = (
-        "import sys\n"
         "import numpy as np\n"
         "from vspeech.worker.vc import _input_as_float32_16k\n"
         "pcm = np.zeros(4800, dtype=np.int16).tobytes()\n"
         "assert _input_as_float32_16k(pcm, 2, 48000).shape[0] == 1600\n"
         "assert _input_as_float32_16k(pcm, 2, 16000).shape[0] == 4800\n"
-        "assert 'torch' not in sys.modules, sorted(sys.modules)\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", code],

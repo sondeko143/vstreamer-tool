@@ -76,10 +76,15 @@ stream-vc-rtf = { cmd = "python scripts/stream_vc_rtf.py", help = "Measure per-b
 # 成果物 (tests/assets/rvc_golden/stream_vc_baseline.npz) は gitignore 済。
 stream-vc-baseline = { cmd = "python -m scripts.stream_vc_baseline", help = "Capture/compare the Stream VC numeric baseline (A/B gate for the torch removal)" }
 
-# ランタイムの起動が持ち込むモジュール集合と常駐メモリの基準データを取り直す (ADR-0085)。
-# 通常のテスト実行に常駐する成果ゲート tests/test_runtime_footprint.py が読む
-# tests/runtime_startup_baseline.json を書き直すのがこれ。GPU も実行時資産も要らない。
+# ランタイムの各 import 経路が持ち込むモジュール集合と常駐メモリの基準データを取り直す
+# (ADR-0085、経路を広げたのが ADR-0087)。通常のテスト実行に常駐する成果ゲート
+# tests/test_runtime_footprint.py が読む tests/runtime_startup_baseline.json を書き直すのが
+# これ。GPU も実行時資産も要らない。測る経路はスクリプト内の MEASURED_PATHS で、ワーカーが
+# 遅延 import の先で読み込む重い依存 (faster_whisper -> ctranslate2 など) を通る。
+# **ワーカーや起動経路を足したら MEASURED_PATHS にも足すこと。** 測っていない経路で
+# 重くなったものは、もう何も検出しない。
 #   uv run poe runtime-baseline                    # 実測して現状の値を見るだけ
+#   uv run poe runtime-baseline --only vc          # 調査用に 1 経路だけ測る (--update 不可)
 #   uv run poe runtime-baseline --update --runs 10 # 基準データを書き直す
 # **`--` を挟まないこと。** poe は `--` をタスクへそのまま渡すので、argparse が引数列ごと
 # 拒否して終了コード 2 になり、何も書かれない (実測)。

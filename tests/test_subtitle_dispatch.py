@@ -29,6 +29,18 @@ def test_importing_the_subtitle_dispatcher_does_not_import_tkinter():
     tkinter is stdlib, so it may already be loaded via another path. What we want to check
     is not "subtitle does not depend on tkinter" but "importing subtitle does not newly
     load tkinter", so it is dropped first and then verified.
+
+    [Open, deferred 2026-08-13 -- outside ADR-0087's scope] This does name a module in
+    order to assert its absence, which ADR-0087 removed from every *weight* claim in this
+    repo. It was left because it is not a weight claim: ADR-0040 split the back ends so an
+    OBS pipeline runs on a host with no GUI toolkit available at all, which is a
+    module-boundary constraint about the dispatcher, of the same kind as
+    tests/test_onnx_session.py's single-session-factory rule -- and ADR-0087's decision
+    covers the paths that were asserted framework-free for weight, not this. The weight
+    half is covered independently now: tests/test_runtime_footprint.py measures a
+    `subtitle_obs` path (dispatcher + OBS back end) whose recorded module set contains no
+    GUI toolkit, so a toolkit arriving there fires on cost without being named. Whether
+    this assertion should follow is ADR-0040's call to make, not this one's.
     """
     for name in list(sys.modules):
         if name == "tkinter" or name.startswith("tkinter."):
