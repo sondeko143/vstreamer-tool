@@ -194,13 +194,6 @@ def test_vad_preprocessing_runs_from_a_bare_import():
     the child process is that it starts with an empty `sys.modules`: whatever this path
     needs, it has to import for itself. Running it in-process would let another test's
     imports satisfy the dependency and hide that.
-
-    This used to assert by name that one particular framework was absent from
-    `sys.modules` afterwards. ADR-0087 took that claim off every test in this repo and
-    moved it to measurement: `tests/test_runtime_footprint.py` measures the `vc` path --
-    `vspeech.worker.vc` plus the modules its worker defers to -- against a recorded module
-    set and working-set budget, so anything heavy arriving here is caught by what it costs
-    rather than by whether someone thought to name it.
     """
     import subprocess
     import sys

@@ -165,10 +165,8 @@ MEASURED_PATHS: tuple[MeasuredPath, ...] = (
             "imports go through the dispatcher rather than around it, and its recorded "
             "module set contains no GUI toolkit, so a toolkit pulled in through the "
             "dispatcher -- the exact ADR-0040 regression -- arrives here as an unlisted "
-            "top-level name and is named by the failure. `tests/worker/test_subtitle.py` "
-            "used to assert that by naming tkinter; ADR-0087 removed the assertion as "
-            "redundant to this measurement, so this is where the guarantee lives now. "
-            "Measuring it apart from the TK back end is what keeps the two distinguishable."
+            "top-level name and is named by the failure. Measuring it apart from the TK "
+            "back end is what keeps the two distinguishable."
         ),
         reaches=("websockets",),
     ),
@@ -214,9 +212,7 @@ MEASURED_PATHS: tuple[MeasuredPath, ...] = (
         covers=(
             "The streaming-VC consumer role (ADR-0055). The whole point of the role split "
             "is that a playback-only host stays light: it receives converted audio over "
-            "UDP and plays it, and must never carry the conversion stack's weight. This "
-            "path used to be asserted torch-free by name; ADR-0087 keeps the invariant and "
-            "measures its cost instead."
+            "UDP and plays it, and must never carry the conversion stack's weight."
         ),
         reaches=("sounddevice", "numpy"),
     ),
@@ -231,8 +227,7 @@ MEASURED_PATHS: tuple[MeasuredPath, ...] = (
             "Resolving a GPU and opening an ONNX session (ADR-0078/0024). Deciding which "
             "device to use must not drag an inference framework in for one integer: while "
             "this layer spoke `torch.device`, the whisper pipeline paid 477MB of RSS and "
-            "3.2s of startup for it. This path used to be asserted torch-free by name; "
-            "ADR-0087 keeps the invariant and measures its cost instead."
+            "3.2s of startup for it."
         ),
         reaches=("onnxruntime", "numpy"),
     ),

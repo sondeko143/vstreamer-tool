@@ -1148,13 +1148,6 @@ def test_standard_sample_rate_family_never_needs_a_pathological_resampler():
             make_resampler(a, b)  # must not raise ValueError
 
 
-# The stream_vc asset checks used to live in a separate tests/test_stream_vc_preflight.py
-# with its own copy of `_fields`; ADR-0088 folded them in. Its
-# `test_stream_vc_disabled_no_problems` was dropped rather than moved: the
-# `test_disabled_recording_playback_stream_vc_skip_rate_checks` above asserts the strictly
-# stronger `collect_problems(...) == []` over the same disabled section.
-
-
 def test_stream_vc_enabled_missing_model_reported():
     c = Config()
     c.stream_vc.enable = True

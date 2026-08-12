@@ -1,17 +1,11 @@
 """The outcome gate on the runtime's weight (ADR-0085, widened by ADR-0087).
 
 This is the **only** protection this project has against a dependency getting heavy again.
-There used to be a second one -- a list of package names that `vspeech/` was not allowed to
-import and that the dependency table was not allowed to declare. ADR-0087 deleted it: the
-goal was never to exclude particular packages but to catch unintended performance
-regressions, and a deny-list of names has no principled membership rule, so it grows without
-limit and its recorded justifications rot unnoticed (both demonstrated by measurement).
 **Nothing here names a package in order to forbid it.** Names appear only as paths to
 measure and as modules a path must reach.
 
 Because it is the only gate, its coverage is its whole value. Measuring `vspeech.main`
-alone -- which is all this file did before ADR-0087 -- leaves the hole that matters most:
-every worker is imported lazily inside `vspeech_coro` behind `config.<section>.enable`, and
+alone leaves the hole that matters most: every worker is imported lazily inside `vspeech_coro` behind `config.<section>.enable`, and
 the transcription worker defers `faster_whisper` one step further into a function body. A
 dependency that lands there makes every running pipeline heavier while the entry point
 stays exactly as light as it was. So `MEASURED_PATHS` in
@@ -19,13 +13,6 @@ stays exactly as light as it was. So `MEASURED_PATHS` in
 deferred imports included, and each path records what it must load for its coverage claim
 to hold -- checked below, because a path that no longer loads the heavy thing it was added
 for is worse than no path at all: it looks like coverage.
-
-**Two of these paths were assertions of a different shape until ADR-0087.**
-`stream_vc_consumer` (ADR-0055: a playback-only host must stay light) and `device_layer`
-(ADR-0078: resolving a device must not drag an inference framework in) each used to assert
-that a named framework was absent from `sys.modules`. The invariants are unchanged; what
-changed is that they are now claims about weight, measured in the same shape as every other
-path, so they also catch the *next* heavy thing rather than only the one that was named.
 
 There are **two indicators per path, and neither is sufficient alone** (ADR-0085 measured
 why): `pydantic_settings` costs +13.7 MB RSS / +176 modules on top of an already-loaded

@@ -88,9 +88,8 @@ def test_a_bare_cuda_device_yields_device_id_zero(tmp_path, monkeypatch):
 def test_cpu_only_box_never_gets_the_cuda_ep(tmp_path, monkeypatch):
     """onnxruntime without a CUDA EP gets the CPU EP only, even for a cuda device.
 
-    Asking ORT what it can actually provide is the point of ADR-0078: a build without
-    the CUDA EP would previously still have been asked for it whenever torch happened
-    to see a GPU.
+    Asking ORT what it can actually provide is the point of ADR-0078: another library's
+    view of the GPU says nothing about whether this build carries the CUDA EP.
     """
     captured = _capture(monkeypatch, cuda_available=False)
 
@@ -101,7 +100,7 @@ def test_cpu_only_box_never_gets_the_cuda_ep(tmp_path, monkeypatch):
 
 
 def test_a_cuda_session_preloads_the_cuda_libraries(tmp_path, monkeypatch):
-    """The CUDA EP links against cuBLAS/cuFFT/cuDNN, which no longer arrive with torch.
+    """The CUDA EP links against cuBLAS/cuFFT/cuDNN, which the `nvidia-*` wheels supply.
 
     Without this, `onnxruntime_providers_cuda.dll` fails to load and onnxruntime falls
     back to `CPUExecutionProvider` without raising (ADR-0083).

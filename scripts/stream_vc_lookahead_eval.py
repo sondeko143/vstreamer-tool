@@ -15,9 +15,8 @@ mirror it into [rvc].
 
 The helpers above `main` are pure numpy so they can be unit tested on CPU with no model
 (tests/scripts/test_stream_vc_lookahead_eval.py); `main` and below need the rvc extra to
-build a real `StreamingVc`, but nothing in this file needs torch or torchaudio any more
-(ADR-0081/ADR-0082 took both out of the runtime; `log_mel` used to reach for
-`torchaudio.transforms.MelSpectrogram` and is now a plain numpy STFT + mel filterbank).
+build a real `StreamingVc`. `log_mel` is a plain numpy STFT + mel filterbank
+(ADR-0081/ADR-0082).
 """
 
 from __future__ import annotations

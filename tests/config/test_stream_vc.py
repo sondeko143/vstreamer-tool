@@ -1,10 +1,4 @@
-"""The `[stream_vc]` section of the config schema.
-
-This file used to have a twin, `test_config_stream_vc.py`, added a day later under an
-anagram of the same name; both asserted the `in_process` transport default. ADR-0088
-merged them, which is the whole reason the role/address/envelope tests below sit next to
-the block-geometry ones.
-"""
+"""The `[stream_vc]` section of the config schema."""
 
 import io
 

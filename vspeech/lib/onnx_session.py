@@ -13,8 +13,7 @@ This file is also where the CUDA libraries the CUDA EP links against are guarant
 loaded (ADR-0083). `onnxruntime-gpu`'s wheel bundles no CUDA runtime, so something has to
 supply `cublas64_13.dll` / `cublasLt64_13.dll` / `cufft64_12.dll` / `cudnn64_9.dll` --
 `onnxruntime_providers_cuda.dll` imports all four, and without them it fails to load and
-onnxruntime falls back to `CPUExecutionProvider` in silence. That supplier used to be
-`torch/lib`, by way of the `import torch` that ADR-0078 removed; it is now the pinned
+onnxruntime falls back to `CPUExecutionProvider` in silence. They come from the pinned
 `nvidia-*` wheels in the `rvc` extra. The place that opens the session is the place that
 guarantees the libraries, so the ADR-0024 single factory stays single.
 

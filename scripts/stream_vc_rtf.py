@@ -239,10 +239,8 @@ def run_sweep(
     `_run_on_device`'s `io_binding.get_outputs()[0].numpy()`, which is a synchronous
     device-to-host copy -- the CUDA work behind a tick is already complete by the time
     `process_block` returns, so no explicit `torch.cuda.synchronize` barrier is needed
-    before or after it. This used to carry one (removed here); confirmed non-load-bearing
-    by reading `_run_on_device` (vspeech/lib/rvc.py), not assumed -- the sibling harness
-    `scripts/stream_vc_baseline.py` already relies on the same fact and has never carried
-    the barrier. Removing it does not change what this sweep measures.
+    before or after it. Confirmed by reading `_run_on_device` (vspeech/lib/rvc.py), not
+    assumed -- the sibling harness `scripts/stream_vc_baseline.py` relies on the same fact.
     """
     import time
 

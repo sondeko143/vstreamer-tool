@@ -79,8 +79,6 @@ rvc = [
     "nvidia-cufft>=12.3.0.29,<13 ; sys_platform == 'win32'",
     "nvidia-cuda-runtime>=13.3.29,<14 ; sys_platform == 'win32'",
     "numpy>=2,<3",
-    # scipy はここにあったが dev グループへ移した (ADR-0091)。ADR-0080 が保留にしていた
-    # 判断で、rvc 実行時から 100MB が消える。
 ]
 mozc = ["mozcpy>=0.1.1,<0.2"]
 vroid2 = ["pyvcroid2 ; sys_platform == 'win32'"]

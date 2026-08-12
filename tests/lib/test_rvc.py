@@ -217,11 +217,6 @@ def test_select_pitch_disabled_returns_none():
     assert result == (None, None)
 
 
-# Device resolution moved to tests/test_cuda_util.py along with the code (ADR-0078).
-# Both behaviours these tests pinned -- `gpu_id = 0` is a real device, and no GPU
-# setting means CPU -- are covered there, without torch.
-
-
 def test_ort_device_id_defaults_a_bare_cuda_device_to_zero():
     """`Device("cuda")` has index None, and ORT needs a concrete ordinal.
 
