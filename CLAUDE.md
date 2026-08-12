@@ -18,8 +18,8 @@ uv sync --extra whisper     # faster-whisper; GPU run needs a host CUDA 12 toolk
 uv sync --extra vroid2      # VOICEROID2 TTS
 uv sync --extra voicevox    # VOICEVOX TTS
 uv sync --extra rvc         # RVC voice changer (a lone --extra deselects the others; prefer 'uv sync --all-extras')
-# NB: rvc (and therefore --all-extras) downloads 1,027MB of NVIDIA CUDA-runtime wheels
-# (6 wheels, sizes summed from uv.lock), 1,481MB once unpacked into site-packages/nvidia/.
+# NB: rvc (and therefore --all-extras) downloads 1,027MiB of NVIDIA CUDA-runtime wheels
+# (6 wheels, sizes summed from uv.lock), 1,481MiB once unpacked into site-packages/nvidia/.
 # onnxruntime-gpu bundles no CUDA, so these are the only supplier (ADR-0083).
 
 # Run the pipeline (gRPC server + workers)
