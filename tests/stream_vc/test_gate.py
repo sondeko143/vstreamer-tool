@@ -529,9 +529,9 @@ async def test_vc_loop_forwards_the_emit_delay_to_the_envelope_too(monkeypatch):
     seen: list[int] = []
     real_apply = StreamingEnvelope.apply
 
-    def spy_apply(self, out_i16, in_block, delay_samples):
+    def spy_apply(self, out_i16, in_block, delay_samples, update_reference):
         seen.append(delay_samples)
-        return real_apply(self, out_i16, in_block, delay_samples)
+        return real_apply(self, out_i16, in_block, delay_samples, update_reference)
 
     monkeypatch.setattr(StreamingEnvelope, "apply", spy_apply)
     await _run_vc_loop(monkeypatch, sv, None, 2, emit_delay_samples=1234)
@@ -802,3 +802,33 @@ async def test_capture_reopen_sentinel_resets_context_and_gate(monkeypatch):
     got = np.frombuffer(transport.packets[0].pcm, dtype=np.int16)
     assert abs(int(got[0])) < abs(int(_VC_OUT[0]))
     assert got[-1] == _VC_OUT[-1]
+
+
+async def test_vc_loop_lets_the_reference_follow_only_while_the_vad_gate_is_open(
+    monkeypatch,
+):
+    """The envelope's reference level is only allowed to follow blocks the VAD gate
+    opened.
+
+    Left following every block it averages in the silence between phrases and settles far
+    below speech level; the lift direction (negative envelope_strength) then attenuates
+    the whole next phrase instead of shaping within it. Without watching the flag the
+    runner could stop passing the verdict and every test here would stay green.
+    """
+    from vspeech.config import StreamVcConfig
+    from vspeech.stream_vc.envelope import StreamingEnvelope
+
+    # hangover 0 so the second block is genuinely closed rather than still held open
+    sv = StreamVcConfig(envelope_follow=True, vad_gate=True, vad_hangover_ms=0.0)
+    seen: list[bool] = []
+    real_apply = StreamingEnvelope.apply
+
+    def spy_apply(self, out_i16, in_block, delay_samples, update_reference):
+        seen.append(update_reference)
+        return real_apply(self, out_i16, in_block, delay_samples, update_reference)
+
+    monkeypatch.setattr(StreamingEnvelope, "apply", spy_apply)
+    probs = iter([np.ones(5), np.zeros(5)])  # speech, then silence
+    monkeypatch.setattr("vspeech.lib.vad.speech_probs", lambda *_a, **_k: next(probs))
+    await _run_vc_loop(monkeypatch, sv, object(), 2)
+    assert seen == [True, False]

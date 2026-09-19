@@ -252,7 +252,7 @@ def test_envelope_defaults_off():
     assert sv.envelope_min_gain == 0.1
     assert sv.envelope_max_gain == 1.0
     assert sv.envelope_window_ms == 25.0
-    assert sv.envelope_ema_ms == 2000.0
+    assert sv.envelope_ema_ms == 1000.0
 
 
 def test_envelope_parses():
@@ -282,3 +282,12 @@ def test_envelope_min_gt_max_rejected():
         Config.model_validate(
             {"stream_vc": {"envelope_min_gain": 0.5, "envelope_max_gain": 0.2}}
         )
+
+
+def test_envelope_strength_accepts_the_lift_direction():
+    # A negative exponent is the lift direction: shape < 1 becomes gain > 1, so the
+    # quiet parts of a phrase are raised towards the reference instead of ducked away.
+    sv = Config.model_validate(
+        {"stream_vc": {"envelope_strength": -0.3, "envelope_max_gain": 2.0}}
+    ).stream_vc
+    assert sv.envelope_strength == -0.3

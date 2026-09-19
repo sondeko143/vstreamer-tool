@@ -540,45 +540,58 @@ class StreamVcConfig(BaseModel):
         le=1.0,
         description="ゲートが閉じたときの出力ゲイン (0.0 = 完全ミュート)",
     )
-    # Input envelope following (opt-in, ADR-0057). Ducks the output volume to follow
-    # the input's relative loudness envelope, bringing attack/decay closer to batch
-    # conversion. Off by default = bit-identical. The reference is a rolling EMA of the
-    # mean input RMS (envelope_ema_ms). Applied before the VAD gate.
+    # Input envelope following (opt-in, ADR-0057). Shapes the output volume by the
+    # input's relative loudness envelope, in either direction: duck (ADR-0018) or lift
+    # (ADR-0092), selected by the sign of envelope_strength. Off by default =
+    # bit-identical. The reference is a rolling EMA of the mean input RMS
+    # (envelope_ema_ms) that only follows blocks the VAD gate opened (ADR-0093).
+    # Applied before the VAD gate.
     envelope_follow: bool = Field(
         default=False,
-        description="出力音量を入力の相対ラウドネス包絡へ追従させる (アタック/"
-        "ディケイを滑らかに)。off だと RVC 生出力のままで立ち上がりが急峻",
+        description="出力音量を入力の相対ラウドネス包絡で整形する。envelope_strength "
+        "の符号で向きが決まる (正=追従 / 負=圧縮)。off だと RVC 生出力のまま",
     )
-    # [Open, deferred 2026-08-06] The default stays 1.0 even though the measurement says
-    # 0.3 is where the shaping actually happens (min rail 36.6% -> 0%, shaping range
-    # 14.7% -> 46.7%). Moving a tuned default wants an ear check to back it, and the
-    # comparison on the rig was inconclusive -- 0.3 and 1.0 were not reliably tellable
-    # apart. Revisit if a later listening session separates them.
+    # [Open, deferred 2026-08-06, numbers predate ADR-0093] The default stays 1.0 even
+    # though the measurement says 0.3 is where the shaping actually happens (min rail
+    # 36.6% -> 0%, shaping range 14.7% -> 46.7%). Moving a tuned default wants an ear
+    # check to back it, and the comparison on the rig was inconclusive -- 0.3 and 1.0
+    # were not reliably tellable apart. Revisit if a later listening session separates
+    # them. NB those rail figures were taken against the old reference; ADR-0093 changed
+    # what the reference is, so they would have to be re-measured before being acted on.
     envelope_strength: float = Field(
         default=1.0,
-        ge=0,
-        description="包絡形状の指数。0 で無効相当、>1 で追従を強調。ただし 1.0 でも "
-        "shape が min/max の窓を外れっぱなしになりやすく、ゲインが上下限へ張り付いて "
-        "整形が二値的になる。<1 にすると中間帯が広がって実際に整形が効く"
-        "(実測: 0.3 で下限張り付きが消える)。1.0 との聞き分けは耳では未確定",
+        description="包絡形状の指数 (dB では傾き)。**正 = 追従** (入力の静かな所を"
+        "下げる)、0 = 無効、**負 = 圧縮/リフト** (静かな所を持ち上げ大きい所を下げる, "
+        "ADR-0092)。負にするときは envelope_max_gain を >1 にしないと持ち上がらない。"
+        "|値| が大きいほど効きが強い (実測の出発点: リフトなら -0.3)",
     )
     envelope_min_gain: float = Field(
-        default=0.1, ge=0.0, le=1.0, description="duck の下限ゲイン (静音部の残し量)"
+        default=0.1,
+        ge=0.0,
+        le=1.0,
+        description="ゲイン下限。追従 (正) では duck の下限 = 静音部の残し量。"
+        "リフト (負) では loud 部をどこまで下げるかの下限",
     )
     envelope_max_gain: float = Field(
         default=1.0,
         ge=0.0,
-        description="ゲイン上限。既定 1.0 = duck のみ (クリップしない)。>1 は "
-        "loud 部を int16 域外へ持ち上げてハードクリップするのでヘッドルームがある時のみ",
+        description="ゲイン上限。追従 (正) では 1.0 = duck のみ (クリップしない, "
+        "ADR-0018)。リフト (負) では**持ち上げの上限**で、同時にノイズ増幅のガードに"
+        "なる (ノイズは発話より 30-40dB 下 = shape 0.01-0.03 なので素だと 3-4 倍まで"
+        "持ち上がる)。相対値なのでマイクゲインには依存しない。実測ヘッドルームは "
+        "2.3dB しかないので、大きくしすぎると loud 部がクリップする",
     )
     envelope_window_ms: float = Field(
         default=25.0, gt=0, description="入力 RMS のフレーム窓 ms"
     )
     envelope_ema_ms: float = Field(
-        default=2000.0,
+        default=1000.0,
         gt=0,
-        description="参照レベル (入力平均 RMS の rolling EMA) の時定数 ms。"
-        "短いと loud onset で参照が跳ねて過敏、長いとレベル変化に鈍い。実測で調整",
+        description="参照レベル (入力平均 RMS の rolling EMA) の時定数 ms。短いと "
+        "loud onset で参照が跳ねて過敏、長いと参照が発話レベルまで上がりきらず "
+        "shape が 1 から外れっぱなしになる。実測 (発話デューティ 13% / 76% の 2 本) "
+        "で 1000ms が knee: リフト -0.3 の張り付きが 2000ms の 15.8% に対し 12.3%、"
+        "連続発話側は不変。500ms 以下は参照がピーク追従になって再び悪化 (ADR-0093)",
     )
     input_host_api_name: str | None = Field(default=None)
     input_device_name: str | None = Field(default=None)

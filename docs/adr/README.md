@@ -108,3 +108,5 @@
 | [0089](0089-runtime-asset-gates-as-registered-markers.md) | GPU・実行時資産に依存するテストのゲートを登録済みマーカーで宣言する | Accepted | 2026-08-13 |
 | [0090](0090-test-runtime-collection-and-parallelism.md) | テストの実行時間は収集 import の削減と既定の並列実行で詰める | Accepted | 2026-08-13 |
 | [0091](0091-scipy-to-dev-group.md) | scipy を rvc extra から dev グループへ移す（0080 が保留した判断） | Accepted | 2026-08-13 |
+| [0092](0092-streaming-envelope-lift-direction.md) | ストリーミング入力エンベロープに lift 方向（負の `envelope_strength`）を許す | Accepted | 2026-08-29 |
+| [0093](0093-envelope-reference-follows-speech-only.md) | 入力エンベロープの参照レベルを「VAD が開けたブロックだけ」で更新し、既定時定数を 1000ms にする | Accepted | 2026-08-29 |

@@ -1,11 +1,27 @@
-"""Input envelope following for streaming VC (ADR-0057, ADR-0065).
+"""Input envelope shaping for streaming VC (ADR-0057, ADR-0065, ADR-0092, ADR-0093).
 
 Normalizes the input block's relative loudness envelope against a rolling EMA of the
-mean input RMS and applies it to the output block as a duck gain
-(clip(shape^strength, min_gain, max_gain)). Same ducking idea as the batch
+mean input RMS and applies it to the output block as
+`clip(shape^strength, min_gain, max_gain)`. Same idea as the batch
 apply_input_envelope (worker/vc.py), but this streaming version replaces the reference
 "mean over the whole utterance" with a rolling EMA (only one block is available at a
-time).
+time) that follows speech only (ADR-0093).
+
+The gain law is log-linear -- `gain_dB = strength * shape_dB` -- so `strength` is a
+slope and its **sign is the direction** (ADR-0092):
+
+- `strength > 0` **duck**: the input's quiet parts pull the output down with them, which
+  is envelope *following*. `max_gain` 1.0 keeps it duck-only (ADR-0018).
+- `strength == 0` identity (the caller may still hold an instance).
+- `strength < 0` **lift**: the quiet parts are raised towards the reference and the loud
+  parts pushed down, i.e. compression. Needs `max_gain > 1` to raise anything, and that
+  bound doubles as the noise-amplification guard.
+
+What makes the lift direction sound like the input rather than like an inverted mix is
+that the RVC output tracks the input closely at this timescale but not at all across
+sustained level changes -- measured on real speech, `out_dB = 0.955 * in_dB` at 25ms
+frames (corr +0.805), against a slope of 0.065 over a settled 36dB gain staircase. The
+EMA reference removes exactly the scale the model already normalizes away.
 
 The shape is laid on the emit's **absolute sample grid**, carrying the previous block's
 shape across the seam and correcting for the emit delay -- the same construction as the
@@ -33,14 +49,20 @@ if TYPE_CHECKING:
 # module unit-testable on CPU).
 _INPUT_RATE = 16000
 
+# Lower bound on the relative shape, as a ratio to the reference level. 1e-6 is -120dB,
+# below int16's whole dynamic range (~96dB), so this can only bind on a frame that is
+# already digital silence. See where it is applied for why the bound exists at all.
+_SHAPE_FLOOR = 1e-6
+
 
 class StreamingEnvelope:
-    """Input envelope following against a rolling-EMA reference (duck, ADR-0057/0065).
+    """Input envelope shaping against a rolling-EMA reference (ADR-0057/0065/0092/0093).
 
     The state is the reference level `_ema_level` (a scalar) plus the shape history
     (`_history`), which the seam handover needs. `apply()` multiplies the output block by
     the current input block's relative loudness envelope and updates both for the next
-    block.
+    block. The direction (duck or lift) is the sign of `strength`; see the module
+    docstring.
     """
 
     def __init__(
@@ -71,9 +93,11 @@ class StreamingEnvelope:
         """Return the reference level and the seam handover to uninitialized (called by
         the runner on pause/resume and on a capture reopen).
 
-        So that a stale reference level does not oddly duck the next block after
-        real time has jumped, force the next apply to cold start again (initializing from
-        the block mean). The shape history is dropped for the same reason: it describes
+        So that a stale reference level does not oddly shape the next block after
+        real time has jumped, force a cold start again -- initializing from the block mean
+        of the next apply that is allowed to move the reference at all (ADR-0093), so a
+        resume into silence cannot pin the fresh reference to the noise floor. Until then
+        the blocks pass through unshaped. The shape history is dropped too: it describes
         audio from before the jump, and the head of the next emit is rendered from a
         zeros context, so handing over from it would shape the wrong audio.
         """
@@ -85,13 +109,14 @@ class StreamingEnvelope:
         out_i16: NDArray[np.int16],
         in_block: NDArray[np.float32],
         delay_samples: int,
+        update_reference: bool,
     ) -> NDArray[np.int16]:
-        """Duck the output block out_i16 by the relative loudness envelope of the input
+        """Shape the output block out_i16 by the relative loudness envelope of the input
         block in_block (16k float32), against the rolling EMA reference.
 
         The reference is the **past** EMA (history). On a cold start, or right after
         reset, it is initialized from the current block's mean (so the first block is not
-        ducked unnaturally). The reference is updated before returning, so the next block
+        shaped unnaturally). The reference is updated before returning, so the next block
         uses an EMA that already includes this one.
 
         `delay_samples` is `StreamingVc.emit_delay_samples`: how many samples before the
@@ -100,19 +125,26 @@ class StreamingEnvelope:
         start of the input block, so the shape is laid on that shifted grid -- identical
         to the VAD gate's mask overlay (gate.py, ADR-0059).
 
-        **Known characteristic (ADR-0057, tuned by on-hardware ear checks):** during long
-        silence the reference EMA drifts toward the input's noise floor (decaying with
-        envelope_ema_ms). The phrase onset right after that is judged loud on every frame
-        against the low reference and is barely ducked -- i.e. this block alone gets
-        little shaping. Inter-word dips and decay tails within continuous speech are
-        shaped correctly because the reference sits at speech level. The phrase onset is
-        the VAD gate's job. Lengthening ema_ms keeps the reference at speech level across
-        silence and makes onset shaping more effective.
+        `update_reference` says whether this block may move the reference level, and both
+        the cold start and the EMA update obey it (ADR-0093). The caller decides the
+        policy -- `runner.reference_may_follow` reads it off the VAD gate's verdict -- so
+        this class never has to know what a VAD is. It has no default on purpose, the
+        same discipline as `delay_samples` (ADR-0065): a default would let a caller drop
+        the argument and silently go back to a reference that follows silence.
+
+        **Known characteristic (ADR-0057), reduced but not removed by ADR-0093:** the
+        reference still lags speech level at the start of a phrase, because it has to
+        climb there with `envelope_ema_ms`. The first frames are therefore judged louder
+        against it than they are. Measured on a real recording at 13% speech duty, this
+        leaves 12.3% of speech frames on a rail in the lift direction (it was 38.6% with
+        the ungated 4000ms reference). Inter-word dips and decay tails inside continuous
+        speech are shaped correctly, because there the reference does sit at speech
+        level (3.0% railed). The phrase onset itself is the VAD gate's job.
         """
         import numpy as np
 
         out_len = int(out_i16.shape[0])
-        if out_len == 0 or in_block.shape[0] == 0 or self.strength <= 0.0:
+        if out_len == 0 or in_block.shape[0] == 0 or self.strength == 0.0:
             return out_i16
         # Per-frame RMS of the input (the absolute scale is irrelevant: it cancels in the
         # reference normalization).
@@ -125,10 +157,18 @@ class StreamingEnvelope:
             if seg.shape[0]:
                 frame_rms[i] = np.sqrt(np.mean(seg**2))
         block_mean = float(frame_rms.mean())
-        if self._ema_level is None:
-            self._ema_level = block_mean
-        ref = self._ema_level
-        self._ema_level = self._alpha * block_mean + (1.0 - self._alpha) * ref
+        # The cold start is deferred to the first block the caller lets set the reference.
+        # Seeding it from silence pins it to the noise floor, and the first phrase after
+        # that reads as tens of dB above the reference -- which the lift direction turns
+        # into a blanket attenuation of the whole phrase rather than shaping within it.
+        ref: float | None
+        if update_reference:
+            if self._ema_level is None:
+                self._ema_level = block_mean
+            ref = self._ema_level
+            self._ema_level = self._alpha * block_mean + (1.0 - self._alpha) * ref
+        else:
+            ref = self._ema_level
         # Output samples per input frame, and half a frame -- the margin the seam
         # continuity needs (see the bounds note below).
         half_frame = out_len / n_frames / 2.0
@@ -153,8 +193,10 @@ class StreamingEnvelope:
             # would land a whole emit earlier and stretch the ramp over two blocks.
             seed = np.ones(n_frames, dtype=np.float64)
             history = [(seed, out_len)] * (need - len(history)) + history
-        # effectively digital silence (e.g. pure silence right after init) -> pass through
-        if ref < 1e-8:
+        # No reference to shape against yet (the caller has not let one be established
+        # since construction or `reset()`), or one that is effectively digital silence
+        # (e.g. pure silence right after init) -> pass through.
+        if ref is None or ref < 1e-8:
             # This block went out at unity, so hand unity over: leaving the older shape in
             # place would make the next block step off a value that was never applied.
             self._history.append((np.ones(n_frames, dtype=np.float64), out_len))
@@ -162,7 +204,14 @@ class StreamingEnvelope:
             return out_i16
         # The relative shape (relative to the reference, not mean~1), linearly
         # interpolated onto the emit's sample grid.
-        shape_now = frame_rms / ref
+        #
+        # Floored, because a digitally silent frame makes `shape ** strength` raise
+        # `0 ** negative` = inf in the lift direction, and numpy warns while doing it --
+        # once per block for as long as the input is silent. `_SHAPE_FLOOR` sits below
+        # int16's whole dynamic range, so the floor can only ever bind on a frame that
+        # is already silent, and the duck direction is unaffected (both 0 and the floor
+        # clamp to `min_gain`).
+        shape_now = np.maximum(frame_rms / ref, _SHAPE_FLOOR)
         self._history.append((shape_now, out_len))
         del self._history[:-need]
         # Frame centres on the emit's absolute sample grid. Each history block sits its

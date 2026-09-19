@@ -91,6 +91,25 @@ def make_stream_envelope(sv_config: StreamVcConfig) -> StreamingEnvelope | None:
     )
 
 
+def reference_may_follow(gains: NDArray[np.float64] | None) -> bool:
+    """Whether this block may move the envelope's reference level. Pure.
+
+    The reference is only allowed to follow speech. Left to run on every block it
+    averages in the silence between phrases and settles far below speech level, and then
+    every phrase reads as much louder than the reference than it is -- measured on a real
+    recording at 13% speech duty, the reference sat ~18dB low and the shape's median was
+    8.0 rather than ~1. The duck direction merely stops shaping there (the gain rails at
+    `max_gain`); the lift direction turns it into a blanket attenuation of the phrase.
+
+    The gate's window gains are 1.0 where it is open (speech, or within the hangover) and
+    `vad_min_gain` where it is closed (`StreamingVadGate.window_gains`), so a block counts
+    as speech when any window reached full gain. `None` means the VAD gate is disabled:
+    there is no speech decision to be had, so the reference follows every block, exactly
+    as it did before this existed.
+    """
+    return gains is None or bool(gains.max() >= 1.0)
+
+
 async def gate_window_gains(
     gate: StreamingVadGate,
     vad_session: Any,
@@ -450,7 +469,12 @@ async def vc_loop(
             # overlay the same emit in time alignment, so neither may skip the correction
             # (ADR-0065).
             if envelope is not None:
-                out_i16 = envelope.apply(out_i16, raw_block, sv.emit_delay_samples)
+                out_i16 = envelope.apply(
+                    out_i16,
+                    raw_block,
+                    sv.emit_delay_samples,
+                    reference_may_follow(gains),
+                )
             if gate is not None and gains is not None:
                 # The mask is overlaid with the emit delay corrected (ADR-0059). The delay
                 # is derived from the nominal read position and is constant across ticks

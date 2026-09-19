@@ -91,3 +91,22 @@ def test_geometry_summary_reports_the_window_and_both_delays():
     # emit 遅延 is the total; lookahead's contribution is a component of it, not an
     # additive figure alongside it (a former wording invited exactly that misreading).
     assert "emit 遅延 210.0ms (うち lookahead 由来 160ms)" in line  # 8400 / 40000
+
+
+def test_reference_may_follow_only_when_the_vad_gate_opened():
+    """Whether a block is allowed to move the envelope's reference level.
+
+    The gate's window gains are 1.0 where it is open (speech, or within the hangover)
+    and `vad_min_gain` where it is closed, so a block counts as speech when any window
+    reached full gain.
+    """
+    import numpy as np
+
+    from vspeech.stream_vc.runner import reference_may_follow
+
+    # gate disabled: there is no speech decision, so the reference follows every block
+    assert reference_may_follow(None) is True
+    assert reference_may_follow(np.array([0.0, 0.0, 0.0])) is False
+    assert reference_may_follow(np.array([0.0, 1.0, 0.0])) is True
+    # vad_min_gain > 0 still means closed
+    assert reference_may_follow(np.array([0.4, 0.4, 0.4])) is False

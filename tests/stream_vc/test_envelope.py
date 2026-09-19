@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 
 from vspeech.stream_vc.envelope import StreamingEnvelope
@@ -37,22 +39,22 @@ def _gain_curves(env, blocks, out_len=6400, delay=_DELAY):
     can be read sample by sample (including right at the block seam).
     """
     const = np.full(out_len, _AMP, dtype=np.int16)
-    return [env.apply(const, b, delay).astype(np.float64) / _AMP for b in blocks]
+    return [env.apply(const, b, delay, True).astype(np.float64) / _AMP for b in blocks]
 
 
 def test_first_block_is_near_unity():
     # cold start: ref := block mean, flat block -> shape 1 -> gain 1 -> unchanged.
     env = _env()
     out = _out()
-    got = env.apply(out.copy(), _block(0.2), 0)
+    got = env.apply(out.copy(), _block(0.2), 0, True)
     assert np.allclose(got, out, atol=1)
 
 
 def test_quiet_block_after_loud_is_ducked():
     env = _env()
     for _ in range(20):  # establish ema at the loud level
-        env.apply(_out(), _block(0.3), 0)
-    got = env.apply(_out(), _block(0.03), 0)  # a decay-tail block, 10x quieter
+        env.apply(_out(), _block(0.3), 0, True)
+    got = env.apply(_out(), _block(0.03), 0, True)  # a decay-tail block, 10x quieter
     # Read the tail, not the head: the head hands the gain over from the previous block
     # (it is a ramp now, not a step -- see test_gain_is_continuous_across_the_block_seam).
     assert got[len(got) // 2 :].max() < 10000 * 0.5  # ducked well below the loud level
@@ -61,46 +63,48 @@ def test_quiet_block_after_loud_is_ducked():
 def test_steady_level_stays_near_unity():
     env = _env()
     for _ in range(10):
-        env.apply(_out(), _block(0.3), 0)
-    got = env.apply(_out(), _block(0.3), 0)
+        env.apply(_out(), _block(0.3), 0, True)
+    got = env.apply(_out(), _block(0.3), 0, True)
     assert np.allclose(got, _out(), atol=20)  # duck-only, steady -> ~unity
 
 
 def test_within_block_attack_ramp_is_ducked_at_the_quiet_lead_in():
     env = _env()
     for _ in range(20):
-        env.apply(_out(), _block(0.3), 0)  # ref at speech level
+        env.apply(_out(), _block(0.3), 0, True)  # ref at speech level
     # a block that is quiet in its first half, loud in its second (an onset)
     onset = np.concatenate([_block(0.02, 1280), _block(0.3, 1280)])
-    got = env.apply(_out(), onset, 0)
+    got = env.apply(_out(), onset, 0, True)
     assert got[0] < got[-1]  # gain rises across the block = attack ramp recovered
 
 
 def test_min_gain_clamps_the_duck():
     env = _env(min_gain=0.25)
     for _ in range(20):
-        env.apply(_out(), _block(0.3), 0)
-    got = env.apply(_out(), _block(0.0001), 0)  # near-silent block
+        env.apply(_out(), _block(0.3), 0, True)
+    got = env.apply(_out(), _block(0.0001), 0, True)  # near-silent block
     assert got.max() >= 10000 * 0.25 - 2  # not ducked below min_gain
 
 
 def test_reset_clears_the_ema_and_the_previous_block_shape():
     env = _env()
     for _ in range(20):
-        env.apply(_out(), _block(0.3), 0)
+        env.apply(_out(), _block(0.3), 0, True)
     env.reset()
     # Cold start again: ref := block mean AND the handover seeds at unity, so a flat block
     # comes out unchanged instead of ramping down out of the stale loud reference.
-    got = env.apply(_out().copy(), _block(0.03), 0)
+    got = env.apply(_out().copy(), _block(0.03), 0, True)
     assert np.allclose(got, _out(), atol=1)
 
 
 def test_empty_and_silent_passthrough():
     env = _env()
     out = _out()
-    assert np.array_equal(env.apply(out.copy(), np.zeros(0, dtype=np.float32), 0), out)
+    assert np.array_equal(
+        env.apply(out.copy(), np.zeros(0, dtype=np.float32), 0, True), out
+    )
     zero_env = _env(strength=0.0)
-    assert np.array_equal(zero_env.apply(out.copy(), _block(0.3), 0), out)
+    assert np.array_equal(zero_env.apply(out.copy(), _block(0.3), 0, True), out)
 
 
 # --- cross-block continuity and the emit-delay correction -------------------
@@ -174,9 +178,9 @@ def test_shape_reaches_two_blocks_back_when_the_delay_exceeds_one_emit():
     loud = _block(0.2, n=2560)
     quiet = _block(0.002, n=2560)
     ones = np.full(out_len, 10000, dtype=np.int16)
-    env.apply(ones.copy(), loud, delay)
-    env.apply(ones.copy(), quiet, delay)
-    got = env.apply(ones.copy(), quiet, delay)
+    env.apply(ones.copy(), loud, delay, True)
+    env.apply(ones.copy(), quiet, delay, True)
+    got = env.apply(ones.copy(), quiet, delay, True)
     g = got.astype(np.float64) / 10000.0
     # the head is audio from two blocks back (loud), so it is not ducked
     assert g[0] > 0.5
@@ -191,9 +195,73 @@ def test_gain_is_continuous_across_the_seam_with_a_long_delay():
     out_len, delay = 6400, 9000
     ones = np.full(out_len, 10000, dtype=np.int16)
     curve = [
-        env.apply(ones.copy(), _block(level, n=2560), delay).astype(np.float64)
+        env.apply(ones.copy(), _block(level, n=2560), delay, True).astype(np.float64)
         / 10000.0
         for level in (0.02, 0.02, 0.3, 0.3, 0.05, 0.02)
     ]
     full = np.concatenate(curve)
     assert float(np.abs(np.diff(full)).max()) < 0.02
+
+
+# --- the lift direction (negative strength) ---------------------------------
+
+
+def test_negative_strength_lifts_a_block_quieter_than_the_reference():
+    # gain = shape ** strength, so a negative strength turns shape < 1 into gain > 1:
+    # the quiet parts are raised towards the reference instead of ducked away from it.
+    env = _env(strength=-0.3, min_gain=0.3, max_gain=2.0)
+    for _ in range(20):  # establish the reference at the loud level
+        env.apply(_out(), _block(0.3), 0, True)
+    got = env.apply(_out(), _block(0.03), 0, True)  # 10x quieter than the reference
+    # The tail, not the head: the head is the handover ramp from the previous block.
+    assert got[len(got) // 2 :].min() > 10000
+
+
+def test_negative_strength_attenuates_a_block_louder_than_the_reference():
+    env = _env(strength=-0.3, min_gain=0.3, max_gain=2.0)
+    for _ in range(20):  # establish the reference at the quiet level
+        env.apply(_out(), _block(0.03), 0, True)
+    got = env.apply(_out(), _block(0.3), 0, True)  # 10x louder than the reference
+    assert got[len(got) // 2 :].max() < 10000
+
+
+def test_a_digitally_silent_frame_does_not_make_the_lift_gain_infinite():
+    # shape ** strength is 0 ** negative = inf for a frame of digital silence, and numpy
+    # raises a divide-by-zero RuntimeWarning doing it. The clip hides the value, but the
+    # warning would fire once per block for as long as the input is silent.
+    env = _env(strength=-0.3, min_gain=0.3, max_gain=2.0)
+    for _ in range(20):
+        env.apply(_out(), _block(0.3), 0, True)
+    half_silent = np.concatenate([_block(0.3, 1280), _block(0.0, 1280)])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        got = env.apply(_out(), half_silent, 0, True)
+    assert got[-1] == 20000  # the silent tail rails at max_gain, not at inf
+
+
+# --- the reference only follows speech ---------------------------------------
+
+
+def test_a_block_the_caller_marks_non_speech_does_not_move_the_reference():
+    # Silence between phrases would otherwise drag the reference down towards the noise
+    # floor, and the next phrase then reads as far louder than the reference -- which in
+    # the lift direction attenuates the whole phrase instead of shaping it.
+    env = _env(strength=-0.3, min_gain=0.3, max_gain=2.0)
+    for _ in range(20):
+        env.apply(_out(), _block(0.3), 0, True)
+    for _ in range(25):  # 4s of silence, with the VAD gate closed
+        env.apply(_out(), _block(0.003), 0, False)
+    got = env.apply(_out(), _block(0.3), 0, True)  # the next phrase, at the same level
+    # Still read as "at the reference" -> gain ~1, i.e. neither lifted nor attenuated.
+    assert abs(int(got[len(got) // 2 :].mean()) - 10000) < 200
+
+
+def test_a_cold_start_in_silence_does_not_pin_the_reference_to_the_noise_floor():
+    # Starting (or resuming) mid-silence must not seed the reference from the noise
+    # floor: the first phrase after it would then read as far above the reference and be
+    # attenuated as a whole rather than shaped.
+    env = _env(strength=-0.3, min_gain=0.3, max_gain=2.0)
+    for _ in range(10):  # silence before the first phrase, with the gate closed
+        env.apply(_out(), _block(0.003), 0, False)
+    got = env.apply(_out(), _block(0.3), 0, True)  # the first phrase
+    assert abs(int(got[len(got) // 2 :].mean()) - 10000) < 200
