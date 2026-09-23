@@ -12,6 +12,7 @@ from asyncio import DatagramProtocol
 from asyncio import Queue
 from asyncio import QueueEmpty
 from asyncio import get_running_loop
+from time import perf_counter
 from typing import Any
 
 from vspeech.lib.log_throttle import LogThrottle
@@ -23,6 +24,12 @@ from vspeech.stream_vc.transport import drop_oldest_put
 from vspeech.stream_vc.wire import WireError
 from vspeech.stream_vc.wire import decode_packet
 from vspeech.stream_vc.wire import encode_packet
+
+# A send error streak this long means the socket itself is dead, so it is replaced
+# (ADR-0094). At 160ms blocks that is ~6 consecutive failures.
+REOPEN_AFTER_S = 1.0
+# No send error for this long ends the streak.
+ERROR_STREAK_GAP_S = 2.0
 
 
 class _SendProtocol(DatagramProtocol):
@@ -41,19 +48,82 @@ class _SendProtocol(DatagramProtocol):
         # peer is down). Throttle the log by time and record telemetry every time
         # (ADR-0062).
         self._error_throttle = LogThrottle()
+        self._streak_start: float | None = None
+        self._last_error: float | None = None
 
     def error_received(self, exc: Exception) -> None:
         telemetry.record("stream_vc_send_error", 1.0)
+        now = perf_counter()
+        if self._last_error is None or now - self._last_error > ERROR_STREAK_GAP_S:
+            self._streak_start = now
+        self._last_error = now
         if (n := self._error_throttle.hit()) is not None:
             logger.warning("stream_vc udp send error (async, total %d): %r", n, exc)
 
+    def failing_for(self, now: float) -> float:
+        """How long send errors have kept arriving without a gap, or 0 if they
+        stopped."""
+        if self._last_error is None or self._streak_start is None:
+            return 0.0
+        if now - self._last_error > ERROR_STREAK_GAP_S:
+            return 0.0
+        return now - self._streak_start
+
+    def restart_streak(self, now: float) -> None:
+        """Count the current streak from `now`, so a failed reopen is retried only
+        after another REOPEN_AFTER_S rather than on every block."""
+        if self._streak_start is not None:
+            self._streak_start = now
+
+
+async def _open_send_endpoint(
+    peer_host: str, peer_port: int
+) -> tuple[Any, _SendProtocol]:
+    loop = get_running_loop()
+    return await loop.create_datagram_endpoint(
+        _SendProtocol, remote_addr=(peer_host, peer_port)
+    )
+
 
 class UdpProducerTransport(Transport):
-    def __init__(self, transport: Any, protocol: _SendProtocol) -> None:
+    def __init__(
+        self, transport: Any, protocol: _SendProtocol, peer: tuple[str, int]
+    ) -> None:
         self._transport = transport
         self._protocol = protocol
+        self._peer = peer
+        self._reopen_throttle = LogThrottle()
+
+    async def _reopen(self, failing_s: float) -> None:
+        # On Windows a connected UDP socket caches its route at connect(). After the
+        # link under that route bounces, every send on it fails with WinError 1168
+        # even once the link is back, while a new socket works (ADR-0094).
+        now = perf_counter()
+        try:
+            transport, protocol = await _open_send_endpoint(*self._peer)
+        except OSError as e:
+            self._protocol.restart_streak(now)
+            if (n := self._reopen_throttle.hit()) is not None:
+                logger.warning(
+                    "stream_vc udp: reopening the send socket failed (total %d): %r",
+                    n,
+                    e,
+                )
+            return
+        self._transport.close()
+        self._transport, self._protocol = transport, protocol
+        telemetry.record("stream_vc_send_reopen", 1.0)
+        if (n := self._reopen_throttle.hit()) is not None:
+            logger.warning(
+                "stream_vc udp: send errors persisted %.1fs; reopened the send socket"
+                " (total %d)",
+                failing_s,
+                n,
+            )
 
     async def send(self, packet: StreamPacket) -> bool:
+        if (failing_s := self._protocol.failing_for(perf_counter())) >= REOPEN_AFTER_S:
+            await self._reopen(failing_s)
         # sendto does not turn asynchronous send failures (unreachable peer, ...) into
         # synchronous exceptions -- those are logged and recorded by
         # _SendProtocol.error_received. The OSError caught here is only the rare
@@ -143,11 +213,8 @@ class UdpConsumerTransport(Transport):
 async def create_udp_producer_transport(
     peer_host: str, peer_port: int
 ) -> UdpProducerTransport:
-    loop = get_running_loop()
-    transport, protocol = await loop.create_datagram_endpoint(
-        _SendProtocol, remote_addr=(peer_host, peer_port)
-    )
-    return UdpProducerTransport(transport, protocol)
+    transport, protocol = await _open_send_endpoint(peer_host, peer_port)
+    return UdpProducerTransport(transport, protocol, (peer_host, peer_port))
 
 
 async def create_udp_consumer_transport(

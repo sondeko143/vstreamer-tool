@@ -104,3 +104,105 @@ def test_send_protocol_error_logging_is_throttled():
     # a single episode).
     assert mock_telemetry.record.call_count == 120
     assert mock_logger.warning.call_count == 1
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def _break_producer(producer, clock, seconds, step=0.16):
+    """Feed the producer's protocol a send error every `step` for `seconds`, the way a
+    socket whose cached route died reports every datagram (WinError 1168)."""
+    end = clock.now + seconds
+    while clock.now < end:
+        producer._protocol.error_received(OSError(22, "element not found"))
+        clock.now += step
+
+
+async def test_producer_reopens_socket_after_persistent_send_errors():
+    """A connected UDP socket that outlived a link bounce fails every send forever while
+    a fresh one works. Once errors have persisted, the next send must swap in a new
+    socket, and datagrams must reach the peer through it."""
+    from unittest.mock import patch
+
+    clock = _Clock()
+    consumer = await create_udp_consumer_transport("127.0.0.1", 0, max_queued=8)
+    with patch("vspeech.stream_vc.udp.perf_counter", clock):
+        producer = await create_udp_producer_transport("127.0.0.1", consumer.local_port)
+        old = producer._transport
+        try:
+            await _break_producer(producer, clock, 1.2)
+            with patch("vspeech.stream_vc.udp.telemetry") as mock_telemetry:
+                assert await producer.send(_pkt(7)) is True
+            assert producer._transport is not old
+            assert old.is_closing()
+            mock_telemetry.record.assert_any_call("stream_vc_send_reopen", 1.0)
+            got = await asyncio.wait_for(consumer.recv(), 1.0)
+            assert got.seq == 7
+        finally:
+            producer.close()
+            consumer.close()
+
+
+async def test_producer_keeps_socket_on_a_short_error_burst():
+    from unittest.mock import patch
+
+    clock = _Clock()
+    with patch("vspeech.stream_vc.udp.perf_counter", clock):
+        producer = await create_udp_producer_transport("127.0.0.1", 9)
+        old = producer._transport
+        try:
+            await _break_producer(producer, clock, 0.5)
+            await producer.send(_pkt(0))
+            assert producer._transport is old
+        finally:
+            producer.close()
+
+
+async def test_producer_error_streak_ends_after_quiet():
+    """Errors that stopped are an incident that passed, not a broken socket: the
+    streak restarts rather than accumulating across the quiet gap."""
+    from unittest.mock import patch
+
+    clock = _Clock()
+    with patch("vspeech.stream_vc.udp.perf_counter", clock):
+        producer = await create_udp_producer_transport("127.0.0.1", 9)
+        old = producer._transport
+        try:
+            await _break_producer(producer, clock, 0.8)
+            clock.now += 5.0
+            await _break_producer(producer, clock, 0.5)
+            await producer.send(_pkt(0))
+            assert producer._transport is old
+            clock.now += 5.0
+            await producer.send(_pkt(1))
+            assert producer._transport is old
+        finally:
+            producer.close()
+
+
+async def test_producer_survives_a_failed_reopen_and_retries_later():
+    """If no socket can be opened yet (network still down), keep the old one, do not
+    raise into the VC loop, and do not retry on every block."""
+    from unittest.mock import AsyncMock
+    from unittest.mock import patch
+
+    clock = _Clock()
+    with patch("vspeech.stream_vc.udp.perf_counter", clock):
+        producer = await create_udp_producer_transport("127.0.0.1", 9)
+        old = producer._transport
+        try:
+            await _break_producer(producer, clock, 1.2)
+            failing = AsyncMock(side_effect=OSError(10051, "unreachable"))
+            with patch("vspeech.stream_vc.udp._open_send_endpoint", failing):
+                assert await producer.send(_pkt(0)) is True
+                assert await producer.send(_pkt(1)) is True
+            assert failing.await_count == 1
+            assert producer._transport is old
+            assert not old.is_closing()
+        finally:
+            producer.close()

@@ -110,3 +110,4 @@
 | [0091](0091-scipy-to-dev-group.md) | scipy を rvc extra から dev グループへ移す（0080 が保留した判断） | Accepted | 2026-08-13 |
 | [0092](0092-streaming-envelope-lift-direction.md) | ストリーミング入力エンベロープに lift 方向（負の `envelope_strength`）を許す | Accepted | 2026-08-29 |
 | [0093](0093-envelope-reference-follows-speech-only.md) | 入力エンベロープの参照レベルを「VAD が開けたブロックだけ」で更新し、既定時定数を 1000ms にする | Accepted | 2026-08-29 |
+| [0094](0094-reopen-udp-send-socket-on-persistent-errors.md) | ストリーミング VC の UDP 送信ソケットは、送信エラーが続いたら作り直す | Accepted | 2026-09-24 |
